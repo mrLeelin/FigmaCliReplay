@@ -1,0 +1,31 @@
+{
+  "name": "figma-mcp-relay-gateway",
+  "version": "0.1.37",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "doctor": "powershell -ExecutionPolicy Bypass -File scripts/doctor_mcp.ps1",
+    "smoke": "powershell -ExecutionPolicy Bypass -File scripts/smoke_mcp.ps1",
+    "setup:codex": "powershell -ExecutionPolicy Bypass -File scripts/setup_mcp_config.ps1 -Client codex -Action write",
+    "setup:claude": "powershell -ExecutionPolicy Bypass -File scripts/setup_mcp_config.ps1 -Client claude -Action write",
+    "oneclick": "powershell -ExecutionPolicy Bypass -File scripts/start_mcp_oneclick.ps1 -NoPause",
+    "package:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package_release.ps1",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "pino": "^9.7.0",
+    "ws": "^8.18.2",
+    "zod": "^3.25.28",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.24",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "target": {
+    "nodeId": "CONTENT_NODE_ID"
+  },
+  "componentSetName": "Item",
+  "variantProperty": "State",
+  "replaceOriginalsWithInstances": true,
+  "createBackup": true,
+  "variants": [
+    {
+      "nodeId": "ITEM_IN_PROGRESS_NODE_ID",
+      "value": "InProgress"
+    },
+    {
+      "nodeId": "ITEM_CLAIMABLE_NODE_ID",
+      "value": "Claimable"
+    },
+    {
+      "nodeId": "ITEM_COMPLETED_NODE_ID",
+      "value": "Completed"
+    },
+    {
+      "nodeId": "ITEM_LOCKED_NODE_ID",
+      "value": "Locked"
+    },
+    {
+      "nodeId": "ITEM_LOCKED_PROGRESS_NODE_ID",
+      "value": "LockedProgress"
+    }
+  ]
+}

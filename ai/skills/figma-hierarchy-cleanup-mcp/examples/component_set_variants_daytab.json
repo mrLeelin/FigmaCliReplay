@@ -1,0 +1,60 @@
+{
+  "target": {
+    "nodeId": "TAB_BAR_NODE_ID"
+  },
+  "componentSetName": "TabItem",
+  "variantProperty": "State",
+  "replaceOriginalsWithInstances": true,
+  "createBackup": true,
+  "variants": [
+    {
+      "nodeId": "DAY_1_NODE_ID",
+      "properties": {
+        "Index": "1",
+        "State": "Normal"
+      }
+    },
+    {
+      "nodeId": "DAY_2_NODE_ID",
+      "properties": {
+        "Index": "2",
+        "State": "Selected"
+      }
+    },
+    {
+      "nodeId": "DAY_3_NODE_ID",
+      "properties": {
+        "Index": "3",
+        "State": "Locked"
+      }
+    },
+    {
+      "nodeId": "DAY_4_NODE_ID",
+      "properties": {
+        "Index": "4",
+        "State": "Locked"
+      }
+    },
+    {
+      "nodeId": "DAY_5_NODE_ID",
+      "properties": {
+        "Index": "5",
+        "State": "Locked"
+      }
+    },
+    {
+      "nodeId": "DAY_6_NODE_ID",
+      "properties": {
+        "Index": "6",
+        "State": "Locked"
+      }
+    },
+    {
+      "nodeId": "DAY_7_NODE_ID",
+      "properties": {
+        "Index": "7",
+        "State": "Locked"
+      }
+    }
+  ]
+}

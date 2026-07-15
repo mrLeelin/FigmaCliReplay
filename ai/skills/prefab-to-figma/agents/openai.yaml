@@ -1,0 +1,3 @@
+display_name: Prefab To Figma
+short_description: Convert Unity UGUI Prefabs into Figma designs.
+default_prompt: Use this skill only for Unity UGUI Prefab to Figma import. Ask for Prefab path, Figma file URL/key, canvas size, and component mode before parsing or writing.

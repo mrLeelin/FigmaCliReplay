@@ -1,0 +1,23 @@
+{
+  "name": "LKS Figma MCP Relay",
+  "id": "lks-figma-mcp-relay",
+  "api": "1.0.0",
+  "editorType": ["figma"],
+  "main": "code.js",
+  "ui": "ui.html",
+  "documentAccess": "dynamic-page",
+  "enablePrivatePluginApi": true,
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": [
+      "http://localhost:32129",
+      "http://localhost:32130",
+      "ws://localhost:32130",
+      "http://localhost:32131",
+      "http://localhost:32132",
+      "http://localhost:32133",
+      "http://localhost:32134",
+      "http://localhost:32135"
+    ]
+  }
+}

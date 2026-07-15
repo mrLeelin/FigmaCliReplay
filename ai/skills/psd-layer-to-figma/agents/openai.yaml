@@ -1,0 +1,4 @@
+interface:
+  display_name: "PSD Layer to Figma"
+  short_description: "Import PSD layers to Figma with Unity-friendly naming and hierarchy cleanup"
+  default_prompt: "Use $psd-layer-to-figma to import a PSD file into Figma while preserving layer names, bounds, opacity, order, common_ component reuse, and name-marked nine-slice layers. Normalize messy art layer names like common_ btn before matching, preserve raw names in metadata, then clean the imported Figma hierarchy and node names for Unity UGUI import."

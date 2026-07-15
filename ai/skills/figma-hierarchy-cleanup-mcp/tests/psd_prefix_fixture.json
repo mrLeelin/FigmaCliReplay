@@ -1,0 +1,26 @@
+{
+  "fixturePurpose": "PSD prefix hints should produce geometry-gated root groups instead of one coarse group; nested ListRoot/TabBar splitting may remain a deferred pipeline gate.",
+  "result": {
+    "rootNodeId": "root:1",
+    "rootName": "PSD_Import_Test",
+    "rootBounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1080,
+      "height": 2340
+    },
+    "directChildren": [
+      { "id": "n1", "name": "01_Tab_A", "type": "FRAME", "index": 0, "relativeBounds": { "x": 20, "y": 200, "width": 120, "height": 80 } },
+      { "id": "n2", "name": "02_Tab_B", "type": "FRAME", "index": 1, "relativeBounds": { "x": 160, "y": 200, "width": 120, "height": 80 } },
+      { "id": "n3", "name": "03_Tab_C", "type": "FRAME", "index": 2, "relativeBounds": { "x": 300, "y": 200, "width": 120, "height": 80 } },
+      { "id": "n29", "name": "29_bg_panel", "type": "RECTANGLE", "index": 3, "relativeBounds": { "x": 0, "y": 0, "width": 1080, "height": 2340 } },
+      { "id": "n30", "name": "30_bg_mask", "type": "RECTANGLE", "index": 4, "relativeBounds": { "x": 0, "y": 0, "width": 1080, "height": 2340 } },
+      { "id": "n60", "name": "60_task_row_a", "type": "FRAME", "index": 5, "relativeBounds": { "x": 80, "y": 600, "width": 920, "height": 160 } },
+      { "id": "n61", "name": "61_task_row_b", "type": "FRAME", "index": 6, "relativeBounds": { "x": 80, "y": 800, "width": 920, "height": 160 } },
+      { "id": "n62", "name": "62_task_row_c", "type": "FRAME", "index": 7, "relativeBounds": { "x": 80, "y": 1000, "width": 920, "height": 160 } },
+      { "id": "n63", "name": "63_task_row_d", "type": "FRAME", "index": 8, "relativeBounds": { "x": 80, "y": 1200, "width": 920, "height": 160 } },
+      { "id": "n64", "name": "64_task_row_e", "type": "FRAME", "index": 9, "relativeBounds": { "x": 80, "y": 1400, "width": 920, "height": 160 } },
+      { "id": "n65", "name": "65_task_row_f", "type": "FRAME", "index": 10, "relativeBounds": { "x": 80, "y": 1600, "width": 920, "height": 160 } }
+    ]
+  }
+}

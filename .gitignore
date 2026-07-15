@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.logs/
+.local/
+.tmp/
+output/
+__pycache__/
+client/__pycache__/
+server/__pycache__/

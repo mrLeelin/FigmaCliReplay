@@ -1,0 +1,3 @@
+display_name: Figma To Prefab
+short_description: Import or sync Figma nodes into Unity UGUI Prefabs and Sprite assets.
+default_prompt: Use this skill only for Figma node/component to Unity UGUI Prefab workflows. Ask for Figma URL/node id, target Prefab path or directory, image directory, and overwrite policy before writing.
