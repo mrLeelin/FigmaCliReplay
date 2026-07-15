@@ -678,74 +678,6 @@
     <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.37<!-- END_RELEASE_VERSION --></span>
   </div>
 
-  <!-- ========== 本地 MCP Companion / 插件 Runtime Relay 区域 ========== -->
-  <div class="section global-section" id="ai-section">
-    <div class="flex">
-      <h2>本地 MCP Companion</h2>
-      <span class="badge offline" id="ai-badge">未连接</span>
-    </div>
-    <div class="row">
-      <input id="relayUrl" value="http://localhost:32130" />
-      <button id="connectBtn">连接</button>
-      <button id="openServerBtn" class="secondary">插件目录</button>
-    </div>
-    <div class="status-box" id="ai-status">等待连接本地 MCP Companion...</div>
-    <div class="mcp-config-panel" id="mcp-config-panel">
-      <div class="mcp-config-head">
-        <div class="mcp-config-title-row">
-          <button id="mcpConfigToggleBtn" class="mcp-config-toggle" type="button" title="展开/收起 MCP 配置"></button>
-          <div>
-            <div class="mcp-title">MCP 服务器</div>
-            <div class="mcp-subtitle">Codex App 用户级配置</div>
-          </div>
-        </div>
-        <span class="badge offline" id="mcp-config-badge">未配置</span>
-      </div>
-      <div class="mcp-config-body" id="mcpConfigBody">
-        <div class="control-grid mcp-config-controls">
-          <div class="control-card">
-            <label for="mcpClientSelect">目标客户端</label>
-            <select id="mcpClientSelect">
-              <option value="codex">Codex App</option>
-              <option value="claude">Claude Code</option>
-            </select>
-          </div>
-          <div class="control-card">
-            <label for="mcpServerNameInput">服务器名</label>
-            <input id="mcpServerNameInput" value="figmaMcpRelay" readonly />
-          </div>
-        </div>
-        <div class="button-row">
-          <button id="writeMcpConfigBtn" class="secondary" type="button">写入配置</button>
-          <button id="openMcpConfigBtn" class="secondary" type="button">打开配置</button>
-          <button id="deleteMcpConfigBtn" class="danger" type="button">删除配置</button>
-        </div>
-        <div class="mcp-server-row">
-          <div>
-            <div class="mcp-server-name" id="mcpServerRowName">figmaMcpRelay</div>
-            <div class="mcp-server-meta" id="mcpServerRowMeta">http://127.0.0.1:32130/mcp</div>
-          </div>
-          <div class="mcp-server-toggle" id="mcpServerToggle"></div>
-        </div>
-        <div class="status-box" id="mcp-config-status">等待读取 MCP 配置...</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ========== Unity 网关全局区域 ========== -->
-  <div class="section unity global-section" id="unity-section">
-    <div class="flex">
-      <h2>Unity 网关</h2>
-      <span class="badge offline" id="unity-badge">未连接</span>
-    </div>
-    <div class="row">
-      <input id="unityUrl" value="http://localhost:32129" />
-      <button id="unityConnectBtn">连接</button>
-      <button id="unityDisconnectBtn" class="danger" disabled>断开</button>
-    </div>
-    <div class="status-box" id="unity-status">等待连接 Unity 网关...</div>
-  </div>
-
   <!-- ========== Figma 定位全局区域 ========== -->
   <div class="section global-section" id="figma-location-section">
     <h2>Figma 定位</h2>
@@ -765,7 +697,80 @@
     <button class="tab-button" data-tab="nine-slice-tab" type="button">切九宫</button>
     <button class="tab-button" data-tab="ai-prompt-tab" type="button">AI 提示词</button>
     <button class="tab-button" data-tab="ai-execution-tab" type="button">AI 执行</button>
+    <button class="tab-button" data-tab="settings-tab" type="button">设置</button>
   </div>
+
+  <!-- ========== Settings ========== -->
+  <div class="tab-page" id="settings-tab">
+    <!-- ========== 本地 MCP Companion / 插件 Runtime Relay 区域 ========== -->
+    <div class="section global-section" id="ai-section">
+      <div class="flex">
+        <h2>本地 MCP Companion</h2>
+        <span class="badge offline" id="ai-badge">未连接</span>
+      </div>
+      <div class="row">
+        <input id="relayUrl" value="http://localhost:32130" />
+        <button id="connectBtn">连接</button>
+        <button id="openServerBtn" class="secondary">插件目录</button>
+      </div>
+      <div class="status-box" id="ai-status">等待连接本地 MCP Companion...</div>
+      <div class="mcp-config-panel" id="mcp-config-panel">
+        <div class="mcp-config-head">
+          <div class="mcp-config-title-row">
+            <button id="mcpConfigToggleBtn" class="mcp-config-toggle" type="button" title="展开/收起 MCP 配置"></button>
+            <div>
+              <div class="mcp-title">MCP 服务器</div>
+              <div class="mcp-subtitle">Codex App 用户级配置</div>
+            </div>
+          </div>
+          <span class="badge offline" id="mcp-config-badge">未配置</span>
+        </div>
+        <div class="mcp-config-body" id="mcpConfigBody">
+          <div class="control-grid mcp-config-controls">
+            <div class="control-card">
+              <label for="mcpClientSelect">目标客户端</label>
+              <select id="mcpClientSelect">
+                <option value="codex">Codex App</option>
+                <option value="claude">Claude Code</option>
+              </select>
+            </div>
+            <div class="control-card">
+              <label for="mcpServerNameInput">服务器名</label>
+              <input id="mcpServerNameInput" value="figmaMcpRelay" readonly />
+            </div>
+          </div>
+          <div class="button-row">
+            <button id="writeMcpConfigBtn" class="secondary" type="button">写入配置</button>
+            <button id="openMcpConfigBtn" class="secondary" type="button">打开配置</button>
+            <button id="deleteMcpConfigBtn" class="danger" type="button">删除配置</button>
+          </div>
+          <div class="mcp-server-row">
+            <div>
+              <div class="mcp-server-name" id="mcpServerRowName">figmaMcpRelay</div>
+              <div class="mcp-server-meta" id="mcpServerRowMeta">http://127.0.0.1:32130/mcp</div>
+            </div>
+            <div class="mcp-server-toggle" id="mcpServerToggle"></div>
+          </div>
+          <div class="status-box" id="mcp-config-status">等待读取 MCP 配置...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== Unity 网关全局区域 ========== -->
+    <div class="section unity global-section" id="unity-section">
+      <div class="flex">
+        <h2>Unity 网关</h2>
+        <span class="badge offline" id="unity-badge">未连接</span>
+      </div>
+      <div class="row">
+        <input id="unityUrl" value="http://localhost:32129" />
+        <button id="unityConnectBtn">连接</button>
+        <button id="unityDisconnectBtn" class="danger" disabled>断开</button>
+      </div>
+      <div class="status-box" id="unity-status">等待连接 Unity 网关...</div>
+    </div>
+  </div>
+  <!-- SETTINGS_TAB_END -->
 
   <!-- ========== 同步 Unity 区域 ========== -->
   <div class="tab-page active" id="sync-unity-tab">
