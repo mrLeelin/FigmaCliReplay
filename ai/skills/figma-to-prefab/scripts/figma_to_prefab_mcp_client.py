@@ -22,15 +22,8 @@ from typing import Any, Dict, Optional, Tuple
 
 
 DEFAULT_RELAY_URL = "http://localhost:32130"
-def find_project_root() -> Path:
-    for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
-            return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
-
-
-PROJECT_ROOT = find_project_root()
-MCP_CLIENT_DIR = PROJECT_ROOT / ".figma" / "plugins" / "figma-mcp-relay" / "client"
+PLUGIN_ROOT = Path(__file__).resolve().parents[4]
+MCP_CLIENT_DIR = PLUGIN_ROOT / "client"
 DEFAULT_REQUEST_PATH = Path(".tmp/figma-to-prefab/figma_to_prefab_request.json")
 DEFAULT_RESULT_PATH = Path(".tmp/figma-to-prefab/figma_to_prefab_mcp_result.json")
 DEFAULT_NODE_MANIFEST_PATH = Path(".tmp/figma-to-prefab/figma_node_manifest.json")

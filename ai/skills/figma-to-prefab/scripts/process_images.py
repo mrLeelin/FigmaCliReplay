@@ -18,26 +18,35 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
+PLUGIN_ROOT = Path(__file__).resolve().parents[4]
+
+
+def is_unity_project(path):
+    return (path / "Assets").is_dir() and (path / "ProjectSettings").is_dir()
+
+
 def find_repository_root():
-    """从脚本位置向上查找仓库根目录。"""
-    current = Path(__file__).resolve()
-    for candidate in [current.parent, *current.parents]:
-        if (candidate / "JellybeanUnity").is_dir() and (candidate / ".kiro").is_dir():
-            return candidate
-    return Path.cwd().resolve()
+    """Standalone relay runtime root for manifests and caches."""
+    return PLUGIN_ROOT
 
 
 def find_unity_project_root():
     """解析 Unity 工程根目录，避免把 Assets 写到仓库根。"""
+    configured = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if is_unity_project(candidate):
+            return candidate
+        raise RuntimeError(f"FIGMA_UNITY_PROJECT is not a Unity project: {candidate}")
     repo_root = find_repository_root()
     nested = repo_root / "JellybeanUnity"
-    if (nested / "Assets").is_dir() and (nested / "ProjectSettings").is_dir():
+    if is_unity_project(nested):
         return nested.resolve()
     current = Path.cwd().resolve()
     for candidate in [current, *current.parents]:
-        if (candidate / "Assets").is_dir() and (candidate / "ProjectSettings").is_dir():
+        if is_unity_project(candidate):
             return candidate.resolve()
-    return nested.resolve()
+    return PLUGIN_ROOT
 
 
 REPOSITORY_ROOT = find_repository_root()
@@ -1289,6 +1298,8 @@ def main():
     parser.add_argument("--download-plan", default="JellybeanUnity/.tmp/image_download_plan.json",
                         help="图片下载/校验计划路径")
     args = parser.parse_args()
+    if not is_unity_project(UNITY_PROJECT_ROOT):
+        parser.error("FIGMA_UNITY_PROJECT must point to a Unity project containing Assets and ProjectSettings")
 
     manifest_dir = resolve_manifest_dir(args.manifest_dir)
     output_dir = resolve_output_dir(args.output_dir)

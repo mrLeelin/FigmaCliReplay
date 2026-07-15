@@ -5,6 +5,7 @@ Figma → Unity Prefab 一键导入入口
 
 用法:
     python run_full_import.py \\
+        --unity-project "E:/Project/Game" \\
         --figma-url "https://www.figma.com/design/FILE/NAME?node-id=1-2" \\
         --target-prefab "Assets/_Resources/Prefabs/UGUI/模块名/UI_Foo.prefab" \\
         --target-image-dir "Assets/_Resources/Foo_Images/" \\
@@ -38,19 +39,36 @@ if hasattr(sys.stdout, "reconfigure"):
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
+PLUGIN_ROOT = SCRIPT_DIR.parents[3]
 
 
-def find_project_root() -> Path:
+def is_unity_project(path: Path) -> bool:
+    return (path / "Assets").is_dir() and (path / "ProjectSettings").is_dir()
+
+
+def find_legacy_unity_project() -> Path | None:
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
-            return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+        nested = parent / "JellybeanUnity"
+        if is_unity_project(nested):
+            return nested.resolve()
+    return None
 
 
-REPO_ROOT = find_project_root()
-UNITY_PROJECT = REPO_ROOT / "JellybeanUnity"
+def configure_project_paths(unity_project: str | Path) -> None:
+    global UNITY_PROJECT, TMP_DIR, VERIFY_PREFAB_REPORT
+    resolved = Path(unity_project).expanduser().resolve()
+    if not is_unity_project(resolved):
+        raise ValueError(f"Unity project must contain Assets and ProjectSettings: {resolved}")
+    UNITY_PROJECT = resolved
+    TMP_DIR = UNITY_PROJECT / ".tmp"
+    VERIFY_PREFAB_REPORT = TMP_DIR / "verify_prefab_result.json"
+    os.environ["FIGMA_UNITY_PROJECT"] = str(UNITY_PROJECT)
+
+
+REPO_ROOT = PLUGIN_ROOT
+UNITY_PROJECT = find_legacy_unity_project() or PLUGIN_ROOT
 TMP_DIR = UNITY_PROJECT / ".tmp"
-MCP_MANIFEST_DIR = REPO_ROOT / ".tmp" / "figma-to-prefab"
+MCP_MANIFEST_DIR = PLUGIN_ROOT / ".tmp" / "figma-to-prefab"
 
 ULOOP_IMPORT_TEMPLATE = SKILL_DIR / "uloop-templates" / "import_sprites_and_generate_prefabs.cs"
 
@@ -171,6 +189,9 @@ def resolve_repo_path(path: str | Path) -> Path:
     resolved = Path(path)
     if resolved.is_absolute():
         return resolved
+    normalized = str(path).replace("\\", "/")
+    if normalized.startswith("Assets/"):
+        return UNITY_PROJECT / normalized
     return REPO_ROOT / resolved
 
 
@@ -354,6 +375,8 @@ def fail(msg: str, code: int = 1) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Figma → Unity Prefab 一键导入")
+    parser.add_argument("--unity-project", default=os.environ.get("FIGMA_UNITY_PROJECT", ""),
+                        help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--figma-url", required=True, help="Figma 节点 URL（含 node-id）")
     parser.add_argument("--target-prefab", required=True, help="目标 Prefab 资产路径，如 Assets/.../UI_Foo.prefab")
     parser.add_argument("--target-image-dir", required=True, help="目标图片目录，如 Assets/.../Images/")
@@ -382,6 +405,13 @@ def main():
     parser.add_argument("--workers", type=int, default=6, help="process_images 并行线程数（默认 6）")
 
     args = parser.parse_args()
+    unity_project = args.unity_project or find_legacy_unity_project()
+    if not unity_project:
+        parser.error("--unity-project is required when running outside the JellybeanUnity repository")
+    try:
+        configure_project_paths(unity_project)
+    except ValueError as error:
+        parser.error(str(error))
     workflow_started = time.perf_counter()
     timings: list[dict] = []
 
@@ -528,6 +558,7 @@ def main():
     step("2/6 gen_spec - Spec and audit report")
 
     spec_path = TMP_DIR / "prefab_spec.json"
+    download_plan = TMP_DIR / "image_download_plan.json"
     audit_path = TMP_DIR / "spec_audit_report.json"
     plan_path = TMP_DIR / "roslyn_import_plan.txt"
 
@@ -537,9 +568,13 @@ def main():
         "--target-prefab", args.target_prefab,
         "--target-image-dir", args.target_image_dir,
         "--prefab-name", args.prefab_name,
+        "--output-spec", str(spec_path),
+        "--output-plan", str(download_plan),
         "--output-audit-report", str(audit_path),
         "--manifest-dir", str(manifest_dir),
         "--output-roslyn-import-plan", str(plan_path),
+        "--component-spec-dir", str(TMP_DIR / "figma_component_specs"),
+        "--componentset-report", str(TMP_DIR / "componentset_report.json"),
     ]
     # check-only: 不检查磁盘（图片尚未写入）
     # 正常模式: 标记为写前检查（文件缺失 = 预期，不阻塞）
@@ -619,7 +654,6 @@ def main():
     # ─── 步骤 3: process_images.py ───
     step("4/6 process_images - write PNG")
 
-    download_plan = TMP_DIR / "image_download_plan.json"
     image_report = TMP_DIR / "image_process_report.json"
 
     pi_result, timing = run_timed("processImages", [

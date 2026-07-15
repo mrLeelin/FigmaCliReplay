@@ -777,8 +777,8 @@
       </div>
       <div class="status-box" id="unityProjectStatus">尚未登记 Unity 工程。</div>
       <div class="row">
-        <input id="unityUrl" value="http://localhost:32129" />
-        <button id="unityConnectBtn">连接</button>
+        <input id="unityUrl" value="http://localhost:32129" readonly title="自动扫描 localhost:32129-32135，并匹配当前 Unity 工程" />
+        <button id="unityConnectBtn">自动连接</button>
         <button id="unityDisconnectBtn" class="danger" disabled>断开</button>
       </div>
       <div class="status-box" id="unity-status">等待连接 Unity 网关...</div>
@@ -3335,9 +3335,9 @@
     }
 
     async function connectUnity() {
-      var requestedUnityUrl = unityUrlInput.value.trim() || "http://localhost:32129";
+      var requestedUnityUrl = "http://localhost:32129";
       unityConnectBtn.disabled = true;
-      appendLog("正在连接 Unity 网关：" + requestedUnityUrl);
+      appendLog("正在自动发现 Unity 网关：localhost:" + unityPortMin + "-" + unityPortMax);
       try {
         const probe = await probeUnityHealth(requestedUnityUrl);
         const data = probe.data || {};

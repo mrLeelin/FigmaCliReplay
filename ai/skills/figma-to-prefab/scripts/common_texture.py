@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Common_Texture 缓存索引 — 文件数量校验 + 增量重建"""
-import json, argparse, sys
+import json, argparse, os, sys
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-CACHE_FILE = Path(".tmp/common_texture_index.json")
-COMMON_DIR = Path("JellybeanUnity/Assets/_Art/Texture/GUI/_Common")
+PLUGIN_ROOT = Path(__file__).resolve().parents[4]
+UNITY_PROJECT = Path(os.environ.get("FIGMA_UNITY_PROJECT", PLUGIN_ROOT / "JellybeanUnity")).expanduser().resolve()
+CACHE_FILE = PLUGIN_ROOT / ".tmp" / "common_texture_index.json"
+COMMON_DIR = UNITY_PROJECT / "Assets" / "_Art" / "Texture" / "GUI" / "_Common"
 
 
 def build_index() -> dict:
@@ -15,7 +17,7 @@ def build_index() -> dict:
     index = {}
     if COMMON_DIR.exists():
         for p in COMMON_DIR.rglob("*.png"):
-            rel = "Assets/" + str(p.relative_to("JellybeanUnity/Assets")).replace("\\", "/")
+            rel = "Assets/" + str(p.relative_to(UNITY_PROJECT / "Assets")).replace("\\", "/")
             index[p.stem] = rel
     return index
 

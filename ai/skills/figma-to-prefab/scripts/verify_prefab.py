@@ -14,6 +14,7 @@ Prefab YAML 静态验证器
 """
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -23,6 +24,12 @@ TMP_DEFAULT_FONT_GUID = "8f586378b4e144a9851e7b34d9b748ee"
 
 def find_unity_project_root(start_dir=None):
     """从当前目录向上解析 Unity 工程根，兼容仓库根和工程根。"""
+    configured = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if (candidate / "Assets").is_dir() and (candidate / "ProjectSettings").is_dir():
+            return candidate
+        raise RuntimeError(f"FIGMA_UNITY_PROJECT is not a Unity project: {candidate}")
     current = Path(start_dir or ".").resolve()
     for candidate in [current, *current.parents]:
         if (candidate / "Assets").is_dir() and (candidate / "ProjectSettings").is_dir():

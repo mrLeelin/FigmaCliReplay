@@ -37,15 +37,29 @@ from collections import defaultdict
 from urllib.parse import urlparse, parse_qs
 
 # ── 项目路径 ──────────────────────────────────
-def find_project_root() -> Path:
+PLUGIN_ROOT = Path(__file__).resolve().parents[4]
+
+
+def is_unity_project(path: Path) -> bool:
+    return (path / "Assets").is_dir() and (path / "ProjectSettings").is_dir()
+
+
+def find_unity_project_root() -> Path:
+    configured = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if is_unity_project(candidate):
+            return candidate
+        raise RuntimeError(f"FIGMA_UNITY_PROJECT is not a Unity project: {candidate}")
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
-            return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+        nested = parent / "JellybeanUnity"
+        if is_unity_project(nested):
+            return nested.resolve()
+    raise RuntimeError("Unable to locate a Unity project. Pass --unity-project to run_full_import.py.")
 
 
-PROJECT_ROOT = find_project_root()
-UNITY_PROJECT = PROJECT_ROOT / "JellybeanUnity"
+PROJECT_ROOT = PLUGIN_ROOT
+UNITY_PROJECT = find_unity_project_root()
 COMMON_DIR = UNITY_PROJECT / "Assets" / "_Art" / "Texture" / "GUI" / "_Common"
 
 # ── 本地白像素 Sprite ─────────────────────────

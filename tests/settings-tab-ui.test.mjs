@@ -27,3 +27,10 @@ test("Figma location stays on the main screen before feature navigation", () => 
 
   assert.ok(locationIndex >= 0 && locationIndex < tabsIndex);
 });
+
+test("Unity gateway address is auto-discovered instead of manually edited", () => {
+  assert.match(ui, /<input id="unityUrl"[^>]*\sreadonly(?:\s|\/?>)/);
+  assert.match(ui, /<button id="unityConnectBtn">自动连接<\/button>/);
+  assert.match(ui, /for \(var port = unityPortMin; port <= unityPortMax; port \+= 1\)/);
+  assert.match(ui, /actualProjectPath !== expectedProjectPath/);
+});
