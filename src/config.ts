@@ -32,7 +32,6 @@ export const PLUGIN_ROOT = path.resolve(DIST_DIR, "..");
 export const SERVER_DIR = path.join(PLUGIN_ROOT, "server");
 export const LOG_DIR = path.join(PLUGIN_ROOT, ".logs");
 export const LOCAL_DIR = path.join(PLUGIN_ROOT, ".local");
-export const REPO_ROOT = path.resolve(PLUGIN_ROOT, "..", "..", "..");
 
 export function parseArgs(argv: string[] = process.argv.slice(2)): GatewayConfig {
   const config: GatewayConfig = {
@@ -125,7 +124,6 @@ Options:
 function defaultAssetRoots(): string[] {
   return uniquePaths([
     path.join(PLUGIN_ROOT, ".tmp"),
-    path.join(REPO_ROOT, ".tmp"),
     path.join(os.tmpdir(), "figma-mcp-relay")
   ].map((item) => path.resolve(item)));
 }

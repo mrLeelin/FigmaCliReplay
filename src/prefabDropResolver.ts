@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { REPO_ROOT } from "./config.js";
 import { isRecord } from "./utils.js";
+import { UnityProjectRegistry, normalizeUnityProjectPath } from "./unityProjectRegistry.js";
 
 interface DroppedPrefabFile {
   fileName: string;
@@ -39,14 +39,15 @@ export function resolveDroppedPrefabs(payload: unknown): DroppedPrefabResolveRes
     throw new Error("files must contain at least one .prefab file");
   }
 
-  const searchedRoots = prefabSearchRoots();
-  const allPrefabs = listPrefabFiles(searchedRoots);
+  const unityProjectPath = resolveUnityProjectPath(payload);
+  const searchedRoots = prefabSearchRoots(unityProjectPath);
+  const allPrefabs = listPrefabFiles(unityProjectPath, searchedRoots);
   const resolved: ResolvedPrefab[] = [];
   const conflicts: PrefabConflict[] = [];
   const missing: MissingPrefab[] = [];
 
   for (const file of files) {
-    const matches = findMatchesForDroppedFile(file, allPrefabs);
+    const matches = findMatchesForDroppedFile(file, unityProjectPath, allPrefabs);
     if (matches.length === 1) {
       resolved.push({ fileName: file.fileName, prefabPath: matches[0] });
     } else if (matches.length > 1) {
@@ -63,7 +64,7 @@ export function resolveDroppedPrefabs(payload: unknown): DroppedPrefabResolveRes
     resolved,
     conflicts,
     missing,
-    searchedRoots: searchedRoots.map((root) => toRepoPath(root))
+    searchedRoots: searchedRoots.map((root) => toUnityPath(unityProjectPath, root))
   };
 }
 
@@ -82,14 +83,19 @@ function readDroppedPrefabFiles(payload: unknown): DroppedPrefabFile[] {
   return result;
 }
 
-function prefabSearchRoots(): string[] {
-  return [
-    path.join(REPO_ROOT, "JellybeanUnity", "Assets"),
-    path.join(REPO_ROOT, "Assets")
-  ].filter((root) => fs.existsSync(root) && fs.statSync(root).isDirectory());
+function resolveUnityProjectPath(payload: unknown): string {
+  if (isRecord(payload) && typeof payload.unityProjectPath === "string" && payload.unityProjectPath.trim()) {
+    return normalizeUnityProjectPath(payload.unityProjectPath);
+  }
+  return new UnityProjectRegistry().snapshot().path;
 }
 
-function listPrefabFiles(roots: string[]): string[] {
+function prefabSearchRoots(unityProjectPath: string): string[] {
+  const assetsRoot = path.join(unityProjectPath, "Assets");
+  return fs.existsSync(assetsRoot) && fs.statSync(assetsRoot).isDirectory() ? [assetsRoot] : [];
+}
+
+function listPrefabFiles(unityProjectPath: string, roots: string[]): string[] {
   const result: string[] = [];
   const ignored = new Set(["Library", "Temp", "Obj", "Build", "Builds", "Logs", "UserSettings"]);
   for (const root of roots) {
@@ -113,7 +119,7 @@ function listPrefabFiles(roots: string[]): string[] {
           continue;
         }
         if (entry.isFile() && /\.prefab$/i.test(entry.name)) {
-          result.push(toRepoPath(fullPath));
+          result.push(toUnityPath(unityProjectPath, fullPath));
         }
       }
     }
@@ -121,7 +127,7 @@ function listPrefabFiles(roots: string[]): string[] {
   return result.sort((a, b) => a.localeCompare(b));
 }
 
-function findMatchesForDroppedFile(file: DroppedPrefabFile, allPrefabs: string[]): string[] {
+function findMatchesForDroppedFile(file: DroppedPrefabFile, unityProjectPath: string, allPrefabs: string[]): string[] {
   const targetName = file.fileName.toLowerCase();
   const byName = allPrefabs.filter((prefabPath) => path.posix.basename(prefabPath).toLowerCase() === targetName);
   if (byName.length <= 1 || !file.text) {
@@ -134,7 +140,7 @@ function findMatchesForDroppedFile(file: DroppedPrefabFile, allPrefabs: string[]
   }
   const byGuid = byName.filter((prefabPath) => {
     try {
-      return fs.readFileSync(path.join(REPO_ROOT, prefabPath), "utf8").includes(droppedGuid);
+      return fs.readFileSync(path.join(unityProjectPath, prefabPath), "utf8").includes(droppedGuid);
     } catch {
       return false;
     }
@@ -147,8 +153,8 @@ function extractPrefabRootGuid(text: string): string {
   return match ? match[1] : "";
 }
 
-function toRepoPath(fullPath: string): string {
-  return path.relative(REPO_ROOT, fullPath).replace(/\\/g, "/");
+function toUnityPath(unityProjectPath: string, fullPath: string): string {
+  return path.relative(unityProjectPath, fullPath).replace(/\\/g, "/");
 }
 
 function safeBaseName(value: string): string {

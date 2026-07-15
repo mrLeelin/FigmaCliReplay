@@ -5,6 +5,8 @@
 figma 路径:
 - {{selectionBlock}}
 
+目标 Unity 工程：{{unityProjectPath}}
+
 执行边界：
 - 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。
 - 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 MCP 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。
@@ -14,7 +16,7 @@ figma 路径:
 
 固定流水线（必须执行，不要自行拆解或增加检查）：
 1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。
-2. 立即执行唯一的导入命令：`python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/run_full_import.py --figma-url "https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>" --file-key <fileKey> --infer-formal-names --formal-output-dir "{{unityImageTargetFolder}}/FigmaImports" --target-prefab "Assets/FigmaImports/Pending.prefab" --target-image-dir "Assets/FigmaImports/Images" --yes --wall-clock-report "JellybeanUnity/.tmp/figma_to_prefab_wall_clock.json"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。
+2. 立即执行唯一的导入命令：`python "ai/skills/figma-to-prefab/scripts/run_full_import.py" --unity-project "{{unityProjectPath}}" --figma-url "https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>" --file-key <fileKey> --infer-formal-names --formal-output-dir "{{unityImageTargetFolder}}/FigmaImports" --target-prefab "Assets/FigmaImports/Pending.prefab" --target-image-dir "Assets/FigmaImports/Images" --yes --wall-clock-report ".tmp/figma_to_prefab_wall_clock.json"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。
 3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。
 
 禁止项：

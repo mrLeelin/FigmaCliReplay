@@ -10,6 +10,8 @@ import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 import { getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
 import { followupAiRun, getAiRun, localAiRunnerStatus, runLocalAiCleanup, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
 import { redactLargeRelayPayload, type RuntimeRelay } from "./runtimeRelay.js";
+import { UnityProjectRegistry } from "./unityProjectRegistry.js";
+import { installUnityBridge } from "./unityBridgeInstaller.js";
 import {
   bearerToken,
   constantTimeEqual,
@@ -24,7 +26,11 @@ import {
   readJson
 } from "./utils.js";
 
-export function createRelayHttpServer(config: GatewayConfig, relay: RuntimeRelay) {
+export function createRelayHttpServer(
+  config: GatewayConfig,
+  relay: RuntimeRelay,
+  unityProjects = new UnityProjectRegistry()
+) {
   const mcpEndpoint = new RelayMcpHttpEndpoint(relay);
   const server = createServer(async (request, response) => {
     const startedAt = Date.now();
@@ -60,7 +66,7 @@ export function createRelayHttpServer(config: GatewayConfig, relay: RuntimeRelay
         return;
       }
       if (request.method === "GET") {
-        handleGet(config, relay, request, requestUrl, response);
+        handleGet(config, relay, unityProjects, request, requestUrl, response);
         return;
       }
       if (request.method === "POST") {
@@ -68,7 +74,7 @@ export function createRelayHttpServer(config: GatewayConfig, relay: RuntimeRelay
           return;
         }
         const payload = await readJson(request);
-        await handlePost(config, relay, request, requestUrl, payload, response);
+        await handlePost(config, relay, unityProjects, request, requestUrl, payload, response);
         return;
       }
       jsonResponse(response, 405, { error: "method not allowed" });
@@ -88,6 +94,7 @@ export function createRelayHttpServer(config: GatewayConfig, relay: RuntimeRelay
 function handleGet(
   config: GatewayConfig,
   relay: RuntimeRelay,
+  unityProjects: UnityProjectRegistry,
   request: IncomingMessage,
   requestUrl: URL,
   response: ServerResponse
@@ -119,6 +126,10 @@ function handleGet(
   }
   if (pathname === "/ai-runner/status") {
     jsonResponse(response, 200, localAiRunnerStatus());
+    return;
+  }
+  if (pathname === "/unity-projects") {
+    jsonResponse(response, 200, unityProjects.list());
     return;
   }
   const runMatch = pathname.match(/^\/ai-runner\/runs\/([^/]+)$/);
@@ -214,12 +225,43 @@ function handleGet(
 async function handlePost(
   config: GatewayConfig,
   relay: RuntimeRelay,
+  unityProjects: UnityProjectRegistry,
   request: IncomingMessage,
   requestUrl: URL,
   payload: unknown,
   response: ServerResponse
 ): Promise<void> {
   const pathname = requestUrl.pathname;
+  if (pathname === "/unity-projects/add" || pathname === "/unity-projects/select" || pathname === "/unity-projects/remove" || pathname === "/unity-projects/install-bridge") {
+    if (!canManageUnityProjects(config, relay, request, payload)) {
+      jsonResponse(response, 403, { ok: false, error: "Unity project changes require the local admin token or an online Figma plugin session." });
+      return;
+    }
+    if (!isRecord(payload)) {
+      jsonResponse(response, 400, { ok: false, error: "json body must be object" });
+      return;
+    }
+    try {
+      if (pathname === "/unity-projects/add") {
+        const project = unityProjects.add(String(payload.path || ""));
+        jsonResponse(response, 200, { ok: true, project, ...unityProjects.list() });
+      } else if (pathname === "/unity-projects/select") {
+        const project = unityProjects.select(String(payload.id || ""));
+        jsonResponse(response, 200, { ok: true, project, ...unityProjects.list() });
+      } else if (pathname === "/unity-projects/remove") {
+        unityProjects.remove(String(payload.id || ""));
+        jsonResponse(response, 200, { ok: true, ...unityProjects.list() });
+      } else {
+        const selectedProject = unityProjects.snapshot(String(payload.id || ""));
+        const installResult = installUnityBridge(selectedProject.path);
+        const project = unityProjects.add(selectedProject.path);
+        jsonResponse(response, 200, { ok: true, installResult, project, ...unityProjects.list() });
+      }
+    } catch (error) {
+      jsonResponse(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
   if (pathname === "/jobs") {
     if (!isRuntimeRelayRequest(request, response)) {
       return;
@@ -384,6 +426,17 @@ async function handlePost(
     return;
   }
   jsonResponse(response, 404, { error: `unknown endpoint: ${pathname}` });
+}
+
+function canManageUnityProjects(
+  config: GatewayConfig,
+  relay: RuntimeRelay,
+  request: IncomingMessage,
+  payload: unknown
+): boolean {
+  const tokenAllowed = Boolean(config.adminToken) && constantTimeEqual(bearerToken(request), config.adminToken);
+  const sessionId = isRecord(payload) ? payload.sessionId : undefined;
+  return tokenAllowed || isFigmaPluginRequest(request) || relay.hasLivePluginSession(sessionId);
 }
 
 function isRuntimeRelayRequest(request: IncomingMessage, response: ServerResponse): boolean {

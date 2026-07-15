@@ -700,7 +700,7 @@
     <button class="tab-button" data-tab="settings-tab" type="button">设置</button>
   </div>
 
-  <!-- ========== Settings ========== -->
+  <!-- ========== 设置区域 ========== -->
   <div class="tab-page" id="settings-tab">
     <!-- ========== 本地 MCP Companion / 插件 Runtime Relay 区域 ========== -->
     <div class="section global-section" id="ai-section">
@@ -756,12 +756,26 @@
       </div>
     </div>
 
-    <!-- ========== Unity 网关全局区域 ========== -->
+    <!-- ========== Unity 网关区域 ========== -->
     <div class="section unity global-section" id="unity-section">
       <div class="flex">
         <h2>Unity 网关</h2>
         <span class="badge offline" id="unity-badge">未连接</span>
       </div>
+      <div class="field">
+        <label for="unityProjectSelect">目标 Unity 工程</label>
+        <select id="unityProjectSelect"></select>
+      </div>
+      <div class="row">
+        <input id="unityProjectPathInput" placeholder="输入 Unity 工程根目录，例如 E:\Project\Game" />
+        <button id="addUnityProjectBtn" type="button">添加工程</button>
+      </div>
+      <div class="row">
+        <button id="removeUnityProjectBtn" class="danger" type="button">移除</button>
+        <button id="installUnityBridgeBtn" type="button">安装/更新 Bridge</button>
+        <button id="refreshUnityProjectsBtn" class="secondary" type="button">刷新工程</button>
+      </div>
+      <div class="status-box" id="unityProjectStatus">尚未登记 Unity 工程。</div>
       <div class="row">
         <input id="unityUrl" value="http://localhost:32129" />
         <button id="unityConnectBtn">连接</button>
@@ -1012,6 +1026,13 @@
     const unityDisconnectBtn = document.getElementById("unityDisconnectBtn");
     const unityStatusEl = document.getElementById("unity-status");
     const unityBadge = document.getElementById("unity-badge");
+    const unityProjectSelect = document.getElementById("unityProjectSelect");
+    const unityProjectPathInput = document.getElementById("unityProjectPathInput");
+    const addUnityProjectBtn = document.getElementById("addUnityProjectBtn");
+    const removeUnityProjectBtn = document.getElementById("removeUnityProjectBtn");
+    const installUnityBridgeBtn = document.getElementById("installUnityBridgeBtn");
+    const refreshUnityProjectsBtn = document.getElementById("refreshUnityProjectsBtn");
+    const unityProjectStatus = document.getElementById("unityProjectStatus");
     const exportImagesBtn = document.getElementById("exportImagesBtn");
     const previewHierarchyBtn = document.getElementById("previewHierarchyBtn");
     const exportHierarchyBtn = document.getElementById("exportHierarchyBtn");
@@ -1093,6 +1114,8 @@
     const unityPortMax = 32135;
     let unityUrl = unityUrlInput.value.trim();
     let unityConnected = false;
+    let unityProjects = [];
+    let selectedUnityProject = null;
     let exportingImages = false;
     let exportingHierarchy = false;
     let selectedUnityFolder = "";
@@ -1369,6 +1392,107 @@
         relayUrlInput.value = relayUrl;
       }
       return relayUrl;
+    }
+
+    function renderUnityProjects(data) {
+      unityProjects = Array.isArray(data && data.projects) ? data.projects : [];
+      var selectedId = data && data.lastSelectedProjectId ? data.lastSelectedProjectId : "";
+      unityProjectSelect.innerHTML = "";
+      if (unityProjects.length === 0) {
+        var emptyOption = document.createElement("option");
+        emptyOption.value = "";
+        emptyOption.textContent = "未登记 Unity 工程";
+        unityProjectSelect.appendChild(emptyOption);
+      } else {
+        unityProjects.forEach(function (project) {
+          var option = document.createElement("option");
+          option.value = project.id;
+          option.textContent = project.name + (project.valid ? "" : "（路径失效）");
+          unityProjectSelect.appendChild(option);
+        });
+      }
+      unityProjectSelect.value = selectedId || (unityProjects[0] && unityProjects[0].id) || "";
+      selectedUnityProject = unityProjects.find(function (project) { return project.id === unityProjectSelect.value; }) || null;
+      removeUnityProjectBtn.disabled = !selectedUnityProject;
+      installUnityBridgeBtn.disabled = !selectedUnityProject || !selectedUnityProject.valid;
+      if (!selectedUnityProject) {
+        unityProjectStatus.textContent = "尚未登记 Unity 工程。";
+      } else {
+        unityProjectStatus.textContent = selectedUnityProject.name + "\n" + selectedUnityProject.path
+          + "\nFigmaBridge：" + (selectedUnityProject.bridgeInstalled ? "已安装" : "未安装")
+          + "；工程设置：" + (selectedUnityProject.settingsConfigured ? "已配置" : "未配置");
+      }
+      refreshAiPromptControls();
+    }
+
+    async function refreshUnityProjects() {
+      try {
+        var response = await fetchWithTimeout(relayEndpoint("/unity-projects"), {
+          headers: relayRuntimeHeaders()
+        }, 5000);
+        var result = await response.json();
+        if (!response.ok) throw new Error(result.error || "读取 Unity 工程失败");
+        renderUnityProjects(result);
+      } catch (error) {
+        unityProjectStatus.textContent = "读取 Unity 工程失败：" + (error.message || error);
+      }
+    }
+
+    async function addUnityProject() {
+      var projectPath = unityProjectPathInput.value.trim();
+      if (!projectPath) {
+        unityProjectStatus.textContent = "请输入 Unity 工程根目录。";
+        return;
+      }
+      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/add"), {
+        method: "POST",
+        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ path: projectPath, sessionId: relaySessionId })
+      }, 8000);
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "添加 Unity 工程失败");
+      unityProjectPathInput.value = "";
+      renderUnityProjects(result);
+    }
+
+    async function selectUnityProject() {
+      var projectId = unityProjectSelect.value;
+      if (!projectId) return;
+      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/select"), {
+        method: "POST",
+        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ id: projectId, sessionId: relaySessionId })
+      }, 8000);
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "选择 Unity 工程失败");
+      if (unityConnected) disconnectUnity();
+      renderUnityProjects(result);
+    }
+
+    async function removeUnityProject() {
+      if (!selectedUnityProject) return;
+      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/remove"), {
+        method: "POST",
+        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ id: selectedUnityProject.id, sessionId: relaySessionId })
+      }, 8000);
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "移除 Unity 工程失败");
+      renderUnityProjects(result);
+    }
+
+    async function installSelectedUnityBridge() {
+      if (!selectedUnityProject) return;
+      unityProjectStatus.textContent = "正在安装/更新 FigmaBridge：\n" + selectedUnityProject.path;
+      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/install-bridge"), {
+        method: "POST",
+        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ id: selectedUnityProject.id, sessionId: relaySessionId })
+      }, 30000);
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "安装 FigmaBridge 失败");
+      renderUnityProjects(result);
+      unityProjectStatus.textContent += "\nBridge 文件已写入，等待 Unity 编译。";
     }
     function unityEndpoint(path) {
       return (unityUrl.replace(/\/+$/, "")) + path;
@@ -2317,7 +2441,7 @@
       var endpoint = isCleanup ? "/ai-runner/run-cleanup" : "/ai-runner/run-prompt";
       var payload = isCleanup
         ? { selection: selection, sessionId: relaySessionId }
-        : { template: template, prompt: aiPromptPreviewEl.value, sessionId: relaySessionId };
+        : { template: template, prompt: aiPromptPreviewEl.value, sessionId: relaySessionId, unityProject: selectedUnityProject };
       setAiPromptStatus("正在启动" + taskLabel + "任务...");
       fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }, 8000)
         .then(function (response) { return response.json().then(function (result) { if (!response.ok || !result.ok) throw new Error(result.error || "启动失败"); return result; }); })
@@ -2507,7 +2631,7 @@
     const AiPromptTemplates = {
       "cleanup": "请使用 $figma-hierarchy-cleanup-mcp 整理 Figma 节点。\n\n目标 Figma：\n- {{selectionBlock}}\n\n目标：\n- 整理一下命名 Image 叫 _Image  按钮 叫 _Btn  之类的\n- 清理无意义的层级和命名，提升导入 Unity 前的结构可读性。\n- 保持视觉效果、尺寸、位置和图片内容不变。\n- 分组和 Z 顺序必须以当前真实 Figma 节点为依据，不要根据名称或经验猜测。\n\n读取与计划要求：\n- 禁止使用 Figma MCP 写入，只能通过 .figma/plugins/figma-mcp-relay 本地 MCP Relay 操作当前 Figma 文件。\n- 先检查 MCP Relay health，再 query-selection 回显当前选中节点。\n- 对目标节点执行 analyze，必须 includeHidden，避免漏掉隐藏占位、遮罩或备份节点。\n- 计划前必须输出 before directChildren 顺序表，包含 index、name、type、visible、bounds，说明 Figma sibling 越靠后视觉越在上层。\n- 给出完整最终目标树和整理计划，列出会影响的节点名称、原父级、新父级、原 index、新 index。\n\n分组规则：\n- 只允许新增外层语义分组容器，并把原始节点移动进去；禁止删除、flatten、vectorize、detach instance 或重建原节点。\n- 保序分组优先：进入同一新分组的原始节点必须保持原 sibling 相对顺序。\n- 保视觉栈优先：新增顶层分组的 sibling 顺序必须按视觉遮挡关系排列，背景类组在下层，按钮/Tab/弹窗/前景装饰在上层。\n- 不允许把视觉上不相邻、功能不明确、bounds 区域跨度异常的节点硬塞进同一组。\n- 如果单个分组吞掉 70% 以上直接子节点，或 [ListRoot] / [TabBar] / [ProgressSection] 这类语义组仍可继续拆分却未展开，视为异常计划，必须停下报告，不要 apply。\n- 遇到不确定的分组归属、遮罩归属、九宫归属、隐藏节点用途时，先报错问我，不要猜。\n\nZ 顺序规则：\n- Figma sibling 越靠后视觉越在上层；整理计划必须同时表达语义树和最终视觉栈顺序。\n- 分组后必须保持每个原始节点的相对视觉堆叠关系，不能因为新建 wrapper 导致 [Bg]、[TabBar]、[ListRoot]、[ProgressSection] 等顶层组遮挡错误。\n- 只有同一父节点下 sibling 顺序错误时，才使用 FIGMA_HIERARCHY_REORDER_CHILDREN 修复。\n- reorder 计划必须覆盖该父节点当前全部直接子节点，不要只给局部节点，避免漏节点、重复节点或集合变化。\n- 禁止为了修 Z 顺序重新导入 PSD、重建整棵树、复制节点或移动到错误父级。\n\n执行规则：\n- 等我确认后再执行 apply。\n- 如果需要备份节点，优先通过当前 MCP Relay 选区或 apply 计划设置 `createBackup: true` 自动备份，不要在提示词里暴露节点 id。\n- apply 后必须立即重新 analyze，不要把验证推到最后。\n- apply 后必须输出 after directChildren 顺序表，并和 before/plan 对比。\n- 如果发现只是 sibling 顺序错误，优先生成全量 reorder 计划修复，不要重新整理或重新导入。\n\n验收要求：\n- verify 必须确认节点集合守恒：原始节点全部且仅一次进入计划分组，没有遗漏、重复或新增替代节点。\n- absolute bounds 漂移必须为 0 或不超过工具允许容差；root 尺寸不变。\n- hidden 节点、mask、Instance、__slice_ / jiugong / nine-slice 结构不能丢失或被拆散。\n- root 顶层 directChildren 顺序必须符合计划中的视觉栈顺序。\n- 使用 FIGMA_HIERARCHY_REORDER_CHILDREN 时，必须验证 childSetPreserved、orderMatchesPlan、boundsPreserved、rootSizeUnchanged 全部通过。\n- 如果验证发现遮挡关系异常，必须报告具体节点和 index 差异，先问我确认修复方案。\n- 遇到无法判断的节点请报错说明，不要猜测修改。",
       "componentVariants": "请使用 $figma-hierarchy-cleanup-mcp，根据我当前选中的多个 Figma 节点，规划 ComponentSet 变体。\n\n{{selectionBlock}}\n\n重要前提：\n- 当前选中的节点可以是多个模板节点。\n- 这些节点不一定是根节点，也不一定同父级。\n- 不要假设它们都是同级列表项或同级 Tab 项。\n\n目标：\n- 先 query-selection，回显当前选中节点的 name/type/count/nodePath。\n- 再分析相关父级结构，判断这些选中节点应该作为手动 ComponentSet 的多个变体来源，还是跨父级节点组 ComponentSet 的一组或多组来源。\n- 如果适合手动选择 ComponentSet 流程，请规划 component-set --from-selection；该流程默认只创建 ComponentSet，不删除、不移动、不替换源节点。\n- 如果目标是替换原有重复项，必须先 analyze 相关父级或目标容器，明确哪些同类节点要被替换，再规划 component-set-from-node-groups 或其它合适流程。\n- 如果适合跨父级节点组流程，请规划 component-set-from-node-groups，并显式列出每组节点的名称、类型和 nodePath；实际写入以 MCP Relay 当前选区和分析结果为准。\n- 如果变体值、分组关系或替换范围无法从节点名和结构可靠推断，必须先问我，不要猜。\n\n执行规则：\n- 只先给计划，不要直接执行。\n- 等我确认后再调用 MCP Relay 写入。\n- 只有计划明确要替换原有重复项时，才设置 replaceOriginalsWithInstances=true。\n- 发生替换时默认 createBackup=true，源节点必须备份到隐藏备份 Frame。\n- 禁止删除原节点。\n- 禁止 flatten、detach instance、拆散 __slice_ / jiugong / nine-slice 节点。\n\n验收要求：\n- 执行后验证 ComponentSet 创建成功。\n- 如果计划包含替换，验证原节点已备份、实例替换成功、bounds 不漂移。\n- 如果计划只是 component-set --from-selection，验证源选中节点仍保留且未被移动。\n- 验证九宫切片在变体内被保留。\n- 重新 analyze 目标结构，确认替换后的节点数量、顺序和 Instance 状态符合计划。",
-      "unity": "请将当前 Figma 节点快速直接导入 Unity。\n\n这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。\n\nfigma 路径:\n- {{selectionBlock}}\n\n执行边界：\n- 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。\n- 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 MCP 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。\n- 默认新建且不覆盖：`{{unityImageTargetFolder}}/FigmaImports/<规范化根节点名>/<规范化根节点名>.prefab`，图片写入同目录的 `Images/`。不得搜索或猜测业务 Prefab 路径。\n- 不整理 Figma 层级、不写回 Figma；直接导出当前节点。不要因为层级不完美而开启 cleanup 流程。\n- 不修改 C#、场景、Addressables、既有 Prefab、既有资源或既有 `.meta`。\n\n固定流水线（必须执行，不要自行拆解或增加检查）：\n1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。\n2. 立即执行唯一的导入命令：`python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/run_full_import.py --figma-url \"https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>\" --file-key <fileKey> --infer-formal-names --formal-output-dir \"{{unityImageTargetFolder}}/FigmaImports\" --target-prefab \"Assets/FigmaImports/Pending.prefab\" --target-image-dir \"Assets/FigmaImports/Images\" --yes --wall-clock-report \"JellybeanUnity/.tmp/figma_to_prefab_wall_clock.json\"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。\n3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。\n\n禁止项：\n- 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。\n- 不要调用 `Skill`、`ToolSearch`、`Glob`、`Grep`、`Read`，不要手工拆开 MCP、图片处理、uLoop 或验证命令。\n- 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。\n- 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。\n\n完成时只报告：生成的 Prefab/图片路径、导入验证结果、冲突或 blockingErrors（如有）。"
+      "unity": "请将当前 Figma 节点快速直接导入 Unity。\n\n这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。\n\nfigma 路径:\n- {{selectionBlock}}\n\n目标 Unity 工程：{{unityProjectPath}}\n\n执行边界：\n- 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。\n- 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 MCP 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。\n- 默认新建且不覆盖：`{{unityImageTargetFolder}}/FigmaImports/<规范化根节点名>/<规范化根节点名>.prefab`，图片写入同目录的 `Images/`。不得搜索或猜测业务 Prefab 路径。\n- 不整理 Figma 层级、不写回 Figma；直接导出当前节点。不要因为层级不完美而开启 cleanup 流程。\n- 不修改 C#、场景、Addressables、既有 Prefab、既有资源或既有 `.meta`。\n\n固定流水线（必须执行，不要自行拆解或增加检查）：\n1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。\n2. 立即执行唯一的导入命令：`python \"ai/skills/figma-to-prefab/scripts/run_full_import.py\" --unity-project \"{{unityProjectPath}}\" --figma-url \"https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>\" --file-key <fileKey> --infer-formal-names --formal-output-dir \"{{unityImageTargetFolder}}/FigmaImports\" --target-prefab \"Assets/FigmaImports/Pending.prefab\" --target-image-dir \"Assets/FigmaImports/Images\" --yes --wall-clock-report \".tmp/figma_to_prefab_wall_clock.json\"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。\n3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。\n\n禁止项：\n- 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。\n- 不要调用 `Skill`、`ToolSearch`、`Glob`、`Grep`、`Read`，不要手工拆开 MCP、图片处理、uLoop 或验证命令。\n- 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。\n- 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。\n\n完成时只报告：生成的 Prefab/图片路径、导入验证结果、冲突或 blockingErrors（如有）。"
     };
     // END_AI_PROMPT_TEMPLATES
 
@@ -2539,6 +2663,7 @@
       var rendered = renderAiPromptTemplate(template, {
         selectionBlock: header,
         unityImageTargetFolder: selectedUnityFolder || "未选择",
+        unityProjectPath: selectedUnityProject ? selectedUnityProject.path : "未选择",
         unitySelectedPrefabPath: selectedUnityPrefabPath || "未选择",
         unitySelectedPrefabBlock: buildUnitySelectedPrefabBlock(),
         psdFileName: psdFile.name || "未拖入",
@@ -3144,6 +3269,10 @@
       return String(value || "").trim().replace(/\/+$/, "");
     }
 
+    function normalizeUnityProjectPath(value) {
+      return String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    }
+
     function buildEndpoint(baseUrl, path) {
       return normalizeBaseUrl(baseUrl) + path;
     }
@@ -3189,6 +3318,14 @@
           var resp = await fetchWithTimeout(buildEndpoint(urls[i], "/health"), { method: "GET" }, 1800);
           if (!resp.ok) throw new Error("HTTP " + resp.status);
           var data = await resp.json();
+          if (selectedUnityProject) {
+            var expectedProjectPath = normalizeUnityProjectPath(selectedUnityProject.path);
+            var actualProjectPath = normalizeUnityProjectPath(data.projectPath);
+            if (!actualProjectPath || actualProjectPath !== expectedProjectPath) {
+              lastError = new Error("Unity 网关工程不匹配：期望 " + selectedUnityProject.path + "，实际 " + (data.projectPath || "未报告"));
+              continue;
+            }
+          }
           return { url: urls[i], data: data };
         } catch (error) {
           lastError = error;
@@ -4772,6 +4909,11 @@
     if (mcpClientSelect) mcpClientSelect.addEventListener("change", refreshMcpConfigStatus);
     unityConnectBtn.addEventListener("click", connectUnity);
     unityDisconnectBtn.addEventListener("click", disconnectUnity);
+    unityProjectSelect.addEventListener("change", function () { selectUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
+    addUnityProjectBtn.addEventListener("click", function () { addUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
+    removeUnityProjectBtn.addEventListener("click", function () { removeUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
+    installUnityBridgeBtn.addEventListener("click", function () { installSelectedUnityBridge().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
+    refreshUnityProjectsBtn.addEventListener("click", refreshUnityProjects);
     exportImagesBtn.addEventListener("click", exportImagesToUnity);
     previewHierarchyBtn.addEventListener("click", function () { exportHierarchyToUnity(true); });
     exportHierarchyBtn.addEventListener("click", function () { exportHierarchyToUnity(false); });
@@ -4838,6 +4980,7 @@
     }).join(", "));
     appendLog("插件已启动。选择 Figma 节点后，连接 Unity 网关并点击「导出选中图片到 Unity」。");
     refreshAiRunner();
+    refreshUnityProjects();
     refreshAiPromptControls();
     refreshHierarchyImageTargetDisplay();
     refreshPrefabImportDisplay();

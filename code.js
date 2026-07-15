@@ -1,4 +1,4 @@
-// Figma MCP Relay build #129
+// Figma MCP Relay build #130
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -47,15 +47,15 @@ function applyImageValidationErrors(exports, errors) {
     if (item) item.health = createImageHealth("blocked", error.code || "invalidImagePayload", { sourceExportId: error.sourceExportId || "" });
   }
 }
-// Figma MCP Relay build #129
+// Figma MCP Relay build #130
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (129 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 129)", { timeout: 1000 });
-console.log("[FigmaMcpRelay] 插件初始化完成, build=129, time=" + Date.now());
+// DIAG: 插件启动标记 (130 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 130)", { timeout: 1000 });
+console.log("[FigmaMcpRelay] 插件初始化完成, build=130, time=" + Date.now());
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -246,7 +246,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "129",
+        build: "130",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }

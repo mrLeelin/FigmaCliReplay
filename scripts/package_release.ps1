@@ -29,26 +29,6 @@ function Invoke-Checked {
     }
 }
 
-function Find-RepositoryRoot {
-    param([string]$StartPath)
-
-    $current = (Resolve-Path -LiteralPath $StartPath).Path
-    while ($true) {
-        $unityProject = Join-Path $current "JellybeanUnity"
-        $relayRoot = Join-Path $current ".figma\plugins\figma-mcp-relay"
-        if ((Test-Path -LiteralPath $unityProject -PathType Container) -and
-            (Test-Path -LiteralPath $relayRoot -PathType Container)) {
-            return $current
-        }
-
-        $parent = Split-Path -Parent $current
-        if ($parent -eq $current) {
-            throw "Could not locate repository root from $StartPath"
-        }
-        $current = $parent
-    }
-}
-
 function Assert-PathInside {
     param(
         [string]$Path,
@@ -124,12 +104,15 @@ function Stop-RelayFromPath {
         $_.CommandLine -match $escapedRoot -and
         $_.CommandLine -match "dist\\index\.js|figma_mcp_companion\.py|figma_mcp_relay_server\.py"
     }
+    $stoppedCount = 0
     foreach ($target in $targets) {
         Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue
         if ($?) {
+            $stoppedCount++
             Write-Host "Stopped previous Relay process: $($target.ProcessId)" -ForegroundColor Yellow
         }
     }
+    return $stoppedCount
 }
 
 function Wait-ForRelayStop {
@@ -159,9 +142,8 @@ function Wait-ForRelayStop {
     throw "Previous Relay did not stop within 10 seconds: $controlledRoot"
 }
 
-$repoRoot = Find-RepositoryRoot -StartPath $PluginRoot
-$unityBridge = Join-Path $repoRoot "JellybeanUnity\Assets\Editor\FigmaBridge"
-$unityBridgeMeta = Join-Path $repoRoot "JellybeanUnity\Assets\Editor\FigmaBridge.meta"
+$unityBridge = Join-Path $PluginRoot "unity\Assets\Editor\FigmaBridge"
+$unityBridgeMeta = Join-Path $PluginRoot "unity\Assets\Editor\FigmaBridge.meta"
 if (-not (Test-Path -LiteralPath $unityBridge -PathType Container) -or -not (Test-Path -LiteralPath $unityBridgeMeta -PathType Leaf)) {
     throw "Unity FigmaBridge Editor plugin or its .meta file is missing. Expected: $unityBridge"
 }
@@ -204,6 +186,10 @@ Assert-PathInside -Path $releaseRoot -Root $outputRoot
 Assert-PathInside -Path $zipPath -Root $outputRoot
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 if (Test-Path -LiteralPath $releaseRoot) {
+    $stoppedReleaseCount = Stop-RelayFromPath -RelayPath $releaseRoot
+    if ($stoppedReleaseCount -gt 0) {
+        Wait-ForRelayStop -RelayPath $releaseRoot
+    }
     Remove-Item -LiteralPath $releaseRoot -Recurse -Force
 }
 if (Test-Path -LiteralPath $zipPath) {
@@ -242,7 +228,7 @@ Write-Host "Release archive:   $zipPath" -ForegroundColor Green
 
 if (-not $NoLaunch) {
     Write-Step "Launching packaged Relay"
-    Stop-RelayFromPath -RelayPath $PluginRoot
+    [void](Stop-RelayFromPath -RelayPath $PluginRoot)
     Wait-ForRelayStop -RelayPath $PluginRoot
     $launcher = Join-Path $relayRoot "scripts\start_mcp_oneclick.ps1"
     $launchArguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $launcher, "-NoPause")

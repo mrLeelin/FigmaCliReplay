@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { GatewayConfig } from "./config.js";
-import { PLUGIN_ROOT, REPO_ROOT, publicUrl } from "./config.js";
+import { PLUGIN_ROOT, publicUrl } from "./config.js";
 import { logInfo, logWarn } from "./logger.js";
 import { isRecord } from "./utils.js";
 
@@ -177,7 +177,7 @@ function runPythonScript(task: PsdImportTask, scriptPath: string, args: string[]
   }
   return new Promise((resolve, reject) => {
     const child = spawn(command.command, [...command.args, scriptPath, ...args], {
-      cwd: REPO_ROOT,
+      cwd: PLUGIN_ROOT,
       windowsHide: true
     });
     const stdout: Buffer[] = [];
