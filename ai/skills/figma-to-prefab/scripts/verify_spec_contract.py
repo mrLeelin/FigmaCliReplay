@@ -62,15 +62,18 @@ def strip_common_prefab_prefix(name: str) -> str:
     return value
 
 
-def scan_common_prefabs(common_prefab_dir: Path) -> dict[str, str]:
+def scan_common_prefabs(common_prefab_dir: Path, unity_project: Path) -> dict[str, str]:
     prefab_index: dict[str, str] = {}
     if not common_prefab_dir.is_dir():
         return prefab_index
     for prefab_path in common_prefab_dir.rglob("*.prefab"):
         try:
-            unity_path = "Assets" + str(prefab_path).split("Assets", 1)[1].replace("\\", "/")
-        except IndexError:
+            relative_path = prefab_path.relative_to(unity_project)
+        except ValueError:
             continue
+        if not relative_path.parts or relative_path.parts[0] != "Assets":
+            continue
+        unity_path = relative_path.as_posix()
         prefab_index[prefab_path.stem] = unity_path
     return prefab_index
 
@@ -372,7 +375,7 @@ def main() -> int:
     common_prefab_dir = unity_project / "Assets" / "MagicWarrior" / "_Resources" / "Prefabs" / "UGUI" / "_Common"
     expected_instances = dict(args.expect_prefab_instance)
     spec_paths = [Path(spec_path) for spec_path in args.spec]
-    common_prefab_index = scan_common_prefabs(common_prefab_dir)
+    common_prefab_index = scan_common_prefabs(common_prefab_dir, unity_project)
     reports = [
         verify_spec(spec_path, args.expected_image_dir, common_prefab_index)
         for spec_path in spec_paths

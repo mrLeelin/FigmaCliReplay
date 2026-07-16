@@ -17,10 +17,13 @@ from pathlib import Path
 
 # 添加 figmaMcpRelay CLI wrapper 到路径
 def find_relay_root() -> Path:
-    for parent in Path(__file__).resolve().parents:
+    script_path = Path(__file__).resolve()
+    for parent in script_path.parents:
         if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
+    raise RuntimeError(
+        f"Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py from {script_path}."
+    )
 
 
 RELAY_ROOT = find_relay_root()

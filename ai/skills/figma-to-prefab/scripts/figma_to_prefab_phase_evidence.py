@@ -32,21 +32,30 @@ PHASE_ORDER = [
 
 
 def relay_root() -> Path:
-    for parent in Path(__file__).resolve().parents:
+    script_path = Path(__file__).resolve()
+    for parent in script_path.parents:
         if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
+    raise RuntimeError(
+        f"Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py from {script_path}."
+    )
 
 
 RELAY_ROOT = relay_root()
 
 
 def requested_unity_tmp(unity_project: str, unity_tmp: str) -> Path:
+    raw_project = unity_project.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    project_root = None
+    if raw_project:
+        project_root = Path(raw_project).expanduser().resolve()
+        missing = [name for name in ("Assets", "ProjectSettings") if not (project_root / name).is_dir()]
+        if missing:
+            raise RuntimeError(f"Invalid Unity project {project_root}: missing {', '.join(missing)}")
     if unity_tmp.strip():
         return resolve_path(unity_tmp)
-    raw_project = unity_project.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
-    if raw_project:
-        return Path(raw_project).expanduser().resolve() / ".tmp"
+    if project_root:
+        return project_root / ".tmp"
     return RELAY_ROOT / ".tmp"
 
 
