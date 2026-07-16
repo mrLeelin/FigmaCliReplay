@@ -140,8 +140,8 @@ def _post_http_json(
     except urllib.error.URLError as exc:
         raise McpToolError(
             f"Figma MCP Relay companion is not reachable at {url}. "
-            "Start it with: powershell -ExecutionPolicy Bypass -File "
-            ".figma/plugins/figma-mcp-relay/scripts/start_mcp_companion.ps1 -Mode mcp"
+            "Start it from the Relay installation root with: "
+            'powershell -ExecutionPolicy Bypass -File "<relay-root>/scripts/start_mcp_companion.ps1" -Mode mcp'
         ) from exc
 
 

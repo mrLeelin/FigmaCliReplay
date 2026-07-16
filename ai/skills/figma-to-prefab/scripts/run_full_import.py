@@ -5,7 +5,7 @@ Figma → Unity Prefab 一键导入入口
 
 用法:
     python run_full_import.py \\
-        --unity-project "E:/Project/Game" \\
+        --unity-project "<unity-project>" \\
         --figma-url "https://www.figma.com/design/FILE/NAME?node-id=1-2" \\
         --target-prefab "Assets/_Resources/Prefabs/UGUI/模块名/UI_Foo.prefab" \\
         --target-image-dir "Assets/_Resources/Foo_Images/" \\

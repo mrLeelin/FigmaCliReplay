@@ -21,8 +21,11 @@ const portableCliScripts = [
 
 const activeWorkflowFiles = [
   "README.md",
+  "ui.html",
+  "client/figma_mcp_client.py",
   "prompts/prefab-to-figma.md",
   "ai/skills/figma-to-prefab/SKILL.md",
+  "ai/skills/figma-to-prefab/scripts/run_full_import.py",
   "ai/skills/figma-to-prefab/references/figma-to-unity-import.md",
   "ai/skills/figma-to-prefab/references/json-spec-format.md",
   "ai/skills/figma-to-prefab/references/workflow-figma-to-unity.md",
@@ -213,6 +216,8 @@ test("Unity Bridge emits Assets paths and accepts one generic legacy project pre
 
 test("executable workflows do not discover fixed JellybeanUnity or nested .figma roots", () => {
   const executableFiles = [
+    "ui.html",
+    "client/figma_mcp_client.py",
     ...collectFiles("ai", new Set([".py"])),
     ...collectFiles("server", new Set([".py"])),
     ...collectFiles("unity/Assets/Editor/FigmaBridge", new Set([".cs"]))
