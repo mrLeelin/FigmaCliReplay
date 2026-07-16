@@ -97,8 +97,9 @@ function findViolations(relativeFiles, patterns) {
 }
 
 function extractNamedFunction(source, name) {
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `${name} should exist`);
+  const functionStart = source.indexOf(`function ${name}(`);
+  assert.notEqual(functionStart, -1, `${name} should exist`);
+  const start = source.slice(Math.max(0, functionStart - 6), functionStart) === "async " ? functionStart - 6 : functionStart;
   const bodyStart = source.indexOf("{", start);
   let depth = 0;
   for (let index = bodyStart; index < source.length; index += 1) {
@@ -256,12 +257,34 @@ test("current workflow documentation contains no machine-local or fixed reposito
   assert.deepEqual(violations, [], `Fixed workflow path dependencies:\n${violations.join("\n")}`);
 });
 
-test("UI derives quoted executable paths from Relay health and injects the full import script path", () => {
+test("UI derives quoted executable paths from Relay health and injects the full import script path", async () => {
   const ui = fs.readFileSync(path.join(repoRoot, "ui.html"), "utf8");
+  const cacheKeySource = extractNamedFunction(ui, "relayPluginRootCacheKey");
+  const readCacheSource = extractNamedFunction(ui, "readCachedRelayRuntimePaths");
+  const loadSource = extractNamedFunction(ui, "loadRelayRuntimePaths");
+  const normalizerSource = extractNamedFunction(ui, "normalizeRelayPluginRoot");
+  const quoteSource = extractNamedFunction(ui, "quoteWindowsCommandPath");
   const resolverSource = extractNamedFunction(ui, "resolveRelayRuntimePaths");
-  const resolveRelayRuntimePaths = Function(`${resolverSource}; return resolveRelayRuntimePaths;`)();
-  const resolved = resolveRelayRuntimePaths({ gateway: { pluginRoot: "C:/Portable Relay/" } });
+  const normalizeRelayPluginRoot = Function(`${normalizerSource}; return normalizeRelayPluginRoot;`)();
+  const quoteWindowsCommandPath = Function(`${quoteSource}; return quoteWindowsCommandPath;`)();
+  const resolveRelayRuntimePaths = Function(
+    "normalizeRelayPluginRoot",
+    "quoteWindowsCommandPath",
+    `${resolverSource}; return resolveRelayRuntimePaths;`
+  )(normalizeRelayPluginRoot, quoteWindowsCommandPath);
+  const relayPluginRootCacheKey = Function(`${cacheKeySource}; return relayPluginRootCacheKey;`)();
+  const readCachedRelayRuntimePaths = Function(
+    "resolveRelayRuntimePaths",
+    `${readCacheSource}; return readCachedRelayRuntimePaths;`
+  )(resolveRelayRuntimePaths);
+  const loadRelayRuntimePaths = Function(
+    "resolveRelayRuntimePaths",
+    "readCachedRelayRuntimePaths",
+    `${loadSource}; return loadRelayRuntimePaths;`
+  )(resolveRelayRuntimePaths, readCachedRelayRuntimePaths);
+  const resolved = resolveRelayRuntimePaths({ gateway: { pluginRoot: "C:\\Portable Relay\\Folder\\..\\" } });
 
+  assert.equal(resolved.pluginRoot, "C:/Portable Relay");
   assert.equal(resolved.mcpStartBatPath, '"C:/Portable Relay/启动MCP.bat"');
   assert.equal(
     resolved.fullImportScriptPath,
@@ -289,4 +312,75 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   assert.match(ui, /relayFullImportScriptPath:\s*relayRuntimePaths\.fullImportScriptPath/);
   assert.match(ui, /python \{\{relayFullImportScriptPath\}\}/);
   assert.doesNotMatch(ui, /const mcpStartBatPath = "<relay-root>/);
+
+  const unc = resolveRelayRuntimePaths({ gateway: { pluginRoot: "\\\\server\\share\\Relay Root\\" } });
+  assert.equal(unc.pluginRoot, "//server/share/Relay Root");
+  assert.equal(unc.mcpStartBatPath, '"//server/share/Relay Root/启动MCP.bat"');
+  assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "/opt/relay/../figma-relay/" } }).pluginRoot, "/opt/figma-relay");
+  assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "C:\\" } }).mcpStartBatPath, '"C:/启动MCP.bat"');
+  assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "/" } }).mcpStartBatPath, '"/启动MCP.bat"');
+
+  for (const unsafeRoot of [
+    "relative/path",
+    "C:/bad&root",
+    "C:/bad|root",
+    "C:/bad;root",
+    "C:/bad$root",
+    "C:/bad%root",
+    "C:/bad`root",
+    'C:/bad"root',
+    "C:/bad'root",
+    "C:/bad\nroot"
+  ]) {
+    assert.throws(() => resolveRelayRuntimePaths({ gateway: { pluginRoot: unsafeRoot } }), /pluginRoot/);
+  }
+
+  const values = new Map();
+  const storage = {
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, value); },
+    removeItem(key) { values.delete(key); }
+  };
+  const firstKey = relayPluginRootCacheKey("http://localhost:32130");
+  const secondKey = relayPluginRootCacheKey("http://localhost:42130");
+  assert.notEqual(firstKey, secondKey);
+  const healthy = await loadRelayRuntimePaths(
+    async () => ({ ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "D:\\Relay Root\\" } }) }),
+    storage,
+    firstKey
+  );
+  assert.equal(healthy.source, "health");
+  assert.equal(values.get(firstKey), "D:/Relay Root");
+
+  const cachedAfterFailure = await loadRelayRuntimePaths(
+    async () => ({ ok: false, status: 503, json: async () => ({}) }),
+    storage,
+    firstKey
+  );
+  assert.equal(cachedAfterFailure.source, "cache");
+  assert.equal(cachedAfterFailure.paths.mcpStartBatPath, '"D:/Relay Root/启动MCP.bat"');
+
+  const cachedAfterNonJson = await loadRelayRuntimePaths(
+    async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("invalid JSON"); } }),
+    storage,
+    firstKey
+  );
+  assert.equal(cachedAfterNonJson.source, "cache");
+
+  values.set(secondKey, "C:/unsafe&cached");
+  assert.equal(readCachedRelayRuntimePaths(storage, secondKey).pluginRoot, "");
+  assert.equal(values.has(secondKey), false);
+  assert.equal(readCachedRelayRuntimePaths(storage, firstKey).pluginRoot, "D:/Relay Root");
+  assert.match(ui, /async function refreshRelayRuntimePaths\(\)[\s\S]*?syncRelayUrlInput\(\)/);
+  assert.match(ui, /previousRelayUrl !== relayUrl[\s\S]*?readCachedRelayRuntimePaths/);
+
+  const unsafeStorage = { getItem() { return null; }, setItem() { throw new Error("unsafe root must not persist"); }, removeItem() {} };
+  await assert.rejects(
+    loadRelayRuntimePaths(
+      async () => ({ ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "C:/bad&root" } }) }),
+      unsafeStorage,
+      firstKey
+    ),
+    /pluginRoot/
+  );
 });

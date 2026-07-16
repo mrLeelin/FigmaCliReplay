@@ -1107,28 +1107,113 @@
     let executingRequestId = "";
     let executingJobType = "";
     let executionWatchdogTimer = null;
+    function normalizeRelayPluginRoot(value) {
+      var raw = String(value || "").trim();
+      if (!raw) return "";
+      if (/[\x00-\x1f\x7f"'`&|<>^%!;$(){}\[\]*?]/.test(raw)) {
+        throw new Error("Relay health 返回了不安全的 gateway.pluginRoot");
+      }
+      var normalized = raw.replace(/\\/g, "/");
+      var prefix = "";
+      var remainder = "";
+      if (/^[A-Za-z]:\//.test(normalized)) {
+        prefix = normalized.slice(0, 2).toUpperCase() + "/";
+        remainder = normalized.slice(3);
+      } else if (normalized.startsWith("//")) {
+        var uncParts = normalized.slice(2).split("/").filter(Boolean);
+        if (uncParts.length < 2) throw new Error("Relay gateway.pluginRoot 必须是完整 UNC 路径");
+        prefix = "//" + uncParts.shift() + "/" + uncParts.shift();
+        remainder = uncParts.join("/");
+      } else if (normalized.startsWith("/")) {
+        prefix = "/";
+        remainder = normalized.slice(1);
+      } else {
+        throw new Error("Relay gateway.pluginRoot 必须是绝对本地路径");
+      }
+      var segments = [];
+      remainder.split("/").forEach(function (segment) {
+        if (!segment || segment === ".") return;
+        if (segment === "..") {
+          if (!segments.length) throw new Error("Relay gateway.pluginRoot 不能越过路径根目录");
+          segments.pop();
+          return;
+        }
+        segments.push(segment);
+      });
+      return prefix + (segments.length ? (prefix.endsWith("/") ? "" : "/") + segments.join("/") : "");
+    }
+
+    function quoteWindowsCommandPath(value) {
+      var path = String(value || "");
+      if (!path || /[\x00-\x1f\x7f"`]/.test(path)) throw new Error("无法安全引用 Relay 路径");
+      return '"' + path + '"';
+    }
+
     function resolveRelayRuntimePaths(payload) {
-      var pluginRoot = String(payload && payload.gateway && payload.gateway.pluginRoot || "").trim().replace(/[\\/]+$/, "");
+      var pluginRoot = normalizeRelayPluginRoot(payload && payload.gateway && payload.gateway.pluginRoot);
+      var pluginPathPrefix = pluginRoot && (pluginRoot.endsWith("/") ? pluginRoot : pluginRoot + "/");
       return {
         pluginRoot: pluginRoot,
-        mcpStartBatPath: pluginRoot ? '"' + pluginRoot + '/启动MCP.bat"' : "",
-        fullImportScriptPath: pluginRoot ? '"' + pluginRoot + '/ai/skills/figma-to-prefab/scripts/run_full_import.py"' : ""
+        mcpStartBatPath: pluginRoot ? quoteWindowsCommandPath(pluginPathPrefix + "启动MCP.bat") : "",
+        fullImportScriptPath: pluginRoot ? quoteWindowsCommandPath(pluginPathPrefix + "ai/skills/figma-to-prefab/scripts/run_full_import.py") : ""
       };
     }
 
-    let relayRuntimePaths = resolveRelayRuntimePaths(null);
+    function relayPluginRootCacheKey(url) {
+      return "figma-mcp-relay:validated-plugin-root:" + encodeURIComponent(String(url || "").trim().replace(/\/+$/, ""));
+    }
+
+    function readCachedRelayRuntimePaths(storage, cacheKey) {
+      try {
+        var cachedRoot = storage && storage.getItem(cacheKey);
+        if (!cachedRoot) return resolveRelayRuntimePaths(null);
+        return resolveRelayRuntimePaths({ gateway: { pluginRoot: cachedRoot } });
+      } catch (_) {
+        try { if (storage) storage.removeItem(cacheKey); } catch (_) {}
+        return resolveRelayRuntimePaths(null);
+      }
+    }
+
+    async function loadRelayRuntimePaths(fetchHealth, storage, cacheKey) {
+      var healthError = null;
+      try {
+        var response = await fetchHealth();
+        if (!response || !response.ok) throw new Error("health HTTP " + (response && response.status || "unknown"));
+        var payload;
+        try {
+          payload = await response.json();
+        } catch (error) {
+          throw new Error("Relay health 返回的不是有效 JSON：" + (error.message || error));
+        }
+        var resolved = resolveRelayRuntimePaths(payload);
+        if (!resolved.pluginRoot) throw new Error("Relay health 未返回 gateway.pluginRoot");
+        try { if (storage) storage.setItem(cacheKey, resolved.pluginRoot); } catch (_) {}
+        return { paths: resolved, source: "health" };
+      } catch (error) {
+        healthError = error;
+      }
+      var cached = readCachedRelayRuntimePaths(storage, cacheKey);
+      if (cached.pluginRoot) return { paths: cached, source: "cache", healthError: healthError };
+      throw healthError || new Error("无法解析 Relay 安装目录");
+    }
+
+    let relayRuntimePaths = readCachedRelayRuntimePaths(localStorage, relayPluginRootCacheKey(relayUrl));
 
     function applyRelayRuntimePaths(payload) {
       var resolved = resolveRelayRuntimePaths(payload);
       if (!resolved.pluginRoot) throw new Error("Relay health 未返回 gateway.pluginRoot");
+      try { localStorage.setItem(relayPluginRootCacheKey(relayUrl), resolved.pluginRoot); } catch (_) {}
       relayRuntimePaths = resolved;
       return resolved;
     }
 
     async function refreshRelayRuntimePaths() {
-      var response = await fetchWithTimeout(relayEndpoint("/health"), { method: "GET" }, 2500);
-      if (!response.ok) throw new Error("health HTTP " + response.status);
-      return applyRelayRuntimePaths(await response.json());
+      syncRelayUrlInput();
+      var loaded = await loadRelayRuntimePaths(function () {
+        return fetchWithTimeout(relayEndpoint("/health"), { method: "GET" }, 2500);
+      }, localStorage, relayPluginRootCacheKey(relayUrl));
+      relayRuntimePaths = loaded.paths;
+      return loaded.paths;
     }
 
     // ─── Unity 网关状态 ───
@@ -1409,7 +1494,11 @@
     }
 
     function syncRelayUrlInput() {
+      var previousRelayUrl = relayUrl;
       relayUrl = normalizeRelayUrl(relayUrlInput.value);
+      if (previousRelayUrl !== relayUrl) {
+        relayRuntimePaths = readCachedRelayRuntimePaths(localStorage, relayPluginRootCacheKey(relayUrl));
+      }
       if (relayUrlInput.value.trim() !== relayUrl) {
         relayUrlInput.value = relayUrl;
       }
@@ -2807,7 +2896,7 @@
 
     async function showManualStartHint(error) {
       const copied = await tryCopyStartPath();
-      const mcpStartBatPath = relayRuntimePaths.mcpStartBatPath || "无法从 Relay /health 获取启动脚本路径";
+      const mcpStartBatPath = relayRuntimePaths.mcpStartBatPath || "请打开 Relay 安装目录并双击 启动MCP.bat；连接成功后将自动记住经过验证的路径。";
       const hint = [
         "本地 MCP Companion 未连接",
         copied ? "已复制启动脚本路径，请在资源管理器粘贴后双击：" : "请手动双击：",
