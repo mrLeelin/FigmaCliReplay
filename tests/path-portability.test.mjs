@@ -96,6 +96,19 @@ function findViolations(relativeFiles, patterns) {
   return violations;
 }
 
+function extractNamedFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `${name} should exist`);
+  const bodyStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(start, index + 1);
+  }
+  assert.fail(`${name} should have a complete body`);
+}
+
 for (const relativePath of portableCliScripts) {
   test(`${relativePath} starts from the standalone Relay`, () => {
     const result = runPython(relativePath, ["--help"]);
@@ -241,4 +254,39 @@ test("current workflow documentation contains no machine-local or fixed reposito
   ]);
 
   assert.deepEqual(violations, [], `Fixed workflow path dependencies:\n${violations.join("\n")}`);
+});
+
+test("UI derives quoted executable paths from Relay health and injects the full import script path", () => {
+  const ui = fs.readFileSync(path.join(repoRoot, "ui.html"), "utf8");
+  const resolverSource = extractNamedFunction(ui, "resolveRelayRuntimePaths");
+  const resolveRelayRuntimePaths = Function(`${resolverSource}; return resolveRelayRuntimePaths;`)();
+  const resolved = resolveRelayRuntimePaths({ gateway: { pluginRoot: "C:/Portable Relay/" } });
+
+  assert.equal(resolved.mcpStartBatPath, '"C:/Portable Relay/启动MCP.bat"');
+  assert.equal(
+    resolved.fullImportScriptPath,
+    '"C:/Portable Relay/ai/skills/figma-to-prefab/scripts/run_full_import.py"'
+  );
+  const templatesStart = ui.indexOf("const AiPromptTemplates = {");
+  const templatesEnd = ui.indexOf("// END_AI_PROMPT_TEMPLATES", templatesStart);
+  const templatesSource = ui.slice(templatesStart, ui.lastIndexOf(";", templatesEnd) + 1);
+  const templates = Function(`${templatesSource}; return AiPromptTemplates;`)();
+  const readTemplate = Function(
+    "AiPromptTemplates",
+    `${extractNamedFunction(ui, "readAiPromptTemplate")}; return readAiPromptTemplate;`
+  )(templates);
+  const renderTemplate = Function(
+    "readAiPromptTemplate",
+    `${extractNamedFunction(ui, "renderAiPromptTemplate")}; return renderAiPromptTemplate;`
+  )(readTemplate);
+  const rendered = renderTemplate("unity", { relayFullImportScriptPath: resolved.fullImportScriptPath });
+
+  assert.match(rendered, /\/health[\s\S]*gateway\.pluginRoot/);
+  assert.match(rendered, /python "C:\/Portable Relay\/ai\/skills\/figma-to-prefab\/scripts\/run_full_import\.py"/);
+  assert.doesNotMatch(rendered, /python "ai\/skills\/figma-to-prefab\/scripts\/run_full_import\.py"/);
+  assert.doesNotMatch(rendered, /\{\{relayFullImportScriptPath\}\}/);
+  assert.match(ui, /if \(aiPromptTemplateSelect\.value === "unity"\)[\s\S]*?await refreshRelayRuntimePaths\(\)/);
+  assert.match(ui, /relayFullImportScriptPath:\s*relayRuntimePaths\.fullImportScriptPath/);
+  assert.match(ui, /python \{\{relayFullImportScriptPath\}\}/);
+  assert.doesNotMatch(ui, /const mcpStartBatPath = "<relay-root>/);
 });

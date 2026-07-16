@@ -1107,7 +1107,29 @@
     let executingRequestId = "";
     let executingJobType = "";
     let executionWatchdogTimer = null;
-    const mcpStartBatPath = "<relay-root>/启动MCP.bat";
+    function resolveRelayRuntimePaths(payload) {
+      var pluginRoot = String(payload && payload.gateway && payload.gateway.pluginRoot || "").trim().replace(/[\\/]+$/, "");
+      return {
+        pluginRoot: pluginRoot,
+        mcpStartBatPath: pluginRoot ? '"' + pluginRoot + '/启动MCP.bat"' : "",
+        fullImportScriptPath: pluginRoot ? '"' + pluginRoot + '/ai/skills/figma-to-prefab/scripts/run_full_import.py"' : ""
+      };
+    }
+
+    let relayRuntimePaths = resolveRelayRuntimePaths(null);
+
+    function applyRelayRuntimePaths(payload) {
+      var resolved = resolveRelayRuntimePaths(payload);
+      if (!resolved.pluginRoot) throw new Error("Relay health 未返回 gateway.pluginRoot");
+      relayRuntimePaths = resolved;
+      return resolved;
+    }
+
+    async function refreshRelayRuntimePaths() {
+      var response = await fetchWithTimeout(relayEndpoint("/health"), { method: "GET" }, 2500);
+      if (!response.ok) throw new Error("health HTTP " + response.status);
+      return applyRelayRuntimePaths(await response.json());
+    }
 
     // ─── Unity 网关状态 ───
     const unityPortMin = 32129;
@@ -2268,6 +2290,7 @@
           if (!unityConnected) {
             throw new Error("请先连接 Unity 网关，并在 Unity Project 中选择图片导入目标文件夹。");
           }
+          await refreshRelayRuntimePaths();
           setAiPromptStatus("正在读取 Unity 当前图片目标...");
           var folder = await fetchSelectedUnityFolder();
           if (!folder || selectedUnityImageTargetMode === "replaceImage") {
@@ -2664,6 +2687,7 @@
         selectionBlock: header,
         unityImageTargetFolder: selectedUnityFolder || "未选择",
         unityProjectPath: selectedUnityProject ? selectedUnityProject.path : "未选择",
+        relayFullImportScriptPath: relayRuntimePaths.fullImportScriptPath,
         unitySelectedPrefabPath: selectedUnityPrefabPath || "未选择",
         unitySelectedPrefabBlock: buildUnitySelectedPrefabBlock(),
         psdFileName: psdFile.name || "未拖入",
@@ -2695,7 +2719,14 @@
     }
 
     function readAiPromptTemplate(template) {
-      return (AiPromptTemplates[template] || AiPromptTemplates.cleanup || "")
+      var text = AiPromptTemplates[template] || AiPromptTemplates.cleanup || "";
+      if (template === "unity") {
+        text = text.replace(
+          '2. 立即执行唯一的导入命令：`python "ai/skills/figma-to-prefab/scripts/run_full_import.py"',
+          '2. 先调用本地 MCP Relay `/health`，确认响应的 `gateway.pluginRoot` 与以下由 UI 解析出的绝对脚本路径前缀一致；不一致或缺失时立即停止。不得依赖调用方 cwd。然后执行唯一的导入命令：`python {{relayFullImportScriptPath}}'
+        );
+      }
+      return text
         .replaceAll("$figma-hierarchy-cleanup-mcp", "先从 Relay `/health` 的 `gateway.pluginRoot` 获取 `<relay-root>`，再读取并遵守 `<relay-root>/ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md`")
         .replaceAll("$figma-to-prefab", "先从 Relay `/health` 的 `gateway.pluginRoot` 获取 `<relay-root>`，再读取并遵守 `<relay-root>/ai/skills/figma-to-prefab/SKILL.md`");
     }
@@ -2768,13 +2799,15 @@
     async function tryCopyStartPath() {
       if (!navigator.clipboard || !navigator.clipboard.writeText) return false;
       try {
-        await navigator.clipboard.writeText(mcpStartBatPath);
+        if (!relayRuntimePaths.mcpStartBatPath) await refreshRelayRuntimePaths();
+        await navigator.clipboard.writeText(relayRuntimePaths.mcpStartBatPath);
         return true;
       } catch (e) { return false; }
     }
 
     async function showManualStartHint(error) {
       const copied = await tryCopyStartPath();
+      const mcpStartBatPath = relayRuntimePaths.mcpStartBatPath || "无法从 Relay /health 获取启动脚本路径";
       const hint = [
         "本地 MCP Companion 未连接",
         copied ? "已复制启动脚本路径，请在资源管理器粘贴后双击：" : "请手动双击：",
@@ -2791,6 +2824,7 @@
         const health = await fetchWithTimeout(relayEndpoint("/health"), { method: "GET" }, 2500);
         if (!health.ok) throw new Error("health HTTP " + health.status);
         const payload = await health.json();
+        applyRelayRuntimePaths(payload);
         appendLog("本地 MCP Companion 已运行：pending=" + (payload.pending || 0) + ", done=" + (payload.done || 0));
         const resp = await fetchWithTimeout(relayEndpoint("/open-plugin-folder"), {
           method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
