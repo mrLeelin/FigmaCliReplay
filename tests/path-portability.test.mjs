@@ -85,19 +85,29 @@ for (const relativePath of portableCliScripts) {
 test("an explicitly named Unity project overrides an invalid environment default", () => {
   const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-paths-"));
   const unityProject = path.join(fixtureRoot, "PortableGame");
+  const scriptsDir = path.join(repoRoot, "ai/skills/figma-to-prefab/scripts");
 
   try {
     fs.mkdirSync(path.join(unityProject, "Assets"), { recursive: true });
     fs.mkdirSync(path.join(unityProject, "ProjectSettings"));
 
-    const result = runPython(
-      "ai/skills/figma-to-prefab/scripts/run_full_import.py",
-      ["--unity-project", unityProject, "--help"],
-      { FIGMA_UNITY_PROJECT: path.join(fixtureRoot, "MissingProject") }
-    );
+    const probe = [
+      "import sys",
+      `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
+      "from unity_project_paths import resolve_unity_project",
+      `print(resolve_unity_project(${JSON.stringify(unityProject)}))`
+    ].join("; ");
+    const result = spawnSync("python", ["-c", probe], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FIGMA_UNITY_PROJECT: path.join(fixtureRoot, "MissingProject")
+      }
+    });
 
     assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
-    assert.match(result.stdout, /--unity-project/);
+    assert.equal(path.resolve(result.stdout.trim()), path.resolve(unityProject));
   } finally {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
