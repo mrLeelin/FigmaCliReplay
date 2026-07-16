@@ -43,6 +43,16 @@
       padding: 0 6px;
       white-space: nowrap;
     }
+    .bridge-version.idle { color: var(--muted); }
+    .bridge-version.online {
+      color: var(--accent-2);
+      border-color: rgba(158,255,181,0.28);
+    }
+    .bridge-version.error {
+      color: var(--danger);
+      border-color: rgba(255,143,143,0.35);
+      background: rgba(255,143,143,0.08);
+    }
     h2 { margin: 0 0 6px; font-size: 13px; color: var(--accent); }
     .section {
       border: 1px solid var(--border);
@@ -467,6 +477,27 @@
       color: #081018;
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
     }
+    .tab-button.connection-error {
+      position: relative;
+      color: var(--danger);
+    }
+    .tab-button.connection-error::after {
+      content: "!";
+      position: absolute;
+      top: 2px;
+      right: 5px;
+      min-width: 14px;
+      height: 14px;
+      padding: 0 3px;
+      border-radius: 999px;
+      color: #081018;
+      background: var(--danger);
+      box-shadow: 0 0 0 2px #0f1720;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 14px;
+    }
+    .tab-button.connection-error.active { color: #081018; }
     .tab-page { display: none; }
     .tab-page.active { display: block; }
     .sync-tabs {
@@ -676,6 +707,7 @@
   <div class="app-title-row">
     <h1>LKS Figma MCP Relay</h1>
     <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.37<!-- END_RELEASE_VERSION --></span>
+    <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
   </div>
 
   <!-- ========== Figma 定位全局区域 ========== -->
@@ -697,7 +729,7 @@
     <button class="tab-button" data-tab="nine-slice-tab" type="button">切九宫</button>
     <button class="tab-button" data-tab="ai-prompt-tab" type="button">AI 提示词</button>
     <button class="tab-button" data-tab="ai-execution-tab" type="button">AI 执行</button>
-    <button class="tab-button" data-tab="settings-tab" type="button">设置</button>
+    <button class="tab-button" id="settingsTabBtn" data-tab="settings-tab" type="button" aria-label="设置">设置</button>
   </div>
 
   <!-- ========== 设置区域 ========== -->
@@ -1088,6 +1120,10 @@
     const prefabImportProgressBar = document.getElementById("prefabImportProgressBar");
     const prefabImportProgressTrack = prefabImportProgressBar ? prefabImportProgressBar.parentElement : null;
     const prefabImportStatusEl = document.getElementById("prefab-import-status");
+    const settingsTabBtn = document.getElementById("settingsTabBtn");
+    const releaseVersionEl = document.querySelector(".release-version");
+    const pluginReleaseVersion = String(releaseVersionEl ? releaseVersionEl.textContent : "").trim().replace(/^v/i, "");
+    const bridgeVersionBadge = document.getElementById("bridgeVersionBadge");
     const tabButtons = Array.prototype.slice.call(document.querySelectorAll(".tab-button"));
     const tabPages = Array.prototype.slice.call(document.querySelectorAll(".tab-page"));
     const syncTabButtons = Array.prototype.slice.call(document.querySelectorAll(".sync-tab-button"));
@@ -1095,6 +1131,7 @@
 
     // ─── 本地 MCP Companion 状态 ───
     let relayUrl = normalizeRelayUrl(relayUrlInput.value);
+    let relayConnected = false;
     let isExecuting = false;
     let consecutiveFailures = 0;
     let lastResultPayload = null;
@@ -1251,6 +1288,7 @@
     const unityPortMax = 32135;
     let unityUrl = unityUrlInput.value.trim();
     let unityConnected = false;
+    let unityBridgeVersionMismatch = null;
     let unityProjects = [];
     let selectedUnityProject = null;
     let exportingImages = false;
@@ -1439,13 +1477,76 @@
       }
     }
 
+    function refreshSettingsConnectionAlert() {
+      var missing = [];
+      if (!relayConnected) missing.push("本地 MCP Companion");
+      if (unityBridgeVersionMismatch) missing.push("Unity Bridge 版本不一致");
+      else if (!unityConnected) missing.push("Unity 网关");
+      var hasError = missing.length > 0;
+      var message = hasError ? "未连接：" + missing.join("、") : "连接正常";
+      settingsTabBtn.classList.toggle("connection-error", hasError);
+      settingsTabBtn.title = message;
+      settingsTabBtn.setAttribute("aria-label", "设置；" + message);
+    }
+
     function setAiBadge(online) {
+      relayConnected = !!online;
       aiBadge.textContent = online ? "已连接" : "未连接";
       aiBadge.className = "badge " + (online ? "online" : "offline");
+      refreshSettingsConnectionAlert();
     }
     function setUnityBadge(online) {
-      unityBadge.textContent = online ? "已连接" : "未连接";
+      if (!online && unityBridgeVersionMismatch) {
+        unityBadge.textContent = "版本错误";
+      } else {
+        unityBadge.textContent = online ? "已连接" : "未连接";
+      }
       unityBadge.className = "badge " + (online ? "online" : "offline");
+      refreshSettingsConnectionAlert();
+    }
+
+    function refreshUnityBridgeVersionState() {
+      var hasVersionMismatch = !!unityBridgeVersionMismatch;
+      installUnityBridgeBtn.textContent = hasVersionMismatch ? "同步 Bridge" : "安装/更新 Bridge";
+      installUnityBridgeBtn.classList.toggle("danger", hasVersionMismatch);
+      installUnityBridgeBtn.disabled = !selectedUnityProject || !selectedUnityProject.valid;
+    }
+
+    function evaluateBridgeVersion(pluginVersion, bridgeVersion) {
+      var expected = String(pluginVersion || "").trim().replace(/^v/i, "");
+      var actual = String(bridgeVersion || "").trim();
+      return {
+        matches: !!expected && !!actual && expected === actual,
+        pluginVersion: expected || "未报告",
+        bridgeVersion: actual || "未报告"
+      };
+    }
+
+    function getBridgeVersionBadgeState(bridgeVersion, status) {
+      var reportedVersion = String(bridgeVersion || "").trim();
+      if (status === "mismatch") {
+        return { text: "Bridge " + (reportedVersion || "未报告"), state: "error" };
+      }
+      if (status === "connected") {
+        return { text: "Bridge " + reportedVersion, state: "online" };
+      }
+      return { text: "Bridge --", state: "idle" };
+    }
+
+    function setBridgeVersionBadge(bridgeVersion, status) {
+      var badgeState = getBridgeVersionBadgeState(bridgeVersion, status);
+      bridgeVersionBadge.textContent = badgeState.text;
+      bridgeVersionBadge.className = "release-version bridge-version " + badgeState.state;
+    }
+
+    function createBridgeVersionMismatchError(bridgeVersion) {
+      var comparison = evaluateBridgeVersion(pluginReleaseVersion, bridgeVersion);
+      var error = new Error("Bridge 版本不一致：插件 " + comparison.pluginVersion + "，Bridge " + comparison.bridgeVersion);
+      error.bridgeVersionMismatch = true;
+      error.pluginVersion = comparison.pluginVersion;
+      error.bridgeVersion = comparison.bridgeVersion;
+      error.projectId = selectedUnityProject ? selectedUnityProject.id : "";
+      return error;
     }
     // 更新 Unity 当前图片导入目标的显示状态。
     function setSelectedFolder(path, isError, display) {
@@ -1555,8 +1656,11 @@
       }
       unityProjectSelect.value = selectedId || (unityProjects[0] && unityProjects[0].id) || "";
       selectedUnityProject = unityProjects.find(function (project) { return project.id === unityProjectSelect.value; }) || null;
+      if (unityBridgeVersionMismatch && (!selectedUnityProject || unityBridgeVersionMismatch.projectId !== selectedUnityProject.id)) {
+        unityBridgeVersionMismatch = null;
+      }
       removeUnityProjectBtn.disabled = !selectedUnityProject;
-      installUnityBridgeBtn.disabled = !selectedUnityProject || !selectedUnityProject.valid;
+      refreshUnityBridgeVersionState();
       if (!selectedUnityProject) {
         unityProjectStatus.textContent = "尚未登记 Unity 工程。";
       } else {
@@ -1608,6 +1712,8 @@
       var result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "选择 Unity 工程失败");
       if (unityConnected) disconnectUnity();
+      unityBridgeVersionMismatch = null;
+      setBridgeVersionBadge("", "disconnected");
       renderUnityProjects(result);
     }
 
@@ -1634,7 +1740,11 @@
       var result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "安装 FigmaBridge 失败");
       renderUnityProjects(result);
-      unityProjectStatus.textContent += "\nBridge 文件已写入，等待 Unity 编译。";
+      if (unityBridgeVersionMismatch) {
+        unityProjectStatus.textContent += "\nBridge 已同步到 " + pluginReleaseVersion + "，等待 Unity 编译后重新连接。";
+      } else {
+        unityProjectStatus.textContent += "\nBridge 文件已写入，等待 Unity 编译。";
+      }
     }
     function unityEndpoint(path) {
       return (unityUrl.replace(/\/+$/, "")) + path;
@@ -3493,24 +3603,46 @@
       return result;
     }
 
-    async function probeUnityHealth(preferredUrl) {
+    async function readSelectedUnityGatewayConfig() {
+      if (!selectedUnityProject || !selectedUnityProject.id) return "";
+      var resp = await fetchWithTimeout(
+        relayEndpoint("/unity-projects/" + encodeURIComponent(selectedUnityProject.id) + "/gateway"),
+        { method: "GET" },
+        1800
+      );
+      if (!resp.ok) throw new Error("读取项目网关配置失败 HTTP " + resp.status);
+      var payload = await resp.json();
+      return payload && payload.found && payload.gatewayUrl ? normalizeBaseUrl(payload.gatewayUrl) : "";
+    }
+
+    async function probeUnityUrl(url) {
+      var normalizedUrl = normalizeBaseUrl(url);
+      var resp = await fetchWithTimeout(buildEndpoint(normalizedUrl, "/health"), { method: "GET" }, 1800);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      var data = await resp.json();
+      if (selectedUnityProject) {
+        var expectedProjectPath = normalizeUnityProjectPath(selectedUnityProject.path);
+        var actualProjectPath = normalizeUnityProjectPath(data.projectPath);
+        if (!actualProjectPath || actualProjectPath !== expectedProjectPath) {
+          throw new Error("Unity 网关工程不匹配：期望 " + selectedUnityProject.path + "，实际 " + (data.projectPath || "未报告"));
+        }
+      }
+      var bridgeVersion = evaluateBridgeVersion(pluginReleaseVersion, data.version);
+      if (!bridgeVersion.matches) {
+        setBridgeVersionBadge(data.version, "mismatch");
+        throw createBridgeVersionMismatchError(data.version);
+      }
+      return { url: normalizedUrl, data: data };
+    }
+
+    async function scanUnityGateways(preferredUrl) {
       var urls = buildUnityProbeUrls(preferredUrl);
       var lastError = null;
       for (var i = 0; i < urls.length; i += 1) {
         try {
-          var resp = await fetchWithTimeout(buildEndpoint(urls[i], "/health"), { method: "GET" }, 1800);
-          if (!resp.ok) throw new Error("HTTP " + resp.status);
-          var data = await resp.json();
-          if (selectedUnityProject) {
-            var expectedProjectPath = normalizeUnityProjectPath(selectedUnityProject.path);
-            var actualProjectPath = normalizeUnityProjectPath(data.projectPath);
-            if (!actualProjectPath || actualProjectPath !== expectedProjectPath) {
-              lastError = new Error("Unity 网关工程不匹配：期望 " + selectedUnityProject.path + "，实际 " + (data.projectPath || "未报告"));
-              continue;
-            }
-          }
-          return { url: urls[i], data: data };
+          return await probeUnityUrl(urls[i]);
         } catch (error) {
+          if (error && error.bridgeVersionMismatch) throw error;
           lastError = error;
         }
       }
@@ -3519,14 +3651,35 @@
 
     async function connectUnity() {
       var requestedUnityUrl = "http://localhost:32129";
+      unityBridgeVersionMismatch = null;
+      setBridgeVersionBadge("", "disconnected");
       unityConnectBtn.disabled = true;
-      appendLog("正在自动发现 Unity 网关：localhost:" + unityPortMin + "-" + unityPortMax);
+      appendLog("正在读取 Unity 网关配置" + (selectedUnityProject ? "：" + selectedUnityProject.name : ""));
       try {
-        const probe = await probeUnityHealth(requestedUnityUrl);
+        var probe = null;
+        var configuredUrl = "";
+        var configurationError = null;
+        try {
+          configuredUrl = await readSelectedUnityGatewayConfig();
+          if (configuredUrl) {
+            probe = await probeUnityUrl(configuredUrl);
+            appendLog("已从项目配置连接 Unity 网关：" + configuredUrl);
+          }
+        } catch (error) {
+          if (error && error.bridgeVersionMismatch) throw error;
+          configurationError = error;
+        }
+        if (!probe) {
+          appendLog("项目配置不可用，开始兜底扫描：localhost:" + unityPortMin + "-" + unityPortMax
+            + (configurationError ? "（" + (configurationError.message || configurationError) + "）" : ""));
+          probe = await scanUnityGateways(requestedUnityUrl);
+        }
         const data = probe.data || {};
         unityUrl = probe.url;
         unityUrlInput.value = unityUrl;
         unityConnected = true;
+        unityBridgeVersionMismatch = null;
+        setBridgeVersionBadge(data.version, "connected");
         setUnityBadge(true);
         setSelectedFolder(data.selectedFolder || "", false, data.imageTargetDisplay || "");
         setSelectedTextTarget(data.selectedTextTargetName || "", data.selectedTextTargetType || "", false);
@@ -3537,11 +3690,12 @@
         refreshUnityControls();
       } catch (error) {
         unityConnected = false;
+        unityBridgeVersionMismatch = error && error.bridgeVersionMismatch ? error : null;
         setUnityBadge(false);
         setSelectedFolder("未连接", true);
         setSelectedTextTarget("未连接", "", true);
         stopSelectedFolderRefresh();
-        setUnityStatus("连接失败：" + (error.message || error));
+        setUnityStatus(unityBridgeVersionMismatch ? unityBridgeVersionMismatch.message : "连接失败：" + (error.message || error));
         appendLog("Unity 连接失败：" + (error.message || error));
         refreshUnityControls();
       }
@@ -3549,6 +3703,7 @@
 
     function disconnectUnity() {
       unityConnected = false;
+      setBridgeVersionBadge("", "disconnected");
       setUnityBadge(false);
       setSelectedFolder("未连接", true);
       setSelectedTextTarget("未连接", "", true);
@@ -3567,6 +3722,7 @@
       previewHierarchyBtn.disabled = exportingHierarchy || !unityConnected || !selectedUnityPrefabPath;
       exportHierarchyBtn.disabled = exportingHierarchy || !unityConnected || !selectedUnityPrefabPath;
       syncTextStyleBtn.disabled = syncingTextStyle || !unityConnected;
+      refreshUnityBridgeVersionState();
       refreshPrefabImportControls();
       refreshTemplateCardStatuses();
     }
@@ -5168,6 +5324,7 @@
     refreshHierarchyImageTargetDisplay();
     refreshPrefabImportDisplay();
     refreshMcpConfigStatus();
+    refreshSettingsConnectionAlert();
     reconnect();
   </script>
 </body>

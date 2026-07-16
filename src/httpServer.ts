@@ -11,6 +11,7 @@ import { getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
 import { followupAiRun, getAiRun, localAiRunnerStatus, runLocalAiCleanup, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
 import { redactLargeRelayPayload, type RuntimeRelay } from "./runtimeRelay.js";
 import { UnityProjectRegistry } from "./unityProjectRegistry.js";
+import { readUnityGatewayDiscovery } from "./unityGatewayDiscovery.js";
 import { installUnityBridge } from "./unityBridgeInstaller.js";
 import {
   bearerToken,
@@ -130,6 +131,19 @@ function handleGet(
   }
   if (pathname === "/unity-projects") {
     jsonResponse(response, 200, unityProjects.list());
+    return;
+  }
+  const unityGatewayMatch = pathname.match(/^\/unity-projects\/([^/]+)\/gateway$/);
+  if (unityGatewayMatch) {
+    const projectId = decodeURIComponent(unityGatewayMatch[1]);
+    const project = unityProjects.list().projects.find((item) => item.id === projectId);
+    if (!project) {
+      jsonResponse(response, 404, { error: "unknown Unity project" });
+    } else if (!project.valid) {
+      jsonResponse(response, 200, { found: false });
+    } else {
+      jsonResponse(response, 200, readUnityGatewayDiscovery(project.path));
+    }
     return;
   }
   const runMatch = pathname.match(/^\/ai-runner\/runs\/([^/]+)$/);

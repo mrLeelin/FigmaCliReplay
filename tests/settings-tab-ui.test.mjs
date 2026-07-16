@@ -28,9 +28,58 @@ test("Figma location stays on the main screen before feature navigation", () => 
   assert.ok(locationIndex >= 0 && locationIndex < tabsIndex);
 });
 
+test("top bar shows Bridge version immediately after the plugin release version", () => {
+  assert.match(ui, /BEGIN_RELEASE_VERSION[\s\S]*?END_RELEASE_VERSION[\s\S]*?id="bridgeVersionBadge"[^>]*>Bridge --<\/span>/);
+});
+
 test("Unity gateway address is auto-discovered instead of manually edited", () => {
   assert.match(ui, /<input id="unityUrl"[^>]*\sreadonly(?:\s|\/?>)/);
   assert.match(ui, /<button id="unityConnectBtn">自动连接<\/button>/);
   assert.match(ui, /for \(var port = unityPortMin; port <= unityPortMax; port \+= 1\)/);
   assert.match(ui, /actualProjectPath !== expectedProjectPath/);
+});
+
+test("settings tab reports every disconnected required service", () => {
+  assert.match(ui, /id="settingsTabBtn"[^>]*data-tab="settings-tab"/);
+  assert.match(ui, /\.tab-button\.connection-error::after\s*\{/);
+  assert.match(ui, /function refreshSettingsConnectionAlert\(\)/);
+  assert.match(ui, /if \(!relayConnected\) missing\.push\("本地 MCP Companion"\)/);
+  assert.match(ui, /if \(!unityConnected\) missing\.push\("Unity 网关"\)/);
+  assert.match(ui, /settingsTabBtn\.title = message/);
+  assert.match(ui, /function setAiBadge\(online\)[\s\S]*?refreshSettingsConnectionAlert\(\)/);
+  assert.match(ui, /function setUnityBadge\(online\)[\s\S]*?refreshSettingsConnectionAlert\(\)/);
+});
+
+test("Unity connection reads the selected project gateway before scanning ports", () => {
+  assert.match(ui, /async function readSelectedUnityGatewayConfig\(\)/);
+  assert.match(ui, /relayEndpoint\("\/unity-projects\/" \+ encodeURIComponent\(selectedUnityProject\.id\) \+ "\/gateway"\)/);
+  assert.match(ui, /async function probeUnityUrl\(url\)/);
+  assert.match(ui, /async function scanUnityGateways\(preferredUrl\)[\s\S]*?buildUnityProbeUrls\(preferredUrl\)/);
+
+  const connectStart = ui.indexOf("async function connectUnity()");
+  const connectEnd = ui.indexOf("function disconnectUnity()", connectStart);
+  const connectSource = ui.slice(connectStart, connectEnd);
+  const readIndex = connectSource.indexOf("readSelectedUnityGatewayConfig()");
+  const configuredProbeIndex = connectSource.indexOf("probeUnityUrl(configuredUrl)");
+  const fallbackLogIndex = connectSource.indexOf("项目配置不可用，开始兜底扫描");
+  const scanIndex = connectSource.indexOf("scanUnityGateways(");
+
+  assert.match(connectSource, /正在读取 Unity 网关配置/);
+  assert.match(connectSource, /已从项目配置连接/);
+  assert.ok(readIndex >= 0 && readIndex < configuredProbeIndex);
+  assert.ok(configuredProbeIndex < fallbackLogIndex && fallbackLogIndex < scanIndex);
+  assert.doesNotMatch(connectSource.slice(0, configuredProbeIndex), /buildUnityProbeUrls/);
+});
+
+test("Bridge version mismatch is surfaced in settings with an explicit sync action", () => {
+  assert.match(ui, /if \(unityBridgeVersionMismatch\) missing\.push\("Unity Bridge 版本不一致"\)/);
+  assert.match(ui, /unityBadge\.textContent = "版本错误"/);
+  assert.match(ui, /installUnityBridgeBtn\.textContent = hasVersionMismatch \? "同步 Bridge" : "安装\/更新 Bridge"/);
+  assert.match(ui, /installUnityBridgeBtn\.classList\.toggle\("danger", hasVersionMismatch\)/);
+  assert.match(ui, /Bridge 已同步到 " \+ pluginReleaseVersion \+ "，等待 Unity 编译后重新连接。/);
+
+  const installStart = ui.indexOf("async function installSelectedUnityBridge()");
+  const installEnd = ui.indexOf("function unityEndpoint(path)", installStart);
+  const installSource = ui.slice(installStart, installEnd);
+  assert.doesNotMatch(installSource, /unityBridgeVersionMismatch\s*=\s*null/);
 });

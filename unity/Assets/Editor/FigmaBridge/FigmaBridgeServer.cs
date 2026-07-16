@@ -33,7 +33,9 @@ namespace MagicWarrior.Editor.FigmaBridge
         private const string ListenHost = "localhost";
 
         /// <summary>服务器版本号</summary>
-        private const string Version = "1.0.0";
+        // BEGIN_RELEASE_VERSION
+        private const string Version = "0.1.37";
+        // END_RELEASE_VERSION
 
         /// <summary>临时输出目录前缀（相对于仓库根目录）</summary>
         private const string TmpOutputPrefix = ".tmp/prefab-to-figma/";
@@ -148,6 +150,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                 AddLog($"[FigmaBridge] 服务器已启动，监听 {listenPrefix}");
                 if (port != PreferredPort)
                     AddLog($"[FigmaBridge] 首选端口被占用，已自动切换到 {port}");
+                FigmaBridgeGatewayDiscovery.Publish(CurrentGatewayUrl);
 
                 error = "";
                 return true;
@@ -180,6 +183,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         {
             if (!_running) return;
 
+            FigmaBridgeGatewayDiscovery.RemoveOwned(CurrentGatewayUrl);
             _running = false;
             EditorApplication.update -= ProcessPendingRequests;
 

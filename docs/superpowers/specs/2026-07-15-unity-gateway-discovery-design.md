@@ -15,7 +15,7 @@ Figma UI 连接 Unity 网关时，应优先读取所选 Unity 项目写出的实
 
 ### 方案 A：项目级发现文件（采用）
 
-Unity Bridge 在成功监听后，将实际地址写入 `<UnityProject>/Library/FigmaBridge/gateway.json`。本地 Companion 根据已注册项目路径读取该文件，再通过 HTTP 接口返回给 UI。
+Unity Bridge 在成功监听后，将实际地址写入 `<UnityProject>/Library/FigmaBridge/gateways/<processId>.json`。本地 Companion 根据已注册项目路径读取最新有效记录，再通过 HTTP 接口返回给 UI。
 
 优点：不污染 Git；不要求 Unity 预先知道 Companion 的端口；项目与网关一一对应；记录的是实际端口而非首选端口。缺点：需要处理崩溃留下的陈旧文件。
 
@@ -33,7 +33,7 @@ Companion 从系统注册表读取 Unity 的首选端口。
 
 ## 数据格式
 
-`Library/FigmaBridge/gateway.json`：
+`Library/FigmaBridge/gateways/<processId>.json`：
 
 ```json
 {
@@ -45,7 +45,7 @@ Companion 从系统注册表读取 Unity 的首选端口。
 }
 ```
 
-`gatewayUrl` 必须是 Unity Bridge 成功启动后的 `CurrentGatewayUrl`。路径统一为绝对规范路径。写入使用临时文件加替换，避免 UI 读到半份 JSON。
+`gatewayUrl` 必须是 Unity Bridge 成功启动后的 `CurrentGatewayUrl`。路径统一为绝对规范路径。写入使用临时文件加替换，避免 UI 读到半份 JSON。每个 Unity 进程拥有独立记录，避免同项目多实例覆盖或误删；最新实例退出后，仍在运行的旧实例记录可继续被发现。
 
 ## 组件修改
 

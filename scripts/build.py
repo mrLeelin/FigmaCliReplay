@@ -13,12 +13,16 @@ BASE = Path(__file__).resolve().parents[1]
 CODE_DIR = BASE / "code"
 OUTPUT = BASE / "code.js"
 UI_HTML = BASE / "ui.html"
+BRIDGE_SERVER = BASE / "unity" / "Assets" / "Editor" / "FigmaBridge" / "FigmaBridgeServer.cs"
 PROMPTS_DIR = BASE / "prompts"
 PACKAGE_JSON = BASE / "package.json"
 
 RELEASE_VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_VERSION_MARKER = re.compile(
     r"(<!-- BEGIN_RELEASE_VERSION -->)v[^<]*(<!-- END_RELEASE_VERSION -->)",
+)
+BRIDGE_RELEASE_VERSION_MARKER = re.compile(
+    r'(// BEGIN_RELEASE_VERSION\s+private const string Version = ")[^"]+(";\s+// END_RELEASE_VERSION)',
 )
 
 # 构建版本计数器（持久化文件），仅用于破坏 Figma 缓存
@@ -101,28 +105,35 @@ def sync_prompt_templates():
     print(f"ui.html: synced {len(PROMPT_FILES)} AI prompt templates from prompts/")
 
 
+def sync_marked_release_version(path, pattern, version, label):
+    """更新一个且仅一个带标记的发布版本。"""
+    if not path.exists():
+        raise FileNotFoundError(f"{label} not found: {path}")
+
+    content = path.read_text(encoding="utf-8")
+    marker_count = len(pattern.findall(content))
+    if marker_count != 1:
+        raise RuntimeError(f"release version marker block not found or duplicated in {label}")
+
+    updated, count = pattern.subn(lambda match: f"{match.group(1)}{version}{match.group(2)}", content, count=1)
+    if count != 1:
+        raise RuntimeError(f"release version marker block could not be updated in {label}")
+    path.write_text(updated, encoding="utf-8")
+
+
 def sync_release_version():
-    """将 package.json 的发布版本同步到插件面板。"""
+    """将 package.json 的发布版本同步到插件面板和 Unity Bridge。"""
     if not PACKAGE_JSON.exists():
         raise FileNotFoundError(f"package.json not found: {PACKAGE_JSON}")
-    if not UI_HTML.exists():
-        raise FileNotFoundError(f"ui.html not found: {UI_HTML}")
 
     package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
     version = package.get("version")
     if not isinstance(version, str) or not RELEASE_VERSION_PATTERN.fullmatch(version):
         raise RuntimeError(f"package.json contains an invalid semantic version: {version!r}")
 
-    html = UI_HTML.read_text(encoding="utf-8")
-    marker_count = len(RELEASE_VERSION_MARKER.findall(html))
-    if marker_count != 1:
-        raise RuntimeError("release version marker block not found or duplicated in ui.html")
-    replacement = rf"\1v{version}\2"
-    new_html, count = RELEASE_VERSION_MARKER.subn(replacement, html, count=1)
-    if count != 1:
-        raise RuntimeError("release version marker block could not be updated in ui.html")
-    UI_HTML.write_text(new_html, encoding="utf-8")
-    print(f"ui.html: synced release version v{version} from package.json")
+    sync_marked_release_version(UI_HTML, RELEASE_VERSION_MARKER, f"v{version}", "ui.html")
+    sync_marked_release_version(BRIDGE_SERVER, BRIDGE_RELEASE_VERSION_MARKER, version, "FigmaBridgeServer.cs")
+    print(f"release version {version}: synced ui.html and FigmaBridgeServer.cs from package.json")
 
 
 def build():
