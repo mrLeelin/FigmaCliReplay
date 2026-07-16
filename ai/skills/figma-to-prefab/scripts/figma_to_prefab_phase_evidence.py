@@ -45,6 +45,8 @@ RELAY_ROOT = relay_root()
 
 
 def requested_unity_tmp(unity_project: str, unity_tmp: str) -> Path:
+    if unity_tmp.strip():
+        return resolve_path(unity_tmp)
     raw_project = unity_project.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
     project_root = None
     if raw_project:
@@ -52,8 +54,6 @@ def requested_unity_tmp(unity_project: str, unity_tmp: str) -> Path:
         missing = [name for name in ("Assets", "ProjectSettings") if not (project_root / name).is_dir()]
         if missing:
             raise RuntimeError(f"Invalid Unity project {project_root}: missing {', '.join(missing)}")
-    if unity_tmp.strip():
-        return resolve_path(unity_tmp)
     if project_root:
         return project_root / ".tmp"
     return RELAY_ROOT / ".tmp"
