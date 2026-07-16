@@ -27,15 +27,15 @@ from typing import Any
 
 
 DEFAULT_RELAY_URL = "http://localhost:32130"
-def find_project_root() -> Path:
+def find_relay_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
+        if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
 
 
-PROJECT_ROOT = find_project_root()
-MCP_CLIENT_DIR = PROJECT_ROOT / ".figma" / "plugins" / "figma-mcp-relay" / "client"
+RELAY_ROOT = find_relay_root()
+MCP_CLIENT_DIR = RELAY_ROOT / "client"
 DEFAULT_PACKAGE_PATH = Path(".tmp/prefab-to-figma/Panel/prefab-to-figma.json")
 DEFAULT_WRITE_PLAN_PATH = Path(".tmp/prefab-to-figma/Panel/figma_write_plan.json")
 DEFAULT_RESULT_PATH = Path(".tmp/prefab-to-figma/Panel/prefab_to_figma_mcp_result.json")
@@ -90,7 +90,7 @@ def build_job(
     component_mode: str,
     job_name: str,
     job_type: str = "PREFAB_TO_FIGMA_WRITE",
-    project_root: Path = PROJECT_ROOT,
+    project_root: Path = RELAY_ROOT,
 ) -> tuple[dict[str, Any], dict[str, Path]]:
     """根据导出包和写入计划构建 MCP Relay job 与 assetPaths。"""
 
@@ -211,8 +211,6 @@ def resolve_asset_path(raw_path: str, package_dir: Path, project_root: Path) -> 
     else:
         candidates.append((project_root / candidate).resolve())
         candidates.append((package_dir / candidate).resolve())
-        if not str(candidate).replace("\\", "/").startswith("JellybeanUnity/"):
-            candidates.append((project_root / "JellybeanUnity" / candidate).resolve())
 
     for item in candidates:
         if item.exists():

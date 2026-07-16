@@ -16,11 +16,15 @@ import sys
 from pathlib import Path
 
 # 添加 figmaMcpRelay CLI wrapper 到路径
-_PROJECT_ROOT = next(
-    p for p in Path(__file__).resolve().parents
-    if (p / ".figma" / "plugins" / "figma-mcp-relay" / "client" / "figma_mcp_client.py").exists()
-)
-sys.path.insert(0, str(_PROJECT_ROOT / ".figma" / "plugins" / "figma-mcp-relay" / "client"))
+def find_relay_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "client" / "figma_mcp_client.py").is_file():
+            return parent
+    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
+
+
+RELAY_ROOT = find_relay_root()
+sys.path.insert(0, str(RELAY_ROOT / "client"))
 from figma_mcp_client import health as ensure_mcp_companion, submit_grid_component_job
 
 DEFAULT_RELAY_URL = "http://localhost:32130"

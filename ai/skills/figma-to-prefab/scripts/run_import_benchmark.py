@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import shutil
 import statistics
 import subprocess
@@ -28,16 +29,16 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 
 
-def find_project_root() -> Path:
+def find_relay_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
+        if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
 
 
-REPO_ROOT = find_project_root()
-UNITY_PROJECT = REPO_ROOT / "JellybeanUnity"
-UNITY_TMP = UNITY_PROJECT / ".tmp"
+RELAY_ROOT = find_relay_root()
+UNITY_PROJECT: Path | None = None
+UNITY_TMP: Path | None = None
 
 RUN_FULL_IMPORT = SCRIPT_DIR / "run_full_import.py"
 VERIFY_PREFAB = SCRIPT_DIR / "verify_prefab.py"
@@ -57,6 +58,7 @@ def parse_args() -> argparse.Namespace:
         description="Run 50x Unity import benchmark and record timing/accuracy."
     )
     parser.add_argument("--figma-url", required=True, help="Figma node URL with node-id.")
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--iterations", type=int, default=50, help="Iterations per mode.")
     parser.add_argument(
         "--modes",
@@ -107,14 +109,14 @@ def parse_args() -> argparse.Namespace:
 
 def normalize_unity_asset_path(path: str) -> str:
     normalized = str(path or "").replace("\\", "/").strip("/")
-    if normalized.startswith("JellybeanUnity/"):
-        normalized = normalized[len("JellybeanUnity/") :]
     if not normalized.startswith("Assets/"):
         raise ValueError(f"Expected Unity Assets path, got: {path}")
     return normalized
 
 
 def unity_disk_path(asset_path: str) -> Path:
+    if UNITY_PROJECT is None:
+        raise RuntimeError("Unity project context has not been initialized.")
     return UNITY_PROJECT / normalize_unity_asset_path(asset_path)
 
 
@@ -130,7 +132,7 @@ def now_iso() -> str:
 def run_python(argv: list[str], timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable] + argv,
-        cwd=str(REPO_ROOT),
+        cwd=str(RELAY_ROOT),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -499,7 +501,16 @@ def run_iteration(
 
 
 def main() -> int:
+    global UNITY_PROJECT, UNITY_TMP
     args = parse_args()
+    raw_unity_project = args.unity_project.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    if not raw_unity_project:
+        raise SystemExit("Unity project is required. Pass --unity-project <path> or set FIGMA_UNITY_PROJECT.")
+    UNITY_PROJECT = Path(raw_unity_project).expanduser().resolve()
+    missing = [name for name in ("Assets", "ProjectSettings") if not (UNITY_PROJECT / name).is_dir()]
+    if missing:
+        raise SystemExit(f"Invalid Unity project {UNITY_PROJECT}: missing {', '.join(missing)}")
+    UNITY_TMP = UNITY_PROJECT / ".tmp"
     if args.iterations <= 0:
         raise SystemExit("--iterations must be > 0")
     if not RUN_FULL_IMPORT.is_file():

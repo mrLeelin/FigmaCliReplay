@@ -33,11 +33,14 @@ REQUIRED_ZERO_GATES = [
 ]
 
 
-def repo_root() -> Path:
+def find_relay_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
+        if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
+
+
+RELAY_ROOT = find_relay_root()
 
 
 def resolve_path(raw: str | Path, base: Path | None = None) -> Path:
@@ -48,11 +51,11 @@ def resolve_path(raw: str | Path, base: Path | None = None) -> Path:
     if base:
         candidates.append(base / path)
     candidates.append(Path.cwd() / path)
-    candidates.append(repo_root() / path)
+    candidates.append(RELAY_ROOT / path)
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    return (base or repo_root()) / path
+    return (base or RELAY_ROOT) / path
 
 
 def read_json(path: Path) -> dict[str, Any]:

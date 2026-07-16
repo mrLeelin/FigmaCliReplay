@@ -5,20 +5,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 
-def find_project_root() -> Path:
-    for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
-            return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
-
-
-PROJECT_ROOT = find_project_root()
-UNITY_PROJECT = PROJECT_ROOT / "JellybeanUnity"
-COMMON_PREFAB_DIR = UNITY_PROJECT / "Assets" / "MagicWarrior" / "_Resources" / "Prefabs" / "UGUI" / "_Common"
+def resolve_unity_project(explicit: str) -> Path:
+    raw = explicit.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    if not raw:
+        raise RuntimeError("Unity project is required. Pass --unity-project <path> or set FIGMA_UNITY_PROJECT.")
+    root = Path(raw).expanduser().resolve()
+    missing = [name for name in ("Assets", "ProjectSettings") if not (root / name).is_dir()]
+    if missing:
+        raise RuntimeError(f"Invalid Unity project {root}: missing {', '.join(missing)}")
+    return root
 
 
 def load_json(path: Path) -> dict:
@@ -62,11 +62,11 @@ def strip_common_prefab_prefix(name: str) -> str:
     return value
 
 
-def scan_common_prefabs() -> dict[str, str]:
+def scan_common_prefabs(common_prefab_dir: Path) -> dict[str, str]:
     prefab_index: dict[str, str] = {}
-    if not COMMON_PREFAB_DIR.is_dir():
+    if not common_prefab_dir.is_dir():
         return prefab_index
-    for prefab_path in COMMON_PREFAB_DIR.rglob("*.prefab"):
+    for prefab_path in common_prefab_dir.rglob("*.prefab"):
         try:
             unity_path = "Assets" + str(prefab_path).split("Assets", 1)[1].replace("\\", "/")
         except IndexError:
@@ -354,6 +354,7 @@ def verify_expected_instances(spec_paths: list[Path], expected_instances: dict[s
 def main() -> int:
     """命令行入口。"""
     parser = argparse.ArgumentParser(description="验证 Figma Prefab JSON Spec 结构契约")
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--spec", action="append", required=True, help="要验证的 JSON Spec，可重复传入")
     parser.add_argument("--expected-image-dir", default="", help="期望的 images[].targetDir")
     parser.add_argument(
@@ -367,9 +368,11 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="输出 JSON")
     args = parser.parse_args()
 
+    unity_project = resolve_unity_project(args.unity_project)
+    common_prefab_dir = unity_project / "Assets" / "MagicWarrior" / "_Resources" / "Prefabs" / "UGUI" / "_Common"
     expected_instances = dict(args.expect_prefab_instance)
     spec_paths = [Path(spec_path) for spec_path in args.spec]
-    common_prefab_index = scan_common_prefabs()
+    common_prefab_index = scan_common_prefabs(common_prefab_dir)
     reports = [
         verify_spec(spec_path, args.expected_image_dir, common_prefab_index)
         for spec_path in spec_paths

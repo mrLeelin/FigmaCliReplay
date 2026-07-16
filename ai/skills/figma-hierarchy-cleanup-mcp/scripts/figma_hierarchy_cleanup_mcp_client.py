@@ -22,15 +22,15 @@ from typing import Any, Dict, Optional
 
 
 DEFAULT_RELAY_URL = "http://localhost:32130"
-def find_project_root() -> Path:
+def find_relay_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
+        if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
 
 
-PROJECT_ROOT = find_project_root()
-MCP_CLIENT_DIR = PROJECT_ROOT / ".figma" / "plugins" / "figma-mcp-relay" / "client"
+RELAY_ROOT = find_relay_root()
+MCP_CLIENT_DIR = RELAY_ROOT / "client"
 DEFAULT_OUTPUT_DIR = Path(".tmp/figma-hierarchy-cleanup")
 DEFAULT_ANALYSIS_PATH = DEFAULT_OUTPUT_DIR / "analysis_result.json"
 DEFAULT_PLAN_PATH = DEFAULT_OUTPUT_DIR / "cleanup_plan.json"

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,19 +31,23 @@ PHASE_ORDER = [
 ]
 
 
-def repo_root() -> Path:
+def relay_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
+        if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
 
 
-def unity_project_root() -> Path:
-    return repo_root() / "JellybeanUnity"
+RELAY_ROOT = relay_root()
 
 
-def default_unity_tmp() -> Path:
-    return unity_project_root() / ".tmp"
+def requested_unity_tmp(unity_project: str, unity_tmp: str) -> Path:
+    if unity_tmp.strip():
+        return resolve_path(unity_tmp)
+    raw_project = unity_project.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    if raw_project:
+        return Path(raw_project).expanduser().resolve() / ".tmp"
+    return RELAY_ROOT / ".tmp"
 
 
 def resolve_path(raw: str | Path, base: Path | None = None) -> Path:
@@ -53,11 +58,11 @@ def resolve_path(raw: str | Path, base: Path | None = None) -> Path:
     if base:
         candidates.append(base / path)
     candidates.append(Path.cwd() / path)
-    candidates.append(repo_root() / path)
+    candidates.append(RELAY_ROOT / path)
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    return (base or repo_root()) / path
+    return (base or RELAY_ROOT) / path
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -351,8 +356,6 @@ def normalize_asset_path(path: str) -> str:
     marker = "/Assets/"
     if marker in value:
         value = "Assets/" + value.split(marker, 1)[1]
-    if value.startswith("JellybeanUnity/"):
-        value = value[len("JellybeanUnity/") :]
     return value.strip("/")
 
 
@@ -490,7 +493,8 @@ def decide(phases: dict[str, dict[str, Any]]) -> tuple[str, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read Figma -> Unity Prefab phase evidence without side effects.")
     parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab")
-    parser.add_argument("--unity-tmp", default="JellybeanUnity/.tmp")
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
+    parser.add_argument("--unity-tmp", default="", help="Explicit Unity temporary artifact directory")
     parser.add_argument("--request", default="")
     parser.add_argument("--mcp-result", default="")
     parser.add_argument("--node-manifest", default="")
@@ -508,7 +512,7 @@ def main() -> int:
     args = parser.parse_args()
 
     manifest_dir = resolve_path(args.manifest_dir)
-    unity_tmp = resolve_path(args.unity_tmp)
+    unity_tmp = requested_unity_tmp(args.unity_project, args.unity_tmp)
 
     request_path = resolve_path(args.request, manifest_dir) if args.request else first_existing([manifest_dir / "figma_to_prefab_request.json"])
     result_path = resolve_path(args.mcp_result, manifest_dir) if args.mcp_result else first_existing([manifest_dir / "figma_to_prefab_mcp_result.json"])
