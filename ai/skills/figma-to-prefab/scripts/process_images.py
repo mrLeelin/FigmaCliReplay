@@ -94,13 +94,18 @@ def md5_of_base64(b64_str):
 
 def resolve_unity_asset_path(asset_path):
     """把 Unity Assets 相对路径转换为仓库内实际文件路径。"""
-    normalized = str(asset_path).replace("\\", "/")
+    return resolve_project_asset_path(asset_path)
+
+
+def resolve_project_asset_path(asset_path):
+    normalized = normalize_asset_path(asset_path)
+    assets_root = (UNITY_PROJECT_ROOT / "Assets").resolve()
+    candidate = (assets_root / normalized.removeprefix("Assets/")).resolve()
     try:
-        return (UNITY_PROJECT_ROOT / normalize_asset_path(normalized)).resolve()
-    except ValueError:
-        pass
-    raw_path = Path(normalized)
-    return raw_path if raw_path.is_absolute() else (REPOSITORY_ROOT / raw_path).resolve()
+        candidate.relative_to(assets_root)
+    except ValueError as error:
+        raise ValueError(f"Unity asset path escapes project Assets: {asset_path}") from error
+    return candidate
 
 
 def resolve_output_dir(output_dir):
@@ -108,12 +113,14 @@ def resolve_output_dir(output_dir):
     normalized = str(output_dir).replace("\\", "/")
     raw_path = Path(normalized)
     if raw_path.is_absolute():
-        return raw_path.resolve()
-    try:
-        return (UNITY_PROJECT_ROOT / normalize_asset_path(normalized)).resolve()
-    except ValueError:
-        pass
-    return (REPOSITORY_ROOT / raw_path).resolve()
+        resolved = raw_path.resolve()
+        assets_root = (UNITY_PROJECT_ROOT / "Assets").resolve()
+        try:
+            resolved.relative_to(assets_root)
+        except ValueError as error:
+            raise ValueError(f"Output directory must remain under Unity Assets: {output_dir}") from error
+        return resolved
+    return resolve_project_asset_path(normalized)
 
 
 def resolve_manifest_dir(manifest_dir):

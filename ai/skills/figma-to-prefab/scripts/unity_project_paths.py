@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -26,11 +27,19 @@ def resolve_unity_project(
 
 
 def normalize_asset_path(raw: str | os.PathLike[str]) -> str:
-    value = str(raw or "").replace("\\", "/").strip().lstrip("./")
-    if value.startswith("Assets/"):
-        return value
-    marker = "/Assets/"
-    wrapped = "/" + value
-    if marker in wrapped:
-        return "Assets/" + wrapped.split(marker, 1)[1]
-    raise ValueError(f"Unity asset path must be under Assets/: {raw}")
+    value = str(raw or "").replace("\\", "/").strip()
+    error = ValueError(
+        f"Unity asset path must be Assets/... or <project>/Assets/... without traversal: {raw}"
+    )
+    if not value or value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise error
+    parts = value.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise error
+    if parts[0] == "Assets" and len(parts) >= 2:
+        asset_parts = parts
+    elif len(parts) >= 3 and parts[1] == "Assets":
+        asset_parts = parts[1:]
+    else:
+        raise error
+    return "/".join(asset_parts)

@@ -7,13 +7,13 @@ from unity_project_paths import resolve_unity_project
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[4]
-CACHE_FILE = PLUGIN_ROOT / ".tmp" / "common_texture_index.json"
-
-
 def common_dir() -> tuple[Path, Path]:
     unity_project = resolve_unity_project()
     return unity_project, unity_project / "Assets" / "_Art" / "Texture" / "GUI" / "_Common"
+
+
+def cache_file(unity_project: Path) -> Path:
+    return unity_project / ".tmp" / "common_texture_index.json"
 
 
 def build_index() -> dict:
@@ -35,9 +35,10 @@ def get_index(force_rebuild: bool = False) -> dict:
     - 目录 mtime 变化（增/删/改名） → 重建
     任一条件触发即全量重建，确保用户手动放入/移除文件时立即感知。
     """
-    _unity_project, directory = common_dir()
-    if not force_rebuild and CACHE_FILE.exists():
-        cached = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+    unity_project, directory = common_dir()
+    project_cache = cache_file(unity_project)
+    if not force_rebuild and project_cache.exists():
+        cached = json.loads(project_cache.read_text(encoding="utf-8"))
         current_count = len(list(directory.rglob("*.png"))) if directory.exists() else 0
         current_mtime = directory.stat().st_mtime if directory.exists() else 0
         if cached.get("fileCount") == current_count and cached.get("dirMtime") == current_mtime:
@@ -45,9 +46,10 @@ def get_index(force_rebuild: bool = False) -> dict:
 
     index = build_index()
     dir_mtime = directory.stat().st_mtime if directory.exists() else 0
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(
+    project_cache.parent.mkdir(parents=True, exist_ok=True)
+    project_cache.write_text(
         json.dumps({
+            "unityProject": str(unity_project),
             "fileCount": len(index),
             "dirMtime": dir_mtime,
             "index": index,
