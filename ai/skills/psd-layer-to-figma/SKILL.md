@@ -51,7 +51,7 @@ For PSD imports, layer names, prefixes, `common` markers, and semantic hints are
 
 ```powershell
 python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\psd_import_phase_evidence.py" `
-  --artifact-dir .tmp\psd-layer-to-figma\<run-dir>
+  --artifact-dir ".tmp\psd-layer-to-figma\<run-dir>"
 ```
 
 该脚本只读取 `manifest_summary.json`、`figma_mcp_result.json` 和可选 `timeline.json`，输出 `[PHASE_EVIDENCE_JSON]`。`decision=stop` 时不得继续 cleanup 或 Unity 导入；`decision=go` 只表示 PSD 导出和 Figma 写入证据通过，不代表 `semanticHints.psdPrefix` 已被几何/validator 证明。

@@ -265,13 +265,13 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
 
 1. **并行合成九宫 + 导出图片** → 直接调用固化脚本：
    ```bash
-   python "<relay-root>/ai/skills/figma-to-prefab/scripts/process_images.py" --unity-project "<unity-project>" --manifest-dir .tmp/figma-to-prefab --output-dir <targetImageDir> --workers 6 --output-report "<unity-project>/.tmp/image_process_report.json"
+   python "<relay-root>/ai/skills/figma-to-prefab/scripts/process_images.py" --unity-project "<unity-project>" --manifest-dir .tmp/figma-to-prefab --output-dir "<targetImageDir>" --workers 6 --output-report "<unity-project>/.tmp/image_process_report.json"
    ```
    脚本负责：九宫 ThreadPool 并行合成或直接写入 MCP Relay 正确导出 → 普通图片 base64 解码 → Common_Texture 复用 → 文件名对齐。`--output-dir` 必须规范化到 `<unity-project>`；传入 `Assets/...` 时脚本应解析为 `<unity-project>/Assets/...`，并校验它与 `image_download_plan.json` 中非复用图片的 `targetAssetPath` 父目录一致，否则阻塞且不写文件。若 `targetAssetPath` 对应的 Unity PNG 已存在，必须直接复用现有文件，记录到 `existingImageReused` / `existingImageReuse`，禁止覆盖、删除后重建或重写 `.meta`。`white_1x1.png` 只允许在 Spec 实际引用 `builtin_white_1x1` 时创建；没有 SOLID fill 白像素引用时禁止创建。
    `INSTANCE` 父节点没有直接导出图时，脚本必须自动解析到唯一/最大可导出的子节点，并在报告中写出 `plannedNodeId`、`resolvedExportNodeId`、`resolvedReason`。
    **如果 `image_process_report.json` 中 `nineSliceSizeMismatch` 或 `nineSliceOversize > 0`**：在用户已确认阶段二图片写入范围后，读取报告的 blockingErrors 九宫尺寸列表 → 调用固化裁剪脚本（AI 无需手工裁剪）：
    ```bash
-   python "<relay-root>/ai/skills/figma-to-prefab/scripts/crop_jiugong.py" --unity-project "<unity-project>" --spec .tmp/prefab_spec.json --image-dir <targetImageDir>
+   python "<relay-root>/ai/skills/figma-to-prefab/scripts/crop_jiugong.py" --unity-project "<unity-project>" --spec "<unity-project>/.tmp/prefab_spec.json" --image-dir "<targetImageDir>"
    ```
    裁剪脚本负责：从全尺寸九宫源图中提取 9 个切片区域，使用 CROP 算法重排为最小可拉伸 PNG（`L+R+2 × T+B+2`）。缺失的副本图（duplicateOf）自动从原图复制。
 2. **AssetDatabase.Refresh** → 使用 uLoop CLI 刷新 Unity 资源数据库：
@@ -289,7 +289,7 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
      ```
 5. **静态验证** → Python 快速扫描 Prefab YAML：
   ```bash
-  python "<relay-root>/ai/skills/figma-to-prefab/scripts/verify_prefab.py" --unity-project "<unity-project>" --prefab <targetPrefabPath> --json
+  python "<relay-root>/ai/skills/figma-to-prefab/scripts/verify_prefab.py" --unity-project "<unity-project>" --prefab "<targetPrefabPath>" --json
   ```
   - `m_Sprite: {fileID: 0}` = 0
    - `m_RaycastTarget: 1` = 0（图片组件）
@@ -422,7 +422,7 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/common_texture.py" --unit
 #### `verify_prefab.py` — Prefab YAML 静态验证器
 
 ```bash
-python "<relay-root>/ai/skills/figma-to-prefab/scripts/verify_prefab.py" --unity-project "<unity-project>" --prefab Assets/_Resources/Sharders/<targetPrefab>.prefab
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/verify_prefab.py" --unity-project "<unity-project>" --prefab "Assets/_Resources/Sharders/<targetPrefab>.prefab"
 # 或 --json 输出机器可读格式
 ```
 
