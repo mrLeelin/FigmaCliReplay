@@ -3180,22 +3180,6 @@
       }
     }
 
-    function showMcpSetupScriptHint(action) {
-      syncRelayUrlInput();
-      var client = selectedMcpClient();
-      var clientLabel = selectedMcpClientLabel();
-      var command = "powershell -ExecutionPolicy Bypass -File .figma\\plugins\\figma-mcp-relay\\scripts\\setup_mcp_config.ps1 -Client " + client + " -Action " + action;
-      var lines = [
-        clientLabel + " MCP 配置现在通过本机脚本执行。",
-        "在项目根目录运行：",
-        command,
-        "",
-        "这样做是为了避免浏览器或插件 UI 直接改写用户级 MCP 配置。"
-      ];
-      if (mcpConfigStatusEl) mcpConfigStatusEl.textContent = lines.join("\n");
-      appendLog("MCP config script: " + command);
-    }
-
     async function fetchAsset(asset) {
       const resp = await fetchWithTimeout(asset.url, { method: "GET", headers: relayRuntimeHeaders() }, 15000);
       if (!resp.ok) throw new Error("资源下载失败 " + asset.id + ": HTTP " + resp.status);

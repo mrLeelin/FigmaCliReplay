@@ -20,11 +20,31 @@ PSD → Figma 组件缓存刷新工具。
 import json
 import sys
 import os
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(__file__))
 from cache_component_index import save_cache
 
 
 GENERATE_JS_HELP = "--generate-js is deprecated. Use --from-mcp."
+
+
+def resolve_relay_root() -> Path:
+    """Locate the standalone Relay checkout that owns this bundled skill."""
+    script_path = Path(__file__).resolve()
+    for candidate in script_path.parents:
+        if (candidate / "client" / "figma_mcp_client.py").is_file():
+            return candidate
+    raise RuntimeError("Unable to locate standalone Figma MCP Relay root")
+
+
+def load_query_components():
+    """Import the Relay client from the standalone checkout."""
+    client_dir = resolve_relay_root() / "client"
+    client_path = str(client_dir)
+    if client_path not in sys.path:
+        sys.path.insert(0, client_path)
+    from figma_mcp_client import query_components
+    return query_components
 
 
 def unwrap_mcp_payload(value):
@@ -87,6 +107,9 @@ def assert_cache_counts(query_result, cache_result):
 
 
 def main():
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(__doc__)
+        return
     if "--generate-js" in sys.argv:
         print(json.dumps({
             "status": "deprecated",
@@ -109,12 +132,7 @@ def main():
             if idx + 1 < len(sys.argv):
                 relay_url = sys.argv[idx + 1]
 
-        # 导入 client 的 query_components
-        sys.path.insert(0, os.path.join(
-            os.path.dirname(__file__), "..", "..", "..", "..",
-            ".figma", "plugins", "figma-mcp-relay", "client"
-        ))
-        from figma_mcp_client import query_components
+        query_components = load_query_components()
 
         print(json.dumps({"status": "querying-mcp-relay", "relayUrl": relay_url}, ensure_ascii=False))
         query_result = query_components(relay_url=relay_url)

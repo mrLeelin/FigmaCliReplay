@@ -96,6 +96,26 @@ function findViolations(relativeFiles, patterns) {
   return violations;
 }
 
+function normalizePortablePathScanText(source) {
+  return source
+    .replace(/\\+/g, "/")
+    .replace(/[\s"'`()]+/g, "")
+    .replace(/,+/g, "/")
+    .replace(/\/+\.?\.\//g, "/")
+    .toLowerCase();
+}
+
+function findNormalizedPortablePathViolations(relativeFiles) {
+  const violations = [];
+  for (const relativePath of relativeFiles) {
+    const normalized = normalizePortablePathScanText(fs.readFileSync(path.join(repoRoot, relativePath), "utf8"));
+    if (normalized.includes("jellybeanunity")) violations.push(`${relativePath} [fixed project name]`);
+    if (normalized.includes(".figma/plugins/figma-mcp-relay")) violations.push(`${relativePath} [fixed Relay root]`);
+    if (/[a-z]:\/(?:project|users)\//.test(normalized)) violations.push(`${relativePath} [machine-local absolute path]`);
+  }
+  return violations;
+}
+
 function extractNamedFunction(source, name) {
   const functionStart = source.indexOf(`function ${name}(`);
   assert.notEqual(functionStart, -1, `${name} should exist`);
@@ -255,6 +275,70 @@ test("current workflow documentation contains no machine-local or fixed reposito
   ]);
 
   assert.deepEqual(violations, [], `Fixed workflow path dependencies:\n${violations.join("\n")}`);
+});
+
+test("all active Relay text surfaces reject normalized nested and machine-local paths", () => {
+  const files = [
+    "ui.html",
+    ...collectFiles("prompts", new Set([".md", ".txt"])),
+    ...collectFiles("ai/skills", new Set([".md", ".py", ".json", ".txt"])),
+    ...collectFiles("client", new Set([".py", ".md"])),
+    ...collectFiles("server", new Set([".py", ".md"]))
+  ];
+  const violations = findNormalizedPortablePathViolations(files);
+  assert.deepEqual(violations, [], `Normalized fixed path dependencies:\n${violations.join("\n")}`);
+
+  for (const fixture of [
+    'Path(".figma") / "plugins" / "figma-mcp-relay"',
+    ".figma\\\\plugins\\\\figma-mcp-relay",
+    "Jellybean Unity marker: JellybeanUnity",
+    "E:\\Project\\Game"
+  ]) {
+    const normalized = normalizePortablePathScanText(fixture);
+    assert.ok(
+      normalized.includes(".figma/plugins/figma-mcp-relay")
+        || normalized.includes("jellybeanunity")
+        || /[a-z]:\/(?:project|users)\//.test(normalized),
+      fixture
+    );
+  }
+});
+
+test("Python entry points resolve the standalone Relay root and client module", () => {
+  const clientProbe = runPython("client/figma_mcp_client.py", ["--help"]);
+  assert.equal(clientProbe.status, 0, formatSpawnFailure(clientProbe));
+  const rootProbe = spawnSync("python", ["-c", [
+    "import sys",
+    `sys.path.insert(0, ${JSON.stringify(path.join(repoRoot, "client"))})`,
+    "import figma_mcp_client as client",
+    "print(client.RELAY_ROOT)",
+    "print(client.MCP_SERVER_SCRIPT)"
+  ].join("; ")], { cwd: repoRoot, encoding: "utf8", timeout: pythonTimeoutMs });
+  assert.equal(rootProbe.status, 0, formatSpawnFailure(rootProbe));
+  const [resolvedRoot, resolvedServer] = rootProbe.stdout.trim().split(/\r?\n/);
+  assert.equal(path.resolve(resolvedRoot), repoRoot);
+  assert.equal(path.resolve(resolvedServer), path.join(repoRoot, "server", "figma_mcp_companion.py"));
+  const clientSource = fs.readFileSync(path.join(repoRoot, "client/figma_mcp_client.py"), "utf8");
+  assert.match(clientSource, /\[sys\.executable, str\(MCP_SERVER_SCRIPT\)/);
+  assert.match(clientSource, /cwd=str\(RELAY_ROOT\)/);
+  assert.doesNotMatch(clientSource, /parents\[4\]/);
+
+  const refreshScript = "ai/skills/psd-layer-to-figma/scripts/refresh_component_cache.py";
+  const help = runPython(refreshScript, ["--help"]);
+  assert.equal(help.status, 0, formatSpawnFailure(help));
+  const refreshProbe = spawnSync("python", ["-c", [
+    "import importlib.util",
+    `p = ${JSON.stringify(path.join(repoRoot, refreshScript))}`,
+    "spec = importlib.util.spec_from_file_location('refresh_component_cache_probe', p)",
+    "module = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(module)",
+    "print(module.resolve_relay_root())",
+    "print(module.load_query_components().__module__)"
+  ].join("; ")], { cwd: os.tmpdir(), encoding: "utf8", timeout: pythonTimeoutMs });
+  assert.equal(refreshProbe.status, 0, formatSpawnFailure(refreshProbe));
+  const [refreshRoot, queryModule] = refreshProbe.stdout.trim().split(/\r?\n/);
+  assert.equal(path.resolve(refreshRoot), repoRoot);
+  assert.equal(queryModule, "figma_mcp_client");
 });
 
 test("UI derives quoted executable paths from Relay health and injects the full import script path", async () => {

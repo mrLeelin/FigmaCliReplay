@@ -24,15 +24,8 @@ from typing import Any, Dict, Optional, Tuple
 DEFAULT_RELAY_URL = "http://localhost:32130"
 DEFAULT_MCP_URL = f"{DEFAULT_RELAY_URL}/mcp"
 DEFAULT_MCP_HTTP_TIMEOUT = 300.0
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-MCP_SERVER_SCRIPT = (
-    PROJECT_ROOT
-    / ".figma"
-    / "plugins"
-    / "figma-mcp-relay"
-    / "server"
-    / "figma_mcp_companion.py"
-)
+RELAY_ROOT = Path(__file__).resolve().parent.parent
+MCP_SERVER_SCRIPT = RELAY_ROOT / "server" / "figma_mcp_companion.py"
 
 
 class McpToolError(RuntimeError):
@@ -233,7 +226,7 @@ class FigmaEditMcpStdioClient:
 
         self.process = subprocess.Popen(
             [sys.executable, str(MCP_SERVER_SCRIPT), "--relay-url", self.relay_url],
-            cwd=str(PROJECT_ROOT),
+            cwd=str(RELAY_ROOT),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
