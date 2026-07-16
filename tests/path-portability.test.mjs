@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const pythonTimeoutMs = 15_000;
 
 const portableCliScripts = [
   "ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_hierarchy_cleanup_mcp_client.py",
@@ -34,8 +35,25 @@ function runPython(relativePath, args = [], env = {}) {
   return spawnSync("python", [path.join(repoRoot, relativePath), ...args], {
     cwd: repoRoot,
     encoding: "utf8",
-    env: { ...process.env, ...env }
+    timeout: pythonTimeoutMs,
+    env: {
+      ...process.env,
+      ...env,
+      PYTHONUTF8: "1",
+      PYTHONIOENCODING: "utf-8"
+    }
   });
+}
+
+function formatSpawnFailure(result) {
+  return [
+    result.stderr,
+    result.stdout,
+    `error: ${result.error?.stack || result.error?.message || result.error || "<none>"}`,
+    `signal: ${result.signal || "<none>"}`
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function collectFiles(relativeRoot, extensions) {
@@ -78,7 +96,7 @@ function findViolations(relativeFiles, patterns) {
 for (const relativePath of portableCliScripts) {
   test(`${relativePath} starts from the standalone Relay`, () => {
     const result = runPython(relativePath, ["--help"]);
-    assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
+    assert.equal(result.status, 0, formatSpawnFailure(result));
   });
 }
 
@@ -100,13 +118,16 @@ test("an explicitly named Unity project overrides an invalid environment default
     const result = spawnSync("python", ["-c", probe], {
       cwd: repoRoot,
       encoding: "utf8",
+      timeout: pythonTimeoutMs,
       env: {
         ...process.env,
-        FIGMA_UNITY_PROJECT: path.join(fixtureRoot, "MissingProject")
+        FIGMA_UNITY_PROJECT: path.join(fixtureRoot, "MissingProject"),
+        PYTHONUTF8: "1",
+        PYTHONIOENCODING: "utf-8"
       }
     });
 
-    assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
+    assert.equal(result.status, 0, formatSpawnFailure(result));
     assert.equal(path.resolve(result.stdout.trim()), path.resolve(unityProject));
   } finally {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
