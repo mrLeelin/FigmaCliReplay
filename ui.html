@@ -2947,33 +2947,51 @@
       }, 5000);
       if (!isCurrent()) return { stale: true };
       var result = await response.json().catch(function () { return {}; });
+      if (!isCurrent()) return { stale: true };
       if (!response.ok || result.ok === false) throw new Error(result.error || "HTTP " + response.status);
       return { stale: false, payload: payload, result: result };
+    }
+
+    async function runRelayRequestWithStaleFailureGuard(context, operation, isCurrent, showFailure, ignoreStale) {
+      try {
+        return { stale: false, value: await operation() };
+      } catch (error) {
+        if (!isCurrent()) {
+          await ignoreStale(error, context);
+          return { stale: true };
+        }
+        await showFailure(error, context);
+        return { stale: false, error: error };
+      }
     }
 
     async function openServerOrFolder() {
       syncRelayUrlInput();
       var requestContext = captureRelayRequestContext();
       appendLog("检查本地 MCP Companion：" + requestContext.relayUrl);
-      try {
-        var opened = await runRelayOpenFolderRequest(
+      var guarded = await runRelayRequestWithStaleFailureGuard(
+        requestContext,
+        function () { return runRelayOpenFolderRequest(
           requestContext,
           fetchWithTimeout,
           function () { return relayRequestIsCurrent(requestContext); },
           applyRelayRuntimePaths
-        );
-        if (opened.stale) {
-          appendLog("Relay 地址已切换，已忽略过期的打开文件夹响应。");
-          return;
-        }
-        const payload = opened.payload;
-        const result = opened.result;
-        appendLog("本地 MCP Companion 已运行：pending=" + (payload.pending || 0) + ", done=" + (payload.done || 0));
-        setAiStatus("本地 MCP Companion 已运行\n已尝试打开插件文件夹：" + (result.path || ""));
-        appendLog("已请求打开插件文件夹：" + (result.path || ""));
-      } catch (error) {
-        await showManualStartHint(error);
+        ); },
+        function () { return relayRequestIsCurrent(requestContext); },
+        showManualStartHint,
+        function () { appendLog("Relay 地址已切换，已忽略过期的打开文件夹错误。"); }
+      );
+      if (guarded.stale || guarded.error) return;
+      var opened = guarded.value;
+      if (opened.stale) {
+        appendLog("Relay 地址已切换，已忽略过期的打开文件夹响应。");
+        return;
       }
+      const payload = opened.payload;
+      const result = opened.result;
+      appendLog("本地 MCP Companion 已运行：pending=" + (payload.pending || 0) + ", done=" + (payload.done || 0));
+      setAiStatus("本地 MCP Companion 已运行\n已尝试打开插件文件夹：" + (result.path || ""));
+      appendLog("已请求打开插件文件夹：" + (result.path || ""));
     }
 
     function setMcpConfigBadge(configured) {

@@ -387,6 +387,9 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   const runRelayOpenFolderRequest = Function(
     `${extractNamedFunction(ui, "runRelayOpenFolderRequest")}; return runRelayOpenFolderRequest;`
   )();
+  const runRelayRequestWithStaleFailureGuard = Function(
+    `${extractNamedFunction(ui, "runRelayRequestWithStaleFailureGuard")}; return runRelayRequestWithStaleFailureGuard;`
+  )();
   let resolveHealth;
   const deferredHealth = new Promise((resolve) => { resolveHealth = resolve; });
   const requestContext = { relayUrl: "http://relay-a:32130", generation: 1 };
@@ -415,4 +418,48 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   assert.deepEqual(persistedRoots, []);
   assert.deepEqual(requestedUrls, ["http://relay-a:32130/health"]);
   assert.match(ui, /refreshRelayRuntimePaths[\s\S]*?requestRelayUrl[\s\S]*?requestGeneration[\s\S]*?stale/);
+
+  let rejectHealth;
+  const rejectedHealth = new Promise((_, reject) => { rejectHealth = reject; });
+  let rejectedContext = { relayUrl: "http://relay-a:32130", generation: 3 };
+  const rejectedRequestContext = rejectedContext;
+  const shownFailures = [];
+  const ignoredFailures = [];
+  const guardedRequest = runRelayRequestWithStaleFailureGuard(
+    rejectedRequestContext,
+    () => runRelayOpenFolderRequest(
+      rejectedRequestContext,
+      async () => rejectedHealth,
+      () => rejectedContext === rejectedRequestContext,
+      () => assert.fail("stale rejected health must not publish")
+    ),
+    () => rejectedContext === rejectedRequestContext,
+    (error) => { shownFailures.push(error.message); },
+    (error) => { ignoredFailures.push(error.message); }
+  );
+  rejectedContext = { relayUrl: "http://relay-b:32130", generation: 4 };
+  rejectHealth(new Error("relay A disconnected"));
+  const guardedResult = await guardedRequest;
+  assert.equal(guardedResult.stale, true);
+  assert.deepEqual(shownFailures, []);
+  assert.deepEqual(ignoredFailures, ["relay A disconnected"]);
+
+  let resolveFolderBody;
+  const folderBody = new Promise((resolve) => { resolveFolderBody = resolve; });
+  let parseContext = { relayUrl: "http://relay-a:32130", generation: 5 };
+  const parseRequestContext = parseContext;
+  const parseRequest = runRelayOpenFolderRequest(
+    parseRequestContext,
+    async (url) => url.endsWith("/health")
+      ? { ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "C:/RelayA" } }) }
+      : { ok: true, status: 200, json: async () => folderBody },
+    () => parseContext === parseRequestContext,
+    () => {}
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  parseContext = { relayUrl: "http://relay-b:32130", generation: 6 };
+  resolveFolderBody({ ok: true, path: "C:/RelayA" });
+  const parsedResult = await parseRequest;
+  assert.equal(parsedResult.stale, true);
+  assert.equal(parsedResult.result, undefined);
 });
