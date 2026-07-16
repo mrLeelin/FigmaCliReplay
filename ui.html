@@ -1199,7 +1199,16 @@
       throw healthError || new Error("无法解析 Relay 安装目录");
     }
 
-    let relayRuntimePaths = readCachedRelayRuntimePaths(localStorage, relayPluginRootCacheKey(relayUrl));
+    function getSafeLocalStorage() {
+      try {
+        return window.localStorage;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    const relayRuntimeStorage = getSafeLocalStorage();
+    let relayRuntimePaths = readCachedRelayRuntimePaths(relayRuntimeStorage, relayPluginRootCacheKey(relayUrl));
     let relayRuntimeGeneration = 0;
 
     function captureRelayRequestContext() {
@@ -1213,7 +1222,7 @@
     function applyRelayRuntimePaths(payload) {
       var resolved = resolveRelayRuntimePaths(payload);
       if (!resolved.pluginRoot) throw new Error("Relay health 未返回 gateway.pluginRoot");
-      try { localStorage.setItem(relayPluginRootCacheKey(relayUrl), resolved.pluginRoot); } catch (_) {}
+      try { if (relayRuntimeStorage) relayRuntimeStorage.setItem(relayPluginRootCacheKey(relayUrl), resolved.pluginRoot); } catch (_) {}
       relayRuntimePaths = resolved;
       return resolved;
     }
@@ -1225,7 +1234,7 @@
       var requestGeneration = requestContext.generation;
       var loaded = await loadRelayRuntimePaths(function () {
         return fetchWithTimeout(requestRelayUrl.replace(/\/+$/, "") + "/health", { method: "GET" }, 2500);
-      }, localStorage, requestContext.cacheKey, function () {
+      }, relayRuntimeStorage, requestContext.cacheKey, function () {
         return relayRequestIsCurrent(requestContext) && requestGeneration === relayRuntimeGeneration;
       });
       if (loaded.stale || !relayRequestIsCurrent(requestContext)) {
@@ -1519,7 +1528,7 @@
       relayUrl = normalizeRelayUrl(relayUrlInput.value);
       if (previousRelayUrl !== relayUrl) {
         relayRuntimeGeneration += 1;
-        relayRuntimePaths = readCachedRelayRuntimePaths(localStorage, relayPluginRootCacheKey(relayUrl));
+        relayRuntimePaths = readCachedRelayRuntimePaths(relayRuntimeStorage, relayPluginRootCacheKey(relayUrl));
       }
       if (relayUrlInput.value.trim() !== relayUrl) {
         relayUrlInput.value = relayUrl;
