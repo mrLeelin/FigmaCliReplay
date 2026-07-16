@@ -17,6 +17,9 @@ import zlib
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+FIGMA_TO_PREFAB_SCRIPTS = SCRIPT_DIR.parents[1] / "figma-to-prefab" / "scripts"
+if str(FIGMA_TO_PREFAB_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(FIGMA_TO_PREFAB_SCRIPTS))
 
 from prefab_to_figma import (  # noqa: E402
     _derive_canvas_from_root_rect,
@@ -32,16 +35,14 @@ from compare_unity_truth import compare_package  # noqa: E402
 from rect_transform import extract_rotation_z  # noqa: E402
 from prefab_to_figma_mcp_client import build_asset_entries, build_verify_report  # noqa: E402
 from unity_yaml import parse_unity_documents  # noqa: E402
+from unity_project_paths import resolve_unity_project  # noqa: E402
 
 
 def configured_unity_project() -> Path | None:
     raw = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
     if not raw:
         return None
-    candidate = Path(raw).expanduser().resolve()
-    if (candidate / "Assets").is_dir() and (candidate / "ProjectSettings").is_dir():
-        return candidate
-    return None
+    return resolve_unity_project("", env=os.environ)
 
 
 def main() -> int:

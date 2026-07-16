@@ -167,6 +167,11 @@ def normalize_unity_asset_dir(asset_dir):
     return normalized.rstrip("/") + "/"
 
 
+def canonicalize_writer_paths(target_prefab: str, target_image_dir: str) -> tuple[str, str]:
+    """Return canonical Unity writer paths without a project-name prefix."""
+    return normalize_asset_path(target_prefab), normalize_asset_path(target_image_dir).rstrip("/") + "/"
+
+
 def is_solid_only_no_effects(node):
     """
     判断节点是否只有纯色填充，无圆角、无描边、无投影。
@@ -1588,7 +1593,12 @@ def main():
     ]
     if missing_required:
         parser.error("missing required arguments: " + ", ".join("--" + name.replace("_", "-") for name in missing_required))
-    args.target_image_dir = normalize_unity_asset_dir(args.target_image_dir)
+    try:
+        args.target_prefab, args.target_image_dir = canonicalize_writer_paths(
+            args.target_prefab, args.target_image_dir
+        )
+    except ValueError as error:
+        parser.error(str(error))
 
     file_key, node_id = parse_figma_url(args.figma_url)
     if not args.prefab_name:

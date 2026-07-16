@@ -11,7 +11,7 @@ figma_analyze_reader.py — 一次性提取 Figma hierarchy analyze 结果的关
   然后直接用 Read 工具读取。全程不需要写临时脚本或反复探查。
 
 用法：
-    python .figma/plugins/figma-mcp-relay/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_analyze_reader.py ^
+    python <relay-root>/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_analyze_reader.py ^
         --input .tmp/figma-hierarchy-cleanup/analysis_result.json ^
         [--output .tmp/figma-hierarchy-cleanup/analysis_summary.txt] ^
         [--mode all]
@@ -36,12 +36,12 @@ figma_analyze_reader.py — 一次性提取 Figma hierarchy analyze 结果的关
 
 示例：
     # 生成完整摘要到文件
-    python .figma/plugins/figma-mcp-relay/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_analyze_reader.py ^
+    python <relay-root>/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_analyze_reader.py ^
         --input .tmp/figma-hierarchy-cleanup/analysis_result.json ^
         --output .tmp/figma-hierarchy-cleanup/analysis_summary.txt
 
     # 只查看直接子节点表（到标准输出）
-    python .figma/plugins/figma-mcp-relay/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_analyze_reader.py ^
+    python <relay-root>/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_analyze_reader.py ^
         --input .tmp/figma-hierarchy-cleanup/analysis_result.json ^
         --mode children
 """
@@ -50,6 +50,19 @@ import json
 import os
 import sys
 import argparse
+from pathlib import Path
+
+
+def find_relay_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "client" / "figma_mcp_client.py").is_file():
+            return parent
+    raise RuntimeError("Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py.")
+
+
+def resolve_relay_path(raw: str) -> Path:
+    path = Path(raw).expanduser()
+    return path.resolve() if path.is_absolute() else (find_relay_root() / path).resolve()
 
 
 def load_result(path: str) -> dict:
@@ -376,19 +389,22 @@ def main():
     parser.add_argument("--max-children", type=int, default=80, help="Limit children/Y-order rows in --mode children; --mode all is unbounded")
     args = parser.parse_args()
 
-    if not os.path.exists(args.input):
-        print(f"ERROR: 文件不存在: {args.input}", file=sys.stderr)
+    input_path = resolve_relay_path(args.input)
+    output_path = resolve_relay_path(args.output) if args.output else None
+    if not input_path.exists():
+        print(f"ERROR: 文件不存在: {input_path}", file=sys.stderr)
         sys.exit(1)
 
-    result = load_result(args.input)
+    result = load_result(str(input_path))
     lines = generate_report(result, args.mode, max(0, args.max_children))
 
     output = "\n".join(lines)
-    if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
             f.write(output)
-        file_size = os.path.getsize(args.output)
-        print(f"摘要已写入: {args.output}")
+        file_size = output_path.stat().st_size
+        print(f"摘要已写入: {output_path}")
         print(f"文件大小: {file_size:,} bytes ({len(lines)} 行)")
     else:
         print(output)

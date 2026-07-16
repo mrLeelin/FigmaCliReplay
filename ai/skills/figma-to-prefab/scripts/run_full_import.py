@@ -195,6 +195,11 @@ def normalize_unity_asset_dir(path: str) -> str:
     return normalized.rstrip("/") + "/" if normalized else ""
 
 
+def canonicalize_writer_paths(target_prefab: str, target_image_dir: str) -> tuple[str, str]:
+    """Return canonical Unity writer paths before any child-process propagation."""
+    return normalize_unity_asset_path(target_prefab), normalize_unity_asset_dir(target_image_dir)
+
+
 def derive_formal_paths(base_asset_dir: str, root_name: str) -> tuple[str, str, str]:
     base_dir = normalize_unity_asset_dir(base_asset_dir)
     if not base_dir.startswith("Assets/"):
@@ -392,6 +397,12 @@ def main():
     try:
         configure_project_paths(args.unity_project)
     except RuntimeError as error:
+        parser.error(str(error))
+    try:
+        args.target_prefab, args.target_image_dir = canonicalize_writer_paths(
+            args.target_prefab, args.target_image_dir
+        )
+    except ValueError as error:
         parser.error(str(error))
     workflow_started = time.perf_counter()
     timings: list[dict] = []
