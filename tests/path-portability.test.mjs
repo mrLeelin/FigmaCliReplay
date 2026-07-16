@@ -383,4 +383,36 @@ test("UI derives quoted executable paths from Relay health and injects the full 
     ),
     /pluginRoot/
   );
+
+  const runRelayOpenFolderRequest = Function(
+    `${extractNamedFunction(ui, "runRelayOpenFolderRequest")}; return runRelayOpenFolderRequest;`
+  )();
+  let resolveHealth;
+  const deferredHealth = new Promise((resolve) => { resolveHealth = resolve; });
+  const requestContext = { relayUrl: "http://relay-a:32130", generation: 1 };
+  let currentContext = requestContext;
+  let publishedRoot = "B-safe";
+  const persistedRoots = [];
+  const requestedUrls = [];
+  const request = runRelayOpenFolderRequest(
+    requestContext,
+    async (url) => {
+      requestedUrls.push(url);
+      if (url.endsWith("/health")) return deferredHealth;
+      return { ok: true, status: 200, json: async () => ({ ok: true, path: "unused" }) };
+    },
+    () => currentContext === requestContext,
+    (payload) => {
+      publishedRoot = payload.gateway.pluginRoot;
+      persistedRoots.push(payload.gateway.pluginRoot);
+    }
+  );
+  currentContext = { relayUrl: "http://relay-b:32130", generation: 2 };
+  resolveHealth({ ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "C:/RelayA" } }) });
+  const staleResult = await request;
+  assert.equal(staleResult.stale, true);
+  assert.equal(publishedRoot, "B-safe");
+  assert.deepEqual(persistedRoots, []);
+  assert.deepEqual(requestedUrls, ["http://relay-a:32130/health"]);
+  assert.match(ui, /refreshRelayRuntimePaths[\s\S]*?requestRelayUrl[\s\S]*?requestGeneration[\s\S]*?stale/);
 });

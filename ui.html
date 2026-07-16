@@ -1174,7 +1174,7 @@
       }
     }
 
-    async function loadRelayRuntimePaths(fetchHealth, storage, cacheKey) {
+    async function loadRelayRuntimePaths(fetchHealth, storage, cacheKey, isCurrent) {
       var healthError = null;
       try {
         var response = await fetchHealth();
@@ -1187,17 +1187,28 @@
         }
         var resolved = resolveRelayRuntimePaths(payload);
         if (!resolved.pluginRoot) throw new Error("Relay health 未返回 gateway.pluginRoot");
+        if (isCurrent && !isCurrent()) return { paths: resolveRelayRuntimePaths(null), source: "stale", stale: true };
         try { if (storage) storage.setItem(cacheKey, resolved.pluginRoot); } catch (_) {}
         return { paths: resolved, source: "health" };
       } catch (error) {
         healthError = error;
       }
       var cached = readCachedRelayRuntimePaths(storage, cacheKey);
+      if (isCurrent && !isCurrent()) return { paths: resolveRelayRuntimePaths(null), source: "stale", stale: true };
       if (cached.pluginRoot) return { paths: cached, source: "cache", healthError: healthError };
       throw healthError || new Error("无法解析 Relay 安装目录");
     }
 
     let relayRuntimePaths = readCachedRelayRuntimePaths(localStorage, relayPluginRootCacheKey(relayUrl));
+    let relayRuntimeGeneration = 0;
+
+    function captureRelayRequestContext() {
+      return { relayUrl: relayUrl, cacheKey: relayPluginRootCacheKey(relayUrl), generation: relayRuntimeGeneration };
+    }
+
+    function relayRequestIsCurrent(context) {
+      return context.relayUrl === relayUrl && context.generation === relayRuntimeGeneration;
+    }
 
     function applyRelayRuntimePaths(payload) {
       var resolved = resolveRelayRuntimePaths(payload);
@@ -1209,9 +1220,19 @@
 
     async function refreshRelayRuntimePaths() {
       syncRelayUrlInput();
+      var requestContext = captureRelayRequestContext();
+      var requestRelayUrl = requestContext.relayUrl;
+      var requestGeneration = requestContext.generation;
       var loaded = await loadRelayRuntimePaths(function () {
-        return fetchWithTimeout(relayEndpoint("/health"), { method: "GET" }, 2500);
-      }, localStorage, relayPluginRootCacheKey(relayUrl));
+        return fetchWithTimeout(requestRelayUrl.replace(/\/+$/, "") + "/health", { method: "GET" }, 2500);
+      }, localStorage, requestContext.cacheKey, function () {
+        return relayRequestIsCurrent(requestContext) && requestGeneration === relayRuntimeGeneration;
+      });
+      if (loaded.stale || !relayRequestIsCurrent(requestContext)) {
+        var staleError = new Error("Relay 地址已切换，忽略过期 health 响应");
+        staleError.staleRelayRequest = true;
+        throw staleError;
+      }
       relayRuntimePaths = loaded.paths;
       return loaded.paths;
     }
@@ -1497,6 +1518,7 @@
       var previousRelayUrl = relayUrl;
       relayUrl = normalizeRelayUrl(relayUrlInput.value);
       if (previousRelayUrl !== relayUrl) {
+        relayRuntimeGeneration += 1;
         relayRuntimePaths = readCachedRelayRuntimePaths(localStorage, relayPluginRootCacheKey(relayUrl));
       }
       if (relayUrlInput.value.trim() !== relayUrl) {
@@ -2906,20 +2928,47 @@
       appendLog(copied ? "本地 MCP Companion 未连接，已复制启动路径。" : "本地 MCP Companion 未连接。");
     }
 
+    async function runRelayOpenFolderRequest(context, fetchRequest, isCurrent, acceptHealth) {
+      var baseUrl = context.relayUrl.replace(/\/+$/, "");
+      var health = await fetchRequest(baseUrl + "/health", { method: "GET" }, 2500);
+      if (!isCurrent()) return { stale: true };
+      if (!health.ok) throw new Error("health HTTP " + health.status);
+      var payload;
+      try {
+        payload = await health.json();
+      } catch (error) {
+        throw new Error("Relay health 返回的不是有效 JSON：" + (error.message || error));
+      }
+      if (!isCurrent()) return { stale: true };
+      acceptHealth(payload);
+      if (!isCurrent()) return { stale: true };
+      var response = await fetchRequest(baseUrl + "/open-plugin-folder", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+      }, 5000);
+      if (!isCurrent()) return { stale: true };
+      var result = await response.json().catch(function () { return {}; });
+      if (!response.ok || result.ok === false) throw new Error(result.error || "HTTP " + response.status);
+      return { stale: false, payload: payload, result: result };
+    }
+
     async function openServerOrFolder() {
       syncRelayUrlInput();
-      appendLog("检查本地 MCP Companion：" + relayUrl);
+      var requestContext = captureRelayRequestContext();
+      appendLog("检查本地 MCP Companion：" + requestContext.relayUrl);
       try {
-        const health = await fetchWithTimeout(relayEndpoint("/health"), { method: "GET" }, 2500);
-        if (!health.ok) throw new Error("health HTTP " + health.status);
-        const payload = await health.json();
-        applyRelayRuntimePaths(payload);
+        var opened = await runRelayOpenFolderRequest(
+          requestContext,
+          fetchWithTimeout,
+          function () { return relayRequestIsCurrent(requestContext); },
+          applyRelayRuntimePaths
+        );
+        if (opened.stale) {
+          appendLog("Relay 地址已切换，已忽略过期的打开文件夹响应。");
+          return;
+        }
+        const payload = opened.payload;
+        const result = opened.result;
         appendLog("本地 MCP Companion 已运行：pending=" + (payload.pending || 0) + ", done=" + (payload.done || 0));
-        const resp = await fetchWithTimeout(relayEndpoint("/open-plugin-folder"), {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
-        }, 5000);
-        const result = await resp.json().catch(function () { return {}; });
-        if (!resp.ok || result.ok === false) throw new Error(result.error || "HTTP " + resp.status);
         setAiStatus("本地 MCP Companion 已运行\n已尝试打开插件文件夹：" + (result.path || ""));
         appendLog("已请求打开插件文件夹：" + (result.path || ""));
       } catch (error) {
