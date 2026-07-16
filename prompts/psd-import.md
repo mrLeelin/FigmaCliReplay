@@ -17,7 +17,7 @@ PSD 文件：
 - 不要直接覆盖或删除我选中的 Frame；请先确认导入方式。如果需要在该 Frame 下新建 PSD 根 Frame，先说明计划和影响。
 
 执行要求：
-- 必须使用 `figmaMcpRelay` 驱动 `.figma/plugins/figma-mcp-relay` 插件执行批量导入、验证和截图，不要用官方/通用 Figma MCP upload_assets/use_figma/get_screenshot 承担标准导入流程。
+- 必须使用 `figmaMcpRelay` 驱动 `<relay-root>` 下的插件执行批量导入、验证和截图，不要用官方/通用 Figma MCP upload_assets/use_figma/get_screenshot 承担标准导入流程。
 - 先调用 `figma_health`，再 `figma_query_selection` 回显当前 Figma 文件 key、页面名、选区数量、节点名称、类型和 nodePath，确认与上方信息一致。
 - 如果目标是当前页面，导入前必须只读确认当前 Figma 文件 key、页面名与上方信息一致，且 MCP Relay 可访问当前页面。
 - 如果目标是当前选区 FRAME，导入前必须只读验证当前选区只有 1 个 FRAME，且目标可承载新导入根 Frame。

@@ -81,7 +81,7 @@ GET  /prefab-to-figma/import/{taskId}/status
 ## 阶段一命令模板
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" `
   --project-root "." `
   --prefab "<PrefabPath>" `
   --canvas "<1080x1920|auto>" `
@@ -89,13 +89,13 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_
 ```
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/verify_export_package.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/verify_export_package.py" `
   --package ".tmp/prefab-to-figma/<Name>/prefab-to-figma.json" `
   --output-report ".tmp/prefab-to-figma/<Name>/prefab_export_audit_report.json"
 ```
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py" `
   --package ".tmp/prefab-to-figma/<Name>/prefab-to-figma.json" `
   --figma-url "<FigmaUrl>" `
   --target-node-id "<nodeId>" `
@@ -131,7 +131,7 @@ Unity → Figma 导出必须保留 Unity 原始 RectTransform anchor 语义：
 AI 标准路径使用 `figmaMcpRelay`；下面命令只用于调试或兼容旧脚本：
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" `
   --package ".tmp/prefab-to-figma/<Name>/prefab-to-figma.json" `
   --write-plan ".tmp/prefab-to-figma/<Name>/figma_write_plan.json" `
   --result ".tmp/prefab-to-figma/<Name>/prefab_to_figma_mcp_result.json"
@@ -140,7 +140,7 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_
 执行前可先检查 runtime relay：
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --health
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --health
 ```
 
 ## TMP Material Preset 验证门槛

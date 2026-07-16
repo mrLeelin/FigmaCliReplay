@@ -16,7 +16,7 @@ Unity Prefab 路径：
 目标：
 - 将 Unity UGUI Prefab 转换为 Figma 节点；如果 Unity 多选了多个 Prefab，则逐个导入到当前 Figma 目标下。
 - 保持层级语义、GameObject 命名、RectTransform 尺寸/位置、TextMeshProUGUI 文本、Image/CustomImage sprite 引用、九宫信息。
-- 遵守 JellybeanUnity 项目规范和 prefab-to-figma skill 执行合约。
+- 遵守目标 Unity 项目规范和 prefab-to-figma skill 执行合约。
 
 要求：
 - 先检查 Unity 网关 health，确认当前选中的 Prefab 路径列表有效。

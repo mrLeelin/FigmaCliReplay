@@ -52,7 +52,7 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
 > 例如 SKILL.md 位于 `<skill-dir>/SKILL.md`，则 `scripts/analyze.py` 对应 `<skill-dir>/scripts/analyze.py`。
 >
 > **在你的环境中**，根据 skill 实际安装路径替换 `<skill-dir>`：
-> - Relay built-in: `.figma/plugins/figma-mcp-relay/ai/skills/figma-hierarchy-cleanup-mcp`
+> - Relay built-in: `<relay-root>/ai/skills/figma-hierarchy-cleanup-mcp`
 > - Claude Code: `.claude/skills/figma-hierarchy-cleanup-mcp`
 > - Codex CLI: `.codex/skills/figma-hierarchy-cleanup-mcp`
 > - Gemini CLI: `.gemini/skills/figma-hierarchy-cleanup-mcp`
@@ -60,7 +60,7 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
 
 ## 核心原则
 
-本技能只用于 **Figma 目标节点内部层级整理**：把大量散乱直接子节点整理成少量语义分组，保持视觉完全不变。全流程必须使用 `.figma/plugins/figma-mcp-relay` 本地 MCP Relay / `figmaMcpRelay`，禁止使用官方/通用 Figma MCP 直写。
+本技能只用于 **Figma 目标节点内部层级整理**：把大量散乱直接子节点整理成少量语义分组，保持视觉完全不变。全流程必须使用 `<relay-root>` 下的本地 MCP Relay / `figmaMcpRelay`，禁止使用官方/通用 Figma MCP 直写。
 
 ## MCP 接入优先级
 
@@ -135,7 +135,7 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
    ```
 6. 每个 plan 生成后必须立即检查 UTF-8，而不是等最终交付；确认 plan/report 中没有连续问号占位符或 Unicode U+FFFD。通过 PowerShell 管道写入含中文 `reason` 的 JSON 属于高风险路径，优先使用 UTF-8 脚本文件，或让 plan 元数据保持 ASCII。
 7. 审阅计划质量：如果单个分组吞掉 70% 以上直接子节点，或 `[ListRoot]` / `[TabBar]` / `[ProgressSection]` 等语义组仍可继续拆分却未展开，视为异常计划，必须人工重建，不得 apply。
-7a. 对 Day/List/ProgressSection/TaskList/RewardSlot/Milestone 这类重复 UI 区域，先执行 repeat-cluster dry-run：使用 `scripts/figma_hierarchy_cleanup_mcp_client.py` 提交 `FIGMA_HIERARCHY_REPEAT_CLUSTER_ANALYZE`（脚本内部调用 MCP Relay），或在本地回归/离线分析时运行 `node .figma/plugins/figma-mcp-relay/scripts/hierarchy_repeat_cluster_validator.js --input <analysis.json> --json`。输出必须包含 `confidence`、`clusterType`、`groups`、`nodeAssignments`、`rejectReasons`、`usedSignals` 和 `ignoredSignals`。`ignoredSignals` 必须包含 `name`、`path`、`characters`。
+7a. 对 Day/List/ProgressSection/TaskList/RewardSlot/Milestone 这类重复 UI 区域，先执行 repeat-cluster dry-run：使用 `scripts/figma_hierarchy_cleanup_mcp_client.py` 提交 `FIGMA_HIERARCHY_REPEAT_CLUSTER_ANALYZE`（脚本内部调用 MCP Relay），或在本地回归/离线分析时运行 `node "<relay-root>/scripts/hierarchy_repeat_cluster_validator.js" --input <analysis.json> --json`。输出必须包含 `confidence`、`clusterType`、`groups`、`nodeAssignments`、`rejectReasons`、`usedSignals` 和 `ignoredSignals`。`ignoredSignals` 必须包含 `name`、`path`、`characters`。
 7b. repeat-cluster 只生成候选，不直接代替整理计划。`confidence >= 0.85` 且无候选冲突时，才允许把候选转成 cleanup/wrap/reorder 计划；`0.65 <= confidence < 0.85` 或候选分差不足时只输出 dry-run；`confidence < 0.65`、锚点不足、marker 不足、节点重复归属或节点遗漏时必须拒绝自动整理。
 7c. `horizontal-list` 通过高置信 dry-run 后仍不得自动写入；必须先询问用户是否需要整理横向重复项。用户确认是固定横向结构后，目标树应是横向容器直接挂载重复子项组，不得默认套 `[ScrollView]`。只有用户明确要求横向滚动时，才允许使用 `[ScrollView] > [Viewport] > [Content]`。判断必须基于几何/类型重复聚类，不得依赖业务名称、节点名称、路径或文本内容。
 7d. `vertical-list` 被拒绝时必须先审查参数和层级深度：例如 Task 行可能被九宫切片、遮罩或锁定层干扰，首次默认 `expectedYCount` 失败不代表不可整理。应根据可见行/卡片几何数量重跑 dry-run；只有多轮参数审查仍无法证明唯一归属时才停止。
@@ -611,7 +611,7 @@ apply 的每个 group 可指定 `renameChildren`，在移动节点后自动重�
 当修改重复结构识别、自动整理计划、Progress/List/Day 归类逻辑，或用户要求证明“按重复度自动归类”时，必须运行 7 日任务 fixture 回归：
 
 ```powershell
-node .figma\plugins\figma-mcp-relay\scripts\hierarchy_repeat_cluster_validator.js --fixture 7day-task --rounds 100 --json
+node "<relay-root>\scripts\hierarchy_repeat_cluster_validator.js" --fixture 7day-task --rounds 100 --json
 ```
 
 通过标准：

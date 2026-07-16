@@ -10,7 +10,7 @@
 - 分组和 Z 顺序必须以当前真实 Figma 节点为依据，不要根据名称或经验猜测。
 
 读取与计划要求：
-- 禁止使用 Figma MCP 写入，只能通过 .figma/plugins/figma-mcp-relay 本地 MCP Relay 操作当前 Figma 文件。
+- 禁止使用 Figma MCP 写入，只能通过 `<relay-root>` 下的本地 MCP Relay 操作当前 Figma 文件。
 - 先检查 MCP Relay health，再 query-selection 回显当前选中节点。
 - 对目标节点执行 analyze，必须 includeHidden，避免漏掉隐藏占位、遮罩或备份节点。
 - 计划前必须输出 before directChildren 顺序表，包含 index、name、type、visible、bounds，说明 Figma sibling 越靠后视觉越在上层。

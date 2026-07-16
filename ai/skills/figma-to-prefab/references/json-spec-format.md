@@ -4,7 +4,7 @@
 
 ## 整体结构
 
-Spec 文件必须写入 Unity 工程根目录下的 `JellybeanUnity/.tmp/prefab_spec.json`。调用生成器时从 Unity 工程根目录传入相对路径：
+Spec 文件必须写入 Unity 工程根目录下的 `<unity-project>/.tmp/prefab_spec.json`。调用生成器时从 Unity 工程根目录传入相对路径：
 
 ```csharp
 FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")
@@ -74,7 +74,7 @@ FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")
 
 ### 图片下载清单（AI 侧契约）
 
-`ImageSpec` 不包含下载 URL。`gen_spec.py` 必须在阶段一额外生成 `JellybeanUnity/.tmp/image_download_plan.json` 和 `JellybeanUnity/.tmp/spec_audit_report.json`。阶段二由 `process_images.py` 按 MCP Relay manifest/base64 和下载计划写入图片，确认文件存在后再调用 `FigmaPrefabGenerator.Generate()`。
+`ImageSpec` 不包含下载 URL。`gen_spec.py` 必须在阶段一额外生成 `<unity-project>/.tmp/image_download_plan.json` 和 `<unity-project>/.tmp/spec_audit_report.json`。阶段二由 `process_images.py` 按 MCP Relay manifest/base64 和下载计划写入图片，确认文件存在后再调用 `FigmaPrefabGenerator.Generate()`。
 
 推荐结构：
 

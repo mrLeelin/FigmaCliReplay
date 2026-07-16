@@ -1,6 +1,6 @@
 # Figma 到 Unity 导入参考
 
-本参考用于把 Figma 节点导入 `JellybeanUnity`，生成新的 uGUI Prefab 和新的图片资源。执行写入前必须先输出计划并等待用户确认。
+本参考用于把 Figma 节点导入目标 Unity 工程，生成新的 uGUI Prefab 和新的图片资源。执行写入前必须先输出计划并等待用户确认。
 
 ## LLM 只审核原则
 
@@ -27,18 +27,18 @@
 
 ## 只读分析流程
 
-1. 通过 `figmaMcpRelay` 驱动 `.figma/plugins/figma-mcp-relay` 插件导出 Figma 节点、图片、截图和校验结果。
+1. 通过 `figmaMcpRelay` 驱动 `<relay-root>` 下的插件导出 Figma 节点、图片、截图和校验结果。
 2. MCP-backed wrapper 保存 `figma_to_prefab_mcp_result.json`、`figma_node_manifest.json`、`image_export_manifest.json` 和 `mcp_screenshots/*.png`。
 3. 加载 `references/json-spec-format.md`（JSON Spec 格式规范）。
 4. 调用 `gen_spec.py` 从 MCP Relay manifest 生成：
-   - `JellybeanUnity/.tmp/prefab_spec.json`
-   - `JellybeanUnity/.tmp/image_download_plan.json`
-   - `JellybeanUnity/.tmp/spec_audit_report.json`
+   - `<unity-project>/.tmp/prefab_spec.json`
+   - `<unity-project>/.tmp/image_download_plan.json`
+   - `<unity-project>/.tmp/spec_audit_report.json`
 5. `gen_spec.py` 默认自动调用 ComponentSet 后处理：
    - 优先使用 MCP Relay manifest 中的 `component.componentSetId` / `mainComponentSetId`
-   - 命中时生成 `JellybeanUnity/.tmp/figma_component_specs/*.json`
+   - 命中时生成 `<unity-project>/.tmp/figma_component_specs/*.json`
    - 改写主 spec 的业务实例为 `PrefabInstance + activeVariant`
-   - 写出 `JellybeanUnity/.tmp/componentset_report.json`
+   - 写出 `<unity-project>/.tmp/componentset_report.json`
 6. LLM 读取 `spec_audit_report.json` 和 `componentset_report.json`，只审核 `blockingErrors`、`warnings` 和 `summary`，不逐节点重算 manifest。
 7. 在 Unity 工程内只读查找相似 Prefab 和相似图片目录，用于输出建议，不自动改结构。
 8. 列出修改计划 + MCP Relay result + Spec 审核摘要 + 影响文件，等待用户确认。
@@ -49,8 +49,8 @@
 
 ### 阶段二执行流程
 
-1. **[脚本处理图片]** 调用 `process_images.py` 读取 MCP Relay manifest/base64，按 `sliceKind` 直接写入或 fallback 合成九宫 PNG、导出普通图片、复制 Common_Texture。脚本必须校验 `--output-dir` 与 `image_download_plan.json` 的非复用 `targetAssetPath` 父目录一致；`Assets/...` 参数必须解析到 Unity 工程下的 `JellybeanUnity/Assets/...`。
-2. `process_images.py` 必须写入 `JellybeanUnity/.tmp/image_process_report.json`。
+1. **[脚本处理图片]** 调用 `process_images.py` 读取 MCP Relay manifest/base64，按 `sliceKind` 直接写入或 fallback 合成九宫 PNG、导出普通图片、复制 Common_Texture。脚本必须校验 `--output-dir` 与 `image_download_plan.json` 的非复用 `targetAssetPath` 父目录一致；`Assets/...` 参数必须解析到 `<unity-project>/Assets/...`。
+2. `process_images.py` 必须写入 `<unity-project>/.tmp/image_process_report.json`。
 3. **[执行前门禁]** LLM 读取 `image_process_report.json`，确认 `blockingErrors` 为空；文件存在性和导入状态由 `uloop execute-dynamic-code` 的 Unity 返回值确认。
 4. **[uLoop CLI]** 反射执行生成。若存在 `componentset_report.json` 中的 component spec，必须先生成所有 component spec，再生成 `.tmp/prefab_spec.json`
    - C# 脚本在 Unity Editor 内部：
@@ -172,10 +172,10 @@ CustomImage.raycastTarget = false
 
 调用 `FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")` 前必须确认：
 
-- `JellybeanUnity/.tmp/prefab_spec.json` 存在，且路径相对 Unity 工程根目录可解析。
-- `JellybeanUnity/.tmp/image_download_plan.json` 存在，且每个 `imageId` 能对应 JSON Spec 中的 `images[].id`。
-- `JellybeanUnity/.tmp/spec_audit_report.json` 存在且 `blockingErrors` 为空。
-- `JellybeanUnity/.tmp/image_process_report.json` 存在且 `blockingErrors` 为空。
+- `<unity-project>/.tmp/prefab_spec.json` 存在，且路径相对 Unity 工程根目录可解析。
+- `<unity-project>/.tmp/image_download_plan.json` 存在，且每个 `imageId` 能对应 JSON Spec 中的 `images[].id`。
+- `<unity-project>/.tmp/spec_audit_report.json` 存在且 `blockingErrors` 为空。
+- `<unity-project>/.tmp/image_process_report.json` 存在且 `blockingErrors` 为空。
 - 所有 `targetAssetPath` 图片存在，实际尺寸和 MD5 与下载清单一致；h3/v3 的尺寸例外必须由 `sliceKind` 规则解释并记录在脚本报告中。该结论必须来自脚本报告或 `uloop execute-dynamic-code` 的 Unity 返回值。
 - `targetDir + fileName` 已获得新增或覆盖授权。
 - 所有 `PrefabInstance` 的 `sourcePrefabPath` 能通过 `AssetDatabase.LoadAssetAtPath<GameObject>()` 加载。
@@ -187,9 +187,9 @@ CustomImage.raycastTarget = false
 Unity 验证（仅限 uLoop CLI）：
 
 ```bash
-uloop compile --project-path "E:\Project\Work\JellybeanUnity\JellybeanUnity" --force-recompile false --wait-for-domain-reload true
+uloop compile --project-path "<unity-project>" --force-recompile false --wait-for-domain-reload true
 # Then poll status until Unity is stable, then check logs
-python3 Assets/Editor/RoslynGateway/PyScripts/ai_gateway_client.py do-code --project-root "JellybeanUnity" --code 'Debug.Log("Unity stable");' --timeout 30
+python3 "<unity-project>/Assets/Editor/RoslynGateway/PyScripts/ai_gateway_client.py" do-code --project-root "<unity-project>" --code 'Debug.Log("Unity stable");' --timeout 30
 ```
 
 静态验证：

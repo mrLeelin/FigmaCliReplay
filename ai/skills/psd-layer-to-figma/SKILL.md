@@ -21,10 +21,10 @@ For PSD imports, layer names, prefixes, `common` markers, and semantic hints are
 
 ## 当前强制执行策略：figmaMcpRelay 批量导入 + 插件组件缓存
 
-- PSD 导入 Figma 的标准流程必须使用 `figmaMcpRelay` 完成；`.figma/plugins/figma-mcp-relay` 插件和 runtime relay 只是 MCP server 的执行后端。
+- PSD 导入 Figma 的标准流程必须使用 `figmaMcpRelay` 完成；`<relay-root>` 下的插件和 runtime relay 只是 MCP server 的执行后端。
 - Figma MCP Relay 插件负责目标节点解析、组件库索引、common 匹配、PNG `figma.createImage`、节点创建、Text、九宫/三切片、metadata、PSD index Z 顺序、完整验证与截图导出。
-- 每次运行本 skill 提交 Figma 导入前，必须优先通过 `figmaMcpRelay.figma_health` 检查本地 companion；如果未运行，先启动 `.figma/plugins/figma-mcp-relay/start_mcp_companion.ps1 -Mode mcp`。
-- **【强制】PSD 批量导入必须使用 `scripts/submit_psd_import_job.py` 脚本**，因为它会做 `build_payload`（将 manifest 的相对路径解析为绝对路径并构建完整 job payload），raw MCP `figma_submit_job` 的 `assetPaths.layersDir` 简写会被 MCP 框架截断导致超时或失败。`.figma/plugins/figma-mcp-relay/client/figma_mcp_client.py` 作为脚本的后端 client 使用。`figmaMcpRelay.figma_submit_job` / `figmaMcpRelay.figma_wait_result` 只用于后处理（网格 Component 创建、层级整理等小型 job），**不得用于 PSD 批量导入**。
+- 每次运行本 skill 提交 Figma 导入前，必须优先通过 `figmaMcpRelay.figma_health` 检查本地 companion；如果未运行，先执行 `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp`。
+- **【强制】PSD 批量导入必须使用 `scripts/submit_psd_import_job.py` 脚本**，因为它会做 `build_payload`（将 manifest 的相对路径解析为绝对路径并构建完整 job payload），raw MCP `figma_submit_job` 的 `assetPaths.layersDir` 简写会被 MCP 框架截断导致超时或失败。`<relay-root>/client/figma_mcp_client.py` 作为脚本的后端 client 使用。`figmaMcpRelay.figma_submit_job` / `figmaMcpRelay.figma_wait_result` 只用于后处理（网格 Component 创建、层级整理等小型 job），**不得用于 PSD 批量导入**。
 - MCP 默认 endpoint 是 `http://127.0.0.1:32130/mcp`，插件 URL 默认是 `http://localhost:32130`。这些是 MCP Streamable HTTP transport / runtime relay 地址，不是旧业务 HTTP 协议；AI 不得手写 POST `/jobs`、`/figma/pending`、`/figma/result` 或 `/assets/...`。如果必须走 CLI fallback，只能调用封装脚本，并显式传 `--file-key` 或 `--session-id`。
 - 不要在正常流程使用 MCP `fullResult` 或 wrapper `--verbose-result`。完整结果只允许在有界 debug 时使用（`fullResult=true` 必须同时传 `debugFullResult=true`），并且 relay 会在返回给模型前剥离 inline base64。
 - **【组件缓存刷新】使用 `figmaMcpRelay.figma_query_components` 查询组件库，通过 `refresh_component_cache.py --from-mcp` 写入新鲜缓存。禁止使用官方/通用 Figma MCP `use_figma` 查询组件库。** Figma MCP Relay 插件的 `code.js` 内置 `COLLECT_COMPONENTS` handler，直接在 Figma 插件内遍历 `62:115` 和 `2896:32` 并返回组件列表，不需要加载 `figma-use` skill。
@@ -50,7 +50,7 @@ For PSD imports, layer names, prefixes, `common` markers, and semantic hints are
 阶段证据脚本（只读）：
 
 ```powershell
-python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\psd_import_phase_evidence.py `
+python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\psd_import_phase_evidence.py" `
   --artifact-dir .tmp\psd-layer-to-figma\<run-dir>
 ```
 
@@ -60,7 +60,7 @@ python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\psd_i
 ## 核心流程
 
 1. 用户调用 `$psd-layer-to-figma` 即为明确定位为 **PSD 分层导入**，不再重复确认。
-2. 如果任务发生在 JellybeanUnity 工程内，先读取项目要求的 `Doc/ai/项目知识库/AI入口.md` 和任务路由文档；项目规则仅作参考，导入流程不因项目规范中断确认。
+2. 如果任务发生在某个 Unity 工程内，先读取该项目要求的知识库入口和任务路由文档；项目规则仅作参考，导入流程不因项目规范中断确认。
 3. 对 Figma 写入、验证和截图默认走 `figmaMcpRelay`；不要在标准流程中调用官方/通用 Figma MCP `use_figma` / `upload_assets` / `get_screenshot` 承担批量导入。
 4. 在执行 PSD 导出、读取 manifest 或写入 Figma 前，读取 `references/figma-layer-naming-unity-import.md`。这份规则是强制规则，不是可选建议。
 5. **【组件缓存刷新】使用 `figmaMcpRelay.figma_query_components` 查询组件库，禁止用官方/通用 Figma MCP `use_figma`。** 运行 `refresh_component_cache.py <cache_dir> --from-mcp`，由插件在 Figma 内直接遍历 `62:115` 和 `2896:32` 并返回最新组件清单，自动写入缓存。禁用过期磁盘缓存，避免组件 ID 错误导致 common 全部降级。
@@ -276,7 +276,7 @@ nine_slice_left88_bottom88_right88_top87_panel
 生成审核包：
 
 ```powershell
-python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\prepare_nine_slice_ai_review.py `
+python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\prepare_nine_slice_ai_review.py" `
   .tmp\psd-layer-to-figma\psd_layers\manifest.json `
   --out .tmp\psd-layer-to-figma\nine_slice_review
 ```
@@ -304,7 +304,7 @@ python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\prepa
 回填审核结果：
 
 ```powershell
-python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\apply_nine_slice_ai_review.py `
+python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\apply_nine_slice_ai_review.py" `
   .tmp\psd-layer-to-figma\psd_layers\manifest.json `
   .tmp\psd-layer-to-figma\nine_slice_review `
   --out .tmp\psd-layer-to-figma\psd_layers\manifest.ai_nine_slice.json
@@ -618,9 +618,9 @@ MCP Relay 导入 100 层约 48s（含字体加载、九宫切片、common 匹配
 
 当 Figma Desktop 可运行开发插件时，优先使用 `figmaMcpRelay` 驱动本地插件，替代官方/通用 Figma MCP 的大量往返：
 
-- 插件目录：`.figma/plugins/figma-mcp-relay/`
-- AI-facing MCP gateway：`.figma/plugins/figma-mcp-relay/dist/index.js`，由 `.figma/plugins/figma-mcp-relay/start_mcp_companion.ps1 -Mode mcp` 启动
-- MCP CLI wrapper：`.figma/plugins/figma-mcp-relay/client/figma_mcp_client.py`
+- 插件目录：`<relay-root>/`
+- AI-facing MCP gateway：`<relay-root>/dist/index.js`，由 `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp` 启动
+- MCP CLI wrapper：`<relay-root>/client/figma_mcp_client.py`
 - MCP endpoint：默认 `http://127.0.0.1:32130/mcp`（AI 连接 MCP tool；如果当前 MCP 配置使用其它端口，以配置为准）
 - runtime relay：同一 Node gateway 内的 `/figma` WebSocket、polling fallback 和 asset/result endpoint（MCP server 与插件之间的内部通道）
 - 详细流程：`references/figma-http-plugin-workflow.md`
@@ -628,7 +628,7 @@ MCP Relay 导入 100 层约 48s（含字体加载、九宫切片、common 匹配
 工作流：
 
 1. 用 `export_psd_layers.py --summary` 导出 `manifest_summary.json` 和 PNG。
-2. 在 Figma Desktop 运行 `.figma/plugins/figma-mcp-relay/manifest.json` 对应插件，并保持 UI 面板打开。
+2. 在 Figma Desktop 运行 `<relay-root>/manifest.json` 对应插件，并保持 UI 面板打开。
 3. **【强制】PSD 批量导入必须使用 `submit_psd_import_job.py` 脚本**（脚本内部调用 `figma_mcp_client.py` 与 MCP Relay 通信，但会做 `build_payload` 解析相对路径为绝对路径）。`figmaMcpRelay.figma_submit_job` 只用于后处理（网格 Component、层级整理等小型 job），**不得用于批量导入**。
 4. 插件优先通过 WebSocket `/figma` 接收任务，polling `/figma/pending` 仅作 fallback；插件直接 `fetch` PNG 字节并用 `figma.createImage` 生成 imageHash。
 5. 插件在 Figma 内创建根 Frame、普通图片层、Text、common Instance、九宫/三切片和 metadata。
@@ -647,7 +647,7 @@ MCP Relay 导入 100 层约 48s（含字体加载、九宫切片、common 匹配
 避免每次导入都遍历 Figma 组件库。标准刷新入口是：
 
 ```powershell
-python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\refresh_component_cache.py .tmp\psd-layer-to-figma\figma_cache --from-mcp
+python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\refresh_component_cache.py" .tmp\psd-layer-to-figma\figma_cache --from-mcp
 ```
 
 脚本内部调用 `figmaMcpRelay.figma_query_components`；后续导入直接读取 `component_library_cache.json` 和 `image_library_cache.json`。

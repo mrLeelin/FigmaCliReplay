@@ -19,51 +19,51 @@ Node/TypeScript Gateway 鏄粯璁?MCP 鍏ュ彛銆侾ython 鍙繚鐣欎负
 
 ```text
 Plugins > Development > Import plugin from manifest...
-.figma/plugins/figma-mcp-relay/manifest.json
+<relay-root>/manifest.json
 ```
 
 3. 鍙屽嚮鍚姩涓€閿叆鍙ｏ細
 
 ```bat
-.figma\plugins\figma-mcp-relay\鍚姩MCP.bat
+"<relay-root>\鍚姩MCP.bat"
 ```
 
 杩欎釜鍏ュ彛浼氳嚜鍔ㄦ鏌?Node.js銆佸畨瑁呬緷璧栥€佹瀯寤?Gateway銆佸鐢ㄥ凡鍚姩鐨勬湰鍦版湇鍔★紝骞舵樉绀?Figma 鎻掍欢鍜?AI MCP 鍦板潃銆?
 闇€瑕佹墦寮€璇︾粏鏃ュ織绐楀彛鏃剁敤锛?
 ```bat
-.figma\plugins\figma-mcp-relay\start_mcp.bat
+"<relay-root>\start_mcp.bat"
 ```
 
 闇€瑕佸悓鏃舵墦寮€ Figma Desktop 鏃剁敤锛?
 ```bat
-.figma\plugins\figma-mcp-relay\打开Figma并启动MCP.bat
+"<relay-root>\打开Figma并启动MCP.bat"
 ```
 
 4. 棣栨鎺ュ叆 AI 瀹㈡埛绔椂锛屾寜闇€鍐欏叆 MCP 閰嶇疆銆侰odex 浣跨敤锛?
 ```powershell
-PowerShell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\start_mcp_oneclick.ps1 -SetupClient codex
+PowerShell -ExecutionPolicy Bypass -File "<relay-root>\scripts\start_mcp_oneclick.ps1" -SetupClient codex
 ```
 
 Claude Code 浣跨敤锛?
 ```powershell
-PowerShell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\start_mcp_oneclick.ps1 -SetupClient claude
+PowerShell -ExecutionPolicy Bypass -File "<relay-root>\scripts\start_mcp_oneclick.ps1" -SetupClient claude
 ```
 
 涔熷彲浠ュ悓鏃堕厤缃袱鑰咃細
 
 ```powershell
-PowerShell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\start_mcp_oneclick.ps1 -SetupClient all
+PowerShell -ExecutionPolicy Bypass -File "<relay-root>\scripts\start_mcp_oneclick.ps1" -SetupClient all
 ```
 
 5. 闇€瑕佹帓鏌ユ椂杩愯璇婃柇鍜?smoke锛?
 ```powershell
-PowerShell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\doctor_mcp.ps1 -Client codex
-PowerShell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\smoke_mcp.ps1
+PowerShell -ExecutionPolicy Bypass -File "<relay-root>\scripts\doctor_mcp.ps1" -Client codex
+PowerShell -ExecutionPolicy Bypass -File "<relay-root>\scripts\smoke_mcp.ps1"
 ```
 
 ## 姣忓ぉ鍚姩娴佺▼
 
-1. 鍙屽嚮 `.figma\plugins\figma-mcp-relay\鍚姩MCP.bat`銆?2. 鎵撳紑 Figma 鏂囦欢銆?3. 杩愯寮€鍙戞彃浠?`LKS Figma MCP Relay`锛屼繚鎸佹彃浠?UI 闈㈡澘鎵撳紑銆?4. 鍦?Codex/AI 閲屼娇鐢?`figmaMcpRelay` MCP tools銆?
+1. 鍙屽嚮 `<relay-root>\鍚姩MCP.bat`銆?2. 鎵撳紑 Figma 鏂囦欢銆?3. 杩愯寮€鍙戞彃浠?`LKS Figma MCP Relay`锛屼繚鎸佹彃浠?UI 闈㈡澘鎵撳紑銆?4. 鍦?Codex/AI 閲屼娇鐢?`figmaMcpRelay` MCP tools銆?
 ## 榛樿绔彛
 
 ```text
@@ -141,18 +141,18 @@ AI 执行不再打开 PowerShell 或独立 WPF 窗口。完整落盘日志位于
 
 MCP 閰嶇疆鍐欏叆涓嶄粠鎻掍欢 UI 鐩存帴鎵ц锛岃浣跨敤鏈湴鑴氭湰锛?
 ```powershell
-# 鏌ョ湅閰嶇疆鐘舵€?powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\setup_mcp_config.ps1 -Client codex -Action status
+# 鏌ョ湅閰嶇疆鐘舵€?powershell -ExecutionPolicy Bypass -File "<relay-root>\scripts\setup_mcp_config.ps1" -Client codex -Action status
 
 # 鍐欏叆閰嶇疆
-powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\setup_mcp_config.ps1 -Client codex -Action write
+powershell -ExecutionPolicy Bypass -File "<relay-root>\scripts\setup_mcp_config.ps1" -Client codex -Action write
 
 # 鎵撳紑閰嶇疆鏂囦欢
-powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\setup_mcp_config.ps1 -Client codex -Action open
+powershell -ExecutionPolicy Bypass -File "<relay-root>\scripts\setup_mcp_config.ps1" -Client codex -Action open
 
-# 鍒犻櫎 figmaMcpRelay 閰嶇疆椤?powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\setup_mcp_config.ps1 -Client codex -Action delete
+# 鍒犻櫎 figmaMcpRelay 閰嶇疆椤?powershell -ExecutionPolicy Bypass -File "<relay-root>\scripts\setup_mcp_config.ps1" -Client codex -Action delete
 ```
 
-鑴氭湰閫氳繃 `.figma/plugins/figma-mcp-relay/.local/admin-token.txt` 璋冪敤鏈湴 Gateway 鐨勫彈淇濇姢閰嶇疆绔偣銆俙.local/` 宸插姞鍏?`.gitignore`锛屼笉瑕佹彁浜ゃ€?
+鑴氭湰閫氳繃 `<relay-root>/.local/admin-token.txt` 璋冪敤鏈湴 Gateway 鐨勫彈淇濇姢閰嶇疆绔偣銆俙.local/` 宸插姞鍏?`.gitignore`锛屼笉瑕佹彁浜ゃ€?
 ## 瀹夊叏杈圭晫
 
 - 榛樿鍙粦瀹?`127.0.0.1`锛屽澶栨樉绀虹粰鎻掍欢鐨勫湴鍧€浣跨敤 `localhost`銆?- `/mcp/config/write/delete/open` 闇€瑕佹湰鍦?admin token銆?- `/assets/{requestId}/{assetId}` 鍙厑璁歌鍙?Gateway 鍏佽鏍圭洰褰曞唴鐨勬枃浠讹紝涓?`.local/` 姘歌繙绂佹銆?- 榛樿鍏佽鏍圭洰褰曞寘鎷彃浠?`.tmp`銆佷粨搴?`.tmp`銆佺郴缁熶复鏃剁洰褰曚笅鐨?`figma-mcp-relay`銆?- 濡傞渶缁欏洟闃熷伐鍏烽澶栧紑鏀捐祫婧愮洰褰曪紝鍚姩 Gateway 鏃舵坊鍔?`--asset-root <path>`銆?- `POST /jobs` 浼氭嫆缁濇湭瀹屾垚鐨勯噸澶?`requestId`銆?
@@ -161,7 +161,7 @@ powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\
 Node Gateway 榛樿鐩戝惉 `32130`銆傝皟鐢?legacy 鍔熻兘鏃讹紝Gateway 浼氭寜闇€鍚姩鍐呴儴 Python relay锛岄粯璁ゅ唴閮ㄧ鍙?`32131`锛屽澶栦粛鍙毚闇?`32130`銆?
 鐩存帴璋冭瘯 Python relay锛?
 ```powershell
-powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\start_mcp_companion.ps1 -Mode relay
+powershell -ExecutionPolicy Bypass -File "<relay-root>\scripts\start_mcp_companion.ps1" -Mode relay
 ```
 
 ## 甯歌闂
@@ -176,7 +176,7 @@ Invoke-RestMethod http://127.0.0.1:32130/health
 
 2. 鎻掍欢 URL 鏄惁鏄?`http://localhost:32130`锛屼笉鏄?`http://127.0.0.1:32130`銆?3. Figma 鎻掍欢 UI 闈㈡澘鏄惁淇濇寔鎵撳紑銆?4. 杩愯锛?
 ```powershell
-powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\scripts\doctor_mcp.ps1 -Client codex
+powershell -ExecutionPolicy Bypass -File "<relay-root>\scripts\doctor_mcp.ps1" -Client codex
 ```
 
 ### Figma 鎶?devAllowedDomains 鏃犳晥
@@ -191,7 +191,7 @@ ws://localhost:32130
 鍩虹 MCP銆乄ebSocket銆乸olling 涓嶄緷璧?Python銆侾ython 鍙湪璋冪敤 legacy 鑳藉姏鏃堕渶瑕侊紝渚嬪 `/prefab-to-figma/import`銆乣/crop-jiugong`銆?
 ## 寮€鍙戝懡浠?
 ```powershell
-cd .figma\plugins\figma-mcp-relay
+Set-Location "<relay-root>"
 npm install
 npm run typecheck
 npm run build

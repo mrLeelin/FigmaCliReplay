@@ -198,7 +198,7 @@ anchoredPosition.y = pivotY - anchorMin.y * parentH - spanH * pivot.y
 只要任务涉及 TextMeshProUGUI 或 Figma 文本节点，写入 Unity 前必须完成以下步骤，缺一项就停止：
 
 1. 从 MCP Relay manifest / metadata 返回的节点名称或文本元数据中，检查是否包含材质标记。格式为 `节点名(材质名)`，例如 `[DescText](CommonFont_o_833411_u_833411)`。
-2. 如果节点名称包含 `(材质名)` 后缀，只允许精确匹配 `JellybeanUnity/Assets/**/<材质名>.mat`，不得按颜色、截图、更新时间或相似名称猜测替代材质。
+2. 如果节点名称包含 `(材质名)` 后缀，只允许精确匹配 `<unity-project>/Assets/**/<材质名>.mat`，不得按颜色、截图、更新时间或相似名称猜测替代材质。
 3. 修改计划必须列出：`Figma 节点名 -> Unity 材质路径 -> guid -> 写入字段`。
 4. 写入后必须用 Unity 只读检查验证目标 TMP 组件：`fontSharedMaterial.name == <材质名>`。
 5. 最终报告必须列出该验证结果；未验证时禁止宣称材质同步完成。

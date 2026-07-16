@@ -37,7 +37,7 @@ AI 第一次加载时只读快速检查清单，后续按确定性触发条件�
 Prefab → Figma 默认走“无大模型确定性流水线”：AI MCP Host / Figma 插件 UI → `figmaMcpRelay` local companion (`/mcp`) → runtime relay → 固化脚本 → Figma 插件写入 → 插件读回验证。AI 不参与几何、资源、warning 阻塞性或截图验收的判定。
 
 - ✅ AI 标准控制面优先使用仓库 `.mcp.json` 中的 `figmaMcpRelay`，调用 `figma_prefab_import_start` / `figma_prefab_import_status` 或通用 `figma_submit_job`。
-- ✅ `.figma/plugins/figma-mcp-relay` 的 `/figma/pending`、`/figma/result`、`/assets/...`、`/prefab-to-figma/import` 是 MCP server 与 Figma 插件之间的 runtime relay，不是 AI 直接操作的首选入口。
+- ✅ `<relay-root>` 提供的 `/figma/pending`、`/figma/result`、`/assets/...`、`/prefab-to-figma/import` 是 MCP server 与 Figma 插件之间的 runtime relay，不是 AI 直接操作的首选入口。
 - ✅ MCP 默认 endpoint 是 `http://127.0.0.1:32130/mcp`；如果当前 `.mcp.json` 或本地配置使用其它端口，以配置为准，不要硬猜端口。
 - ✅ `prefab_to_figma_mcp_client.py` 只是命令行调试 / 无 MCP tool 暴露时的 fallback wrapper；AI runtime 已有 `figmaMcpRelay` tools 时，不要优先跑 Python wrapper。
 - ✅ Figma 插件通信优先 WebSocket `/figma`，polling endpoint 只作为 runtime fallback；AI 侧仍只调用 MCP tools。
@@ -62,7 +62,7 @@ Prefab → Figma 默认走“无大模型确定性流水线”：AI MCP Host / F
 ## Required Inputs
 
 - Prefab input under the repository. Supported forms:
-  - Single Prefab path, for example `JellybeanUnity/Assets/MagicWarrior/_Resources/Prefabs/UGUI/.../Panel.prefab`.
+  - Single Prefab asset path, for example `Assets/MagicWarrior/_Resources/Prefabs/UGUI/.../Panel.prefab`.
   - Unity Project window multi-selection of `.prefab` assets when the Unity gateway exposes selected Prefab paths.
   - UTF-8 prefab list text file with one `.prefab` path per line. Blank lines and lines starting with `#` are ignored.
 - Figma design file URL or file key.
@@ -80,9 +80,9 @@ Prefab → Figma 默认走“无大模型确定性流水线”：AI MCP Host / F
 ## Environment Checks
 
 - Run `python --version`; require Python 3.10+.
-- Confirm the local `figmaMcpRelay` companion is configured in `.mcp.json` or the current AI MCP config, and start it with `.figma/plugins/figma-mcp-relay/start_mcp_companion.ps1 -Mode mcp` before AI tool calls.
+- Confirm the local `figmaMcpRelay` companion is configured in `.mcp.json` or the current AI MCP config, and start it with `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp` before AI tool calls.
 - Confirm the Figma plugin UI panel is open; the plugin connects to the local runtime relay by WebSocket when available and falls back to polling because Figma plugins cannot listen as a server.
-- Confirm `JellybeanUnity/Assets/` exists.
+- Confirm `<unity-project>/Assets/` and `<unity-project>/ProjectSettings/` exist.
 - Do not auto-install dependencies.
 
 ## Parser Commands
@@ -94,20 +94,20 @@ Run only after the user approves the `.tmp` output path. 解析阶段会同时�
 - `prefab_export_audit_report.json`
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" --project-root "." --prefab "JellybeanUnity/Assets/MagicWarrior/_Resources/Prefabs/UGUI/Home/HomeMainView/MainView/TuiBiJiComboView.prefab" --canvas "1080x1920" --out ".tmp/prefab-to-figma/TuiBiJiComboView"
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" --project-root "<unity-project>" --prefab "Assets/MagicWarrior/_Resources/Prefabs/UGUI/Home/HomeMainView/MainView/TuiBiJiComboView.prefab" --canvas "1080x1920" --out ".tmp/prefab-to-figma/TuiBiJiComboView"
 ```
 
 Batch mode:
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" --project-root "." --batch-dir "JellybeanUnity/Assets/MagicWarrior/_Resources/Prefabs/UGUI/_Common/Buttons" --canvas "auto" --out ".tmp/prefab-to-figma/batch-buttons"
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" --project-root "<unity-project>" --batch-dir "Assets/MagicWarrior/_Resources/Prefabs/UGUI/_Common/Buttons" --canvas "auto" --out ".tmp/prefab-to-figma/batch-buttons"
 ```
 
 Multiple specific Prefabs:
 
 ```powershell
 # prefab-list.txt uses UTF-8, one prefab path per line; blank lines and # comments are ignored.
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" --project-root "." --prefab-list ".tmp/prefab-to-figma/prefab-list.txt" --canvas "auto" --out ".tmp/prefab-to-figma/list-export"
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" --project-root "<unity-project>" --prefab-list ".tmp/prefab-to-figma/prefab-list.txt" --canvas "auto" --out ".tmp/prefab-to-figma/list-export"
 ```
 
 Unity Project multi-selection:
@@ -145,9 +145,9 @@ Expected outputs include `prefab-to-figma.json` and `report.md`.
 ### `prefab_to_figma.py` — Prefab 静态导出器
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" `
-  --project-root "." `
-  --prefab "JellybeanUnity/Assets/MagicWarrior/_Resources/Prefabs/UGUI/Panel.prefab" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma.py" `
+  --project-root "<unity-project>" `
+  --prefab "Assets/MagicWarrior/_Resources/Prefabs/UGUI/Panel.prefab" `
   --canvas "1080x1920" `
   --out ".tmp/prefab-to-figma/Panel"
 ```
@@ -157,7 +157,7 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_
 ### `verify_export_package.py` — 导出包复核器
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/verify_export_package.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/verify_export_package.py" `
   --package ".tmp/prefab-to-figma/Panel/prefab-to-figma.json" `
   --output-report ".tmp/prefab-to-figma/Panel/prefab_export_audit_report.json"
 ```
@@ -167,7 +167,7 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/verify_
 ### `build_figma_write_plan.py` — Figma 写入计划生成器
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py" `
   --package ".tmp/prefab-to-figma/Panel/prefab-to-figma.json" `
   --figma-url "https://www.figma.com/design/FILE/NAME?node-id=1-2" `
   --target-node-id "1:2" `
@@ -185,7 +185,7 @@ AI 侧优先通过 MCP tool 启动后台导入：
 {
   "tool": "figma_prefab_import_start",
   "arguments": {
-    "prefabPaths": ["JellybeanUnity/Assets/MagicWarrior/_Resources/Prefabs/UGUI/Panel.prefab"],
+    "prefabPaths": ["Assets/MagicWarrior/_Resources/Prefabs/UGUI/Panel.prefab"],
     "canvas": "auto",
     "componentMode": "component",
     "nestedPrefabComponentMode": "all",
@@ -200,7 +200,7 @@ AI 侧优先通过 MCP tool 启动后台导入：
 ### `prefab_to_figma_mcp_client.py` — MCP 命令行调试 wrapper
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" `
   --package ".tmp/prefab-to-figma/Panel/prefab-to-figma.json" `
   --write-plan ".tmp/prefab-to-figma/Panel/figma_write_plan.json" `
   --result ".tmp/prefab-to-figma/Panel/prefab_to_figma_mcp_result.json"
@@ -216,8 +216,8 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_
 可先运行健康检查或 job 预览：
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --health
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --dry-run `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --health
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --dry-run `
   --package ".tmp/prefab-to-figma/Panel/prefab-to-figma.json" `
   --write-plan ".tmp/prefab-to-figma/Panel/figma_write_plan.json" `
   --job-output ".tmp/prefab-to-figma/Panel/prefab_to_figma_write_job.json"
@@ -244,7 +244,7 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_
 
 1. 加载 workflow、pitfalls、supported-components。
 2. 检查 Required Inputs：Prefab 输入（单 Prefab、目录批量、Unity 多选 Prefab 或 prefab-list）、Figma file URL/key、Canvas、component mode、`.tmp` 输出目录。
-3. 环境检查：`python --version`、`figmaMcpRelay.figma_health`、Figma 插件 UI 面板、`JellybeanUnity/Assets/`、脚本存在。
+3. 环境检查：`python --version`、`figmaMcpRelay.figma_health`、Figma 插件 UI 面板、`<unity-project>/Assets/` 与 `<unity-project>/ProjectSettings/`、脚本存在。
 4. 用户确认 `.tmp` 输出后，调用 `prefab_to_figma.py`；Unity 多选 Prefab 时先生成 `.tmp/prefab-to-figma/prefab-list.txt`，再用 `--prefab-list`。
 5. 读取 `prefab_export_audit_report.json`，只基于 `allPass/blockingErrors/warnings/summary/checks/artifacts` 审核。
 6. 调用 `build_figma_write_plan.py` 生成写入计划。
@@ -271,9 +271,9 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/prefab_
 ## Validation
 
 - Validate this skill after edits:
-  `python C:\Users\li182\.codex\skills\.system\skill-creator\scripts\quick_validate.py .figma\plugins\figma-mcp-relay\ai\skills\prefab-to-figma`
-- Run `python .figma\plugins\figma-mcp-relay\ai\skills\prefab-to-figma\scripts\run_golden_tests.py` after script or workflow edits.
-- Run `python .figma\plugins\figma-mcp-relay\ai\skills\prefab-to-figma\scripts\prefab_to_figma.py --self-test` after parser edits.
+  `node --test "<relay-root>/tests/path-portability.test.mjs"`
+- Run `python "<relay-root>\ai\skills\prefab-to-figma\scripts\run_golden_tests.py"` after script or workflow edits.
+- Run `python "<relay-root>\ai\skills\prefab-to-figma\scripts\prefab_to_figma.py" --self-test` after parser edits.
 - Confirm JSON includes `root`, `nodes`, `warnings`, `stats`, and `visualBounds`.
 - Confirm `prefab_export_audit_report.json` and `figma_write_plan_audit_report.json` use the unified `allPass/blockingErrors/warnings/summary/checks/artifacts` shape.
 - Confirm `figma_write_verify_report.json` uses the unified `allPass/blockingErrors/warnings/summary/checks/artifacts` shape after MCP Relay execution.

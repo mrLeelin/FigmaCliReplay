@@ -27,7 +27,7 @@ try { await figma.loadAllPagesAsync(); } catch (e) { /* 非 dynamic-page 模式�
 
 ## 影响范围
 
-- 文件：`.figma/plugins/figma-mcp-relay/code.js`
+- 文件：`<relay-root>/code.js`
 - 所有涉及 `figma.root.findAll` 搜索已有 Component 的导入流程
 - 搜索范围覆盖全文件时都需要此调用
 

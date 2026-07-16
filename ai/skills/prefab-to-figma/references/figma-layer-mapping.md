@@ -7,7 +7,7 @@
 写入 Figma 前必须先生成并审核 `figma_write_plan.json`：
 
 ```powershell
-python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py" `
   --package ".tmp/prefab-to-figma/<Name>/prefab-to-figma.json" `
   --figma-url "<FigmaUrl>" `
   --target-node-id "<nodeId>" `
@@ -15,7 +15,7 @@ python ".figma/plugins/figma-mcp-relay/ai/skills/prefab-to-figma/scripts/build_f
   --out ".tmp/prefab-to-figma/<Name>"
 ```
 
-只有 `figma_write_plan_audit_report.json.allPass == true` 且 `blockingErrors` 为空时，才能进入 Figma 写入。标准 AI 执行路径必须通过 `figmaMcpRelay` 提交任务；命令行调试可通过 `prefab_to_figma_mcp_client.py` 提交 `PREFAB_TO_FIGMA_WRITE`。最终都由 `.figma/plugins/figma-mcp-relay` 插件按计划中的 `operations` 执行：
+只有 `figma_write_plan_audit_report.json.allPass == true` 且 `blockingErrors` 为空时，才能进入 Figma 写入。标准 AI 执行路径必须通过 `figmaMcpRelay` 提交任务；命令行调试可通过 `prefab_to_figma_mcp_client.py` 提交 `PREFAB_TO_FIGMA_WRITE`。最终都由 `<relay-root>` 下的插件按计划中的 `operations` 执行：
 
 - `imageUploads`：上传图片并验证 40 位 `imageHash`。
 - `placeholderCleanup`：`figmaMcpRelay` / runtime relay 路径不使用官方/通用 Figma MCP `upload_assets`，因此不会产生占位节点；如果走用户明确批准的 MCP fallback，仍必须单独清理。
@@ -187,7 +187,7 @@ RedBtn (Component Set)
 ## 图片写入
 
 - 使用 runtime relay `/assets/{requestId}/{assetId}` 将 PNG 原图字节交给 Figma 插件，插件内调用 `figma.createImage` 生成 `imageHash`。
-- 使用 `.figma/plugins/figma-mcp-relay` 的 `PREFAB_TO_FIGMA_WRITE` handler 创建矩形、Frame、文字、共享元数据和截图。
+- 使用 `<relay-root>` 下的 `PREFAB_TO_FIGMA_WRITE` handler 创建矩形、Frame、文字、共享元数据和截图。
 - Simple / RawImage：创建 `__image`，尺寸覆盖父 Frame。
 - Nine-slice：按 JSON `image.slices` 创建 1 到 9 个 `__slice_*` 子层；每个子层保留目标矩形和源矩形元数据。
 - Tiled / 非完整 Filled：第一版不还原真实效果，创建 `__unsupported` 或简单占位，并写入 warning 摘要。

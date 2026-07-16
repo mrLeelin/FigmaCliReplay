@@ -2,7 +2,7 @@
 
 ## 目标
 
-用本地 `figmaMcpRelay` companion 驱动公共 Figma 插件 `.figma/plugins/figma-mcp-relay` 完成 PSD 导入标准全流程，替代官方/通用 Figma MCP 的大量往返：
+用本地 `figmaMcpRelay` companion 驱动 `<relay-root>` 下的公共 Figma 插件完成 PSD 导入标准全流程，替代官方/通用 Figma MCP 的大量往返：
 
 ```text
 export_psd_layers.py
@@ -26,14 +26,14 @@ export_psd_layers.py
 1. 在 Figma Desktop 中导入插件 manifest：
 
 ```text
-.figma/plugins/figma-mcp-relay/manifest.json
+<relay-root>/manifest.json
 ```
 
 2. 打开目标 Figma 文件和目标页面/容器。
 3. 启动本地 companion：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .figma\plugins\figma-mcp-relay\start_mcp_companion.ps1 -Mode mcp
+powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp
 ```
 
 4. 确认仓库 `.mcp.json` 的 `figmaMcpRelay` 指向：
@@ -53,7 +53,7 @@ http://localhost:32130
 先导出 PSD 图层和摘要：
 
 ```powershell
-python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\export_psd_layers.py `
+python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\export_psd_layers.py" `
   Doc\Psd\example.psd `
   --out .tmp\psd_layer\example `
   --composite-check `
@@ -63,7 +63,7 @@ python .figma\plugins\figma-mcp-relay\ai\skills\psd-layer-to-figma\scripts\expor
 再通过 MCP CLI wrapper 提交：
 
 ```powershell
-python .figma\plugins\figma-mcp-relay\client\figma_mcp_client.py `
+python "<relay-root>\client\figma_mcp_client.py" `
   .tmp\psd_layer\example\manifest_summary.json `
   --source-root .tmp\psd_layer\example `
   --target-node-id 62:2087 `

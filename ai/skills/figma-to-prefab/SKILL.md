@@ -32,7 +32,7 @@ For Figma-to-Prefab imports, every phase must prove it still targets the same lo
 - `run_full_import.py` is an execution accelerator, not a reasoning shortcut. After it runs, read its `[SUMMARY_JSON]`, wall-clock report, `spec_audit_report.json`, `image_process_report.json`, and `verify_prefab_result.json` as separate phase evidence. Do not collapse them into one vague “import succeeded” claim.
 - `--skip-mcp-export` is allowed only when the manifest target guard passes: requested `fileKey + nodeId` must match manifest `fileKey + rootNodeId`, MCP result status must be `completed`, blocking error count must be zero, and any supplied root snapshot guards must match.
 - For high-risk reruns, pass root snapshot guards: `--expect-root-name`, `--expect-root-width`, `--expect-root-height`, and `--expect-direct-child-count`. These guards prevent importing a child frame when the intended target is the full root frame.
-- Evidence JSON files are not Unity assets. `verify_prefab_result.json`, wall-clock JSON, audit reports, and temporary import reports must be written under `JellybeanUnity/.tmp/` or a benchmark artifact folder, never directly under a Unity `Assets/...` root.
+- Evidence JSON files are not Unity assets. `verify_prefab_result.json`, wall-clock JSON, audit reports, and temporary import reports must be written under `<unity-project>/.tmp/` or a benchmark artifact folder, never directly under a Unity `Assets/...` root.
 - Formal imports must not use benchmark placeholders or run folders. Do not create `Assets/FigmaImportBenchmark/<run-id>/Prefabs/Import_001.prefab` for a user-facing import. Prefer `run_full_import.py --infer-formal-names --formal-output-dir <Unity Assets folder>` so the Prefab name is inferred from the Figma root node and images go under `<Unity Assets folder>/Images/`.
 - `Import_001`, `Import_###`, node-id folder names such as `seven_day_task_import_6284_1213`, and `Prefabs/Import_###.prefab` are benchmark/test artifacts only. If a user asks for a normal/new Prefab import, the target Prefab must be a formal business name directly under the selected target folder unless the user explicitly names a different business subfolder.
 
@@ -58,9 +58,9 @@ Use this skill only for **Figma node/component → Unity uGUI Prefab and require
 阶段证据脚本（只读）：
 
 ```powershell
-python .figma\plugins\figma-mcp-relay\ai\skills\figma-to-prefab\scripts\figma_to_prefab_phase_evidence.py `
+python "<relay-root>\ai\skills\figma-to-prefab\scripts\figma_to_prefab_phase_evidence.py" `
   --manifest-dir .tmp\figma-to-prefab `
-  --unity-tmp JellybeanUnity\.tmp
+  --unity-tmp "<unity-project>\.tmp"
 ```
 
 该脚本只读取 `figma_to_prefab_request.json`、`figma_node_manifest.json`、`figma_to_prefab_mcp_result.json`、`spec_audit_report.json`、`image_process_report.json`、`verify_prefab_result.json` 和可选 wall-clock 报告，输出 `[PHASE_EVIDENCE_JSON]`。它会检查 request、manifest、MCP result、Spec provenance、verify Prefab 是否来自同一轮；`decision=stop` 时不得继续写图片、写 Prefab 或声称导入完成。
@@ -72,7 +72,7 @@ python .figma\plugins\figma-mcp-relay\ai\skills\figma-to-prefab\scripts\figma_to
 - 判断是否整理的唯一默认门槛是目标根节点 `directChildren` 数量：`directChildCount > 15` 视为未整理，必须停止 Prefab 导出流程并找用户确认是否先运行 `$figma-hierarchy-cleanup-mcp`；`directChildCount <= 15` 默认视为已整理，不需要再次向用户确认整理状态。
 - 直接子节点计数必须基于包含隐藏节点的分析结果，避免隐藏 PSD/导入残留层绕过门槛。
 - 如果用户明确指出当前节点未整理、仍是 PSD/导入原始扁平层级，或要求先整理，即使 `directChildCount <= 15`，也必须先按用户要求使用 `$figma-hierarchy-cleanup-mcp`。
-- `$figma-hierarchy-cleanup-mcp` 必须只通过 `.figma/plugins/figma-mcp-relay` 本地 MCP Relay 操作 Figma，禁止使用 Figma MCP 写入。
+- `$figma-hierarchy-cleanup-mcp` 必须只通过 `<relay-root>` 下的本地 MCP Relay 操作 Figma，禁止使用 Figma MCP 写入。
 - 整理计划必须按 `$figma-hierarchy-cleanup-mcp` 的规则生成、展示完整最终树并获得用户确认；整理 apply 后必须 verify 通过。
 - 只有 `$figma-hierarchy-cleanup-mcp` 的最终结果满足 `allPass == true`、`blockingErrors` 为空、节点守恒 / bounds 不漂移 / UTF-8 / 最终截图等门禁通过后，才允许继续本 skill 的 Figma → Prefab 导出流程。
 - 未完成整理或整理验证失败时，禁止生成 `.tmp/figma-to-prefab/figma_to_prefab_request.json`，禁止提交 Figma → Prefab MCP Relay 导出请求，禁止生成 `figma_node_manifest.json`、`image_export_manifest.json`、`prefab_spec.json` 或写入 Unity 资源。
@@ -117,10 +117,10 @@ AI 不再做机械计算和手写报告。AI 的职责是：
 
 ## 当前强制执行策略：全量 MCP Relay，不使用 Figma 侧远程工具主流程
 
-- Figma → Unity Prefab 的标准流程必须使用 `figmaMcpRelay` 驱动 `.figma/plugins/figma-mcp-relay` 插件完成 Figma 侧读取、图片导出、截图导出和结果回传。
+- Figma → Unity Prefab 的标准流程必须使用 `figmaMcpRelay` 驱动 `<relay-root>` 下的插件完成 Figma 侧读取、图片导出、截图导出和结果回传。
 - Figma MCP Relay 插件负责目标节点解析、节点树导出、图片资源导出、文本与颜色元数据导出、九宫图候选元数据、组件复用标记、截图导出和 Figma 侧校验。
 - MCP Relay 导出九宫图时必须携带 `sliceKind` 与 `sourceVisibleSize`：`9slice` 输出 `left+right+2 × top+bottom+2`；`h3slice` 输出 `left+right+2 × sourceVisibleSize.height`；`v3slice` 输出 `sourceVisibleSize.width × top+bottom+2`。父节点有 IMAGE fill 时优先使用父节点 `imageHash`，仅父节点缺失时才 fallback 到 `__slice_*` 子节点并记录 warning。
-- 每次运行本 skill 解析 Figma 前，必须优先由 `figmaMcpRelay.figma_health` 检查本地 companion；如果未运行，先启动 `.figma/plugins/figma-mcp-relay/start_mcp_companion.ps1 -Mode mcp`。
+- 每次运行本 skill 解析 Figma 前，必须优先由 `figmaMcpRelay.figma_health` 检查本地 companion；如果未运行，先执行 `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp`。
 - 专用 `figma_to_prefab_mcp_client.py` 是标准入口，内部调用 MCP Relay 提交导出请求、等待结果、保存 `figma_to_prefab_mcp_result.json`、`figma_node_manifest.json`、`image_export_manifest.json` 和 `mcp_screenshots/*.png`。
 - MCP 默认 endpoint 是 `http://127.0.0.1:32130/mcp`，插件 URL 默认是 `http://localhost:32130`；如果当前 MCP 配置使用其它端口，以配置为准。AI 不得直接 POST `/figma/pending`、`/figma/result` 或 `/assets/...`。
 - 标准流程禁止使用任何 Figma 侧远程工具承担节点读取、图片导出、截图或验证；如果 MCP Relay 环境不可用，必须停止并说明缺少的环境，不得自动切换到其它 Figma 通道。
@@ -245,9 +245,9 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
    - 如果这些参数和 `.tmp` 写入授权已在 step 2 同一批次确认过，则无需重复确认；否则必须先输出计划、影响文件、验证方式和风险并等待确认。
 5. 加载 Common_Texture 缓存索引 → 直接调用固化脚本生成 Spec：
    ```bash
-   python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/gen_spec.py --figma-url "..." --target-prefab "..." --target-image-dir "..." --output-audit-report JellybeanUnity/.tmp/spec_audit_report.json
+   python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" --figma-url "..." --target-prefab "..." --target-image-dir "..." --output-audit-report "<unity-project>/.tmp/spec_audit_report.json"
    ```
-   `gen_spec.py` 默认会自动检测本节点内 ComponentSet，命中时写出 `JellybeanUnity/.tmp/figma_component_specs/*.json` 和 `JellybeanUnity/.tmp/componentset_report.json`，并把主 spec 中对应业务实例改为 `PrefabInstance + activeVariant`。Component Prefab 内会按实例名最后一个 `_` 后的状态后缀去重；例如多个 `*_Locked` 只保留一个代表 Variant，主 spec 的重复状态实例通过 `activeVariant` 指向该代表 Variant。LLM 只读取 `spec_audit_report.json`、`componentset_report.json` 和脚本生成的 Markdown 摘要，不手工统计 manifest。
+   `gen_spec.py` 默认会自动检测本节点内 ComponentSet，命中时写出 `<unity-project>/.tmp/figma_component_specs/*.json` 和 `<unity-project>/.tmp/componentset_report.json`，并把主 spec 中对应业务实例改为 `PrefabInstance + activeVariant`。Component Prefab 内会按实例名最后一个 `_` 后的状态后缀去重；例如多个 `*_Locked` 只保留一个代表 Variant，主 spec 的重复状态实例通过 `activeVariant` 指向该代表 Variant。LLM 只读取 `spec_audit_report.json`、`componentset_report.json` 和脚本生成的 Markdown 摘要，不手工统计 manifest。
    `INSTANCE` 复用公共 Prefab 时必须优先使用 MCP Relay manifest 的 `component.componentName`、`mainComponentName`、`componentSetName`，最后才回退到 Figma 节点名；节点名如 `Help_Btn` 不得阻止命中 `Common_Prefab_TipBtn_1` 这类真实组件名。
    所有 `ImageSpec.targetDir` 与 `image_download_plan.images[].targetAssetPath` 必须通过脚本的 Unity 资产路径 join 逻辑生成，禁止用字符串相加拼 `Assets/...` 路径，避免 `Assets/.../ExportTimerBackplate.png` 这类漏斜杠路径。
    Unity GameObject 显示名会自动去掉 Figma 层级开头的数字排序前缀，例如 `75--ui--main--view` → `ui--main--view`。只移除开头纯数字加分隔符，不移除业务名中间的数字，例如 `Level_75_Reward` 不变。
@@ -261,17 +261,17 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
 
 ### 阶段二：执行（uLoop CLI 主导 Unity 写入与验证）
 
-**前置步骤 — 每次阶段二必做**：确认 Unity 工程路径为 `E:\Project\Work\JellybeanUnity\JellybeanUnity`，并使用 `uloop` CLI。不得调用 Gateway status，也不得根据其他工具返回结果猜测工程路径。
+**前置步骤 — 每次阶段二必做**：确认 Unity 工程路径并记为 `<unity-project>`，该目录必须包含 `Assets/` 和 `ProjectSettings/`；随后使用 `uloop` CLI。不得调用 Gateway status，也不得根据其他工具返回结果猜测工程路径。
 
 1. **并行合成九宫 + 导出图片** → 直接调用固化脚本：
    ```bash
-   python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/process_images.py --manifest-dir .tmp/figma-to-prefab --output-dir <targetImageDir> --workers 6 --output-report JellybeanUnity/.tmp/image_process_report.json
+   python "<relay-root>/ai/skills/figma-to-prefab/scripts/process_images.py" --unity-project "<unity-project>" --manifest-dir .tmp/figma-to-prefab --output-dir <targetImageDir> --workers 6 --output-report "<unity-project>/.tmp/image_process_report.json"
    ```
-   脚本负责：九宫 ThreadPool 并行合成或直接写入 MCP Relay 正确导出 → 普通图片 base64 解码 → Common_Texture 复用 → 文件名对齐。`--output-dir` 必须规范化到 Unity 工程目录；传入 `Assets/...` 时脚本应解析为 `JellybeanUnity/Assets/...`，并校验它与 `image_download_plan.json` 中非复用图片的 `targetAssetPath` 父目录一致，否则阻塞且不写文件。若 `targetAssetPath` 对应的 Unity PNG 已存在，必须直接复用现有文件，记录到 `existingImageReused` / `existingImageReuse`，禁止覆盖、删除后重建或重写 `.meta`。`white_1x1.png` 只允许在 Spec 实际引用 `builtin_white_1x1` 时创建；没有 SOLID fill 白像素引用时禁止创建。
+   脚本负责：九宫 ThreadPool 并行合成或直接写入 MCP Relay 正确导出 → 普通图片 base64 解码 → Common_Texture 复用 → 文件名对齐。`--output-dir` 必须规范化到 `<unity-project>`；传入 `Assets/...` 时脚本应解析为 `<unity-project>/Assets/...`，并校验它与 `image_download_plan.json` 中非复用图片的 `targetAssetPath` 父目录一致，否则阻塞且不写文件。若 `targetAssetPath` 对应的 Unity PNG 已存在，必须直接复用现有文件，记录到 `existingImageReused` / `existingImageReuse`，禁止覆盖、删除后重建或重写 `.meta`。`white_1x1.png` 只允许在 Spec 实际引用 `builtin_white_1x1` 时创建；没有 SOLID fill 白像素引用时禁止创建。
    `INSTANCE` 父节点没有直接导出图时，脚本必须自动解析到唯一/最大可导出的子节点，并在报告中写出 `plannedNodeId`、`resolvedExportNodeId`、`resolvedReason`。
    **如果 `image_process_report.json` 中 `nineSliceSizeMismatch` 或 `nineSliceOversize > 0`**：在用户已确认阶段二图片写入范围后，读取报告的 blockingErrors 九宫尺寸列表 → 调用固化裁剪脚本（AI 无需手工裁剪）：
    ```bash
-   python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/crop_jiugong.py --spec .tmp/prefab_spec.json --image-dir <targetImageDir>
+   python "<relay-root>/ai/skills/figma-to-prefab/scripts/crop_jiugong.py" --unity-project "<unity-project>" --spec .tmp/prefab_spec.json --image-dir <targetImageDir>
    ```
    裁剪脚本负责：从全尺寸九宫源图中提取 9 个切片区域，使用 CROP 算法重排为最小可拉伸 PNG（`L+R+2 × T+B+2`）。缺失的副本图（duplicateOf）自动从原图复制。
 2. **AssetDatabase.Refresh** → 使用 uLoop CLI 刷新 Unity 资源数据库：
@@ -281,7 +281,7 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
 3. **执行前门禁** → 读取 `image_process_report.json`，确认所有 spec image fileNames 对应的文件存在，且 `blockingErrors` 为空。
 4. **Unity Prefab 创建** → `uloop execute-dynamic-code` 反射调用 `FigmaPrefabGenerator.Generate(...)`
    - 如果 `componentset_report.json` 中存在 component specs，必须先按报告中的 `unitySpecPath` 逐个生成 component Prefab，再生成 `.tmp/prefab_spec.json`。
-   - `gen_spec.py` 会生成 `JellybeanUnity/.tmp/roslyn_import_plan.txt`，内容包含 `imageDir` 和按生成顺序排列的 `specPath`；执行前确认该文件存在，不要手改模板。
+   - `gen_spec.py` 会生成 `<unity-project>/.tmp/roslyn_import_plan.txt`，内容包含 `imageDir` 和按生成顺序排列的 `specPath`；执行前确认该文件存在，不要手改模板。
    - 以单次 CLI 动态代码执行完成图片导入设置和按 spec 顺序生成；不得拆分到其他 Unity 工具。
    - **反射调用固定模式**：动态代码仅包含直接语句，并通过反射调用 Editor 程序集。
      ```bash
@@ -289,7 +289,7 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
      ```
 5. **静态验证** → Python 快速扫描 Prefab YAML：
   ```bash
-  python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/verify_prefab.py --prefab <targetPrefabPath> --json
+  python "<relay-root>/ai/skills/figma-to-prefab/scripts/verify_prefab.py" --unity-project "<unity-project>" --prefab <targetPrefabPath> --json
   ```
   - `m_Sprite: {fileID: 0}` = 0
    - `m_RaycastTarget: 1` = 0（图片组件）
@@ -309,9 +309,10 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
      修复后重新运行 `verify_prefab.py` 确认 `autoSizeOff.count == totalTmp`。
 6. **Spec 契约验证（ComponentSet 必做）** → 对主 spec 和所有 component spec 运行结构门禁：
    ```bash
-   python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/verify_spec_contract.py \
-     --spec JellybeanUnity/.tmp/prefab_spec.json \
-     --spec JellybeanUnity/.tmp/figma_component_specs_4550_5956/Milestone.json \
+   python "<relay-root>/ai/skills/figma-to-prefab/scripts/verify_spec_contract.py" \
+     --unity-project "<unity-project>" \
+     --spec "<unity-project>/.tmp/prefab_spec.json" \
+     --spec "<unity-project>/.tmp/figma_component_specs_4550_5956/Milestone.json" \
      --expected-image-dir "Assets/_Resources/7日任务拆分_Images" \
      --expect-prefab-instance Milestone_1_100=prefab_Milestone \
      --json
@@ -340,7 +341,7 @@ AI 在阶段一生成的 `.tmp/prefab_spec.json` 是 AI 与 `FigmaPrefabGenerato
 
 ## 固化脚本（性能优化 v2）
 
-以下脚本已固化在 `.figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/`，阶段一/二直接调用，无需 AI 每次重写：
+以下脚本已固化在 `<relay-root>/ai/skills/figma-to-prefab/scripts/`，阶段一/二直接调用，无需 AI 每次重写：
 
 所有生产脚本都必须优先输出统一审核结构，供 LLM 只做审核、判断和纠错：
 
@@ -364,12 +365,12 @@ LLM 规则：
 ### `gen_spec.py` — 参数化 Spec 生成器
 
 ```bash
-python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/gen_spec.py \
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" \
   --figma-url "https://www.figma.com/design/FILE/NAME?node-id=1-2" \
   --target-prefab "Assets/_Resources/Sharders/UI_X.prefab" \
   --target-image-dir "Assets/_Art/Texture/GUI/Sharders/" \
   --prefab-name "UI_X" \
-  --output-audit-report "JellybeanUnity/.tmp/spec_audit_report.json"
+  --output-audit-report "<unity-project>/.tmp/spec_audit_report.json"
 ```
 
 功能：九宫识别 → 去重 → INSTANCE 处理 → Hash 去重 → 名称+尺寸兜底去重 → 坐标转换 → Spec + DownloadPlan 输出
@@ -380,11 +381,12 @@ python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/gen_spec
 ### `process_images.py` — 并行图片处理
 
 ```bash
-python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/process_images.py \
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/process_images.py" \
+  --unity-project "<unity-project>" \
   --manifest-dir .tmp/figma-to-prefab \
-  --output-dir JellybeanUnity/Assets/_Art/Texture/GUI/Sharders \
+  --output-dir Assets/_Art/Texture/GUI/Sharders \
   --workers 6 \
-  --output-report JellybeanUnity/.tmp/image_process_report.json
+  --output-report "<unity-project>/.tmp/image_process_report.json"
 ```
 
 功能：ThreadPool 并行九宫合成（默认 6 线程）→ 普通图片 base64 解码 → Common_Texture 复制
@@ -394,8 +396,8 @@ python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/process_
 ### `common_texture.py` — 公共贴图缓存索引
 
 ```bash
-python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/common_texture.py  # 构建/读取缓存
-python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/common_texture.py --query "Common_Texture_Lock"  # 查询
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/common_texture.py" --unity-project "<unity-project>"  # 构建/读取缓存
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/common_texture.py" --unity-project "<unity-project>" --query "Common_Texture_Lock"  # 查询
 ```
 
 功能：首次扫描 `_Common/` 目录 216 个 PNG → 写入 `.tmp/common_texture_index.json`；后续通过文件数量校验自动增量更新
@@ -420,20 +422,21 @@ python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/common_t
 #### `verify_prefab.py` — Prefab YAML 静态验证器
 
 ```bash
-python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/verify_prefab.py --prefab Assets/_Resources/Sharders/<targetPrefab>.prefab
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/verify_prefab.py" --unity-project "<unity-project>" --prefab Assets/_Resources/Sharders/<targetPrefab>.prefab
 # 或 --json 输出机器可读格式
 ```
 
 功能：读取 Prefab YAML → 检测 m_Sprite{fileID:0} / RaycastTarget / AutoSize / TMP默认字体 → 输出 ✅/❌ 通过状态
 报告：JSON 模式包含 `allPass`、`blockingErrors`、`warnings`、`summary`、`checks`、`artifacts`
-保存规则：导入主流程必须把 JSON 验证报告写入 `JellybeanUnity/.tmp/verify_prefab_result.json`；benchmark 只可把它复制到 `Runs/iter_xxx/artifacts/` 证据目录。禁止把 `verify_prefab_result.json` 直接写入 Unity `Assets/...` 测试根目录或业务资源目录，避免 Unity 把验证报告当资产导入。
-路径规则：脚本会自动解析 Unity 工程根；从仓库根或 `JellybeanUnity/` 工程根运行时，`--prefab Assets/...` 都必须解析到同一个磁盘 Prefab。不得因为当前工作目录不同手工拼 `JellybeanUnity/Assets/...`。
+保存规则：导入主流程必须把 JSON 验证报告写入 `<unity-project>/.tmp/verify_prefab_result.json`；benchmark 只可把它复制到 `Runs/iter_xxx/artifacts/` 证据目录。禁止把 `verify_prefab_result.json` 直接写入 Unity `Assets/...` 测试根目录或业务资源目录，避免 Unity 把验证报告当资产导入。
+路径规则：脚本通过 `--unity-project "<unity-project>"` 或 `FIGMA_UNITY_PROJECT` 解析 Unity 工程根；`--prefab Assets/...` 必须解析到该工程内同一个磁盘 Prefab。不得根据当前工作目录手工拼接工程名称前缀。
 耗时：<0.1s
 
 #### `run_import_benchmark.py` — 50 次导入基准测试
 
 ```bash
-python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/run_import_benchmark.py \
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/run_import_benchmark.py" \
+  --unity-project "<unity-project>" \
   --figma-url "https://www.figma.com/design/FILE/NAME?node-id=1-2" \
   --iterations 50 \
   --modes reuse-manifest
@@ -448,7 +451,7 @@ python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/run_impo
 #### `gen_spec.py --output-report` — Markdown 确认报告
 
 ```bash
-python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/gen_spec.py ... --output-report .tmp/confirmation_report.md
+python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output-report .tmp/confirmation_report.md
 ```
 
 功能：生成 AI 可直接展示的 Markdown 确认报告（含九宫门禁表、去重汇总、影响文件）
@@ -510,8 +513,8 @@ python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/gen_spec
 - **MCP Relay 请求路径**：`.tmp/figma-to-prefab/figma_to_prefab_request.json`。
 - **MCP Relay 输出路径**：`.tmp/figma-to-prefab/figma_node_manifest.json`、`.tmp/figma-to-prefab/image_export_manifest.json`、`.tmp/figma-to-prefab/figma_to_prefab_mcp_result.json`、`.tmp/figma-to-prefab/mcp_screenshots/`。
 - **MCP Relay Client 命令**：标准入口，内部调用 MCP。Windows 环境优先使用 `python`：`python .claude\skills\figma-to-prefab\scripts\figma_to_prefab_mcp_client.py --request .tmp\figma-to-prefab\figma_to_prefab_request.json --result .tmp\figma-to-prefab\figma_to_prefab_mcp_result.json`。
-- **Spec 路径**：从仓库根目录写入 `JellybeanUnity/.tmp/prefab_spec.json`；在 Unity 工程根目录 `JellybeanUnity/` 的上下文中通过 `uloop execute-dynamic-code` 调用 `FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")`。命令必须显式传入 `--project-path "E:\Project\Work\JellybeanUnity\JellybeanUnity"`，禁止猜测工程路径或混用仓库根/Unity 工程根相对路径。
-- **图片处理**：阶段二必须调用 `process_images.py` 读取 MCP Relay manifest/base64 并写入 PNG；`ImageSpec` 不包含下载 URL，必须同时生成 `JellybeanUnity/.tmp/image_download_plan.json` 作为脚本侧校验契约。禁止 LLM 手写 PowerShell 下载循环。
+- **Spec 路径**：写入 `<unity-project>/.tmp/prefab_spec.json`；在 `<unity-project>` 上下文中通过 `uloop execute-dynamic-code` 调用 `FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")`。命令必须显式传入 `--project-path "<unity-project>"`，禁止猜测工程路径或混用 Relay 根/Unity 工程根相对路径。
+- **图片处理**：阶段二必须调用 `process_images.py` 读取 MCP Relay manifest/base64 并写入 PNG；`ImageSpec` 不包含下载 URL，必须同时生成 `<unity-project>/.tmp/image_download_plan.json` 作为脚本侧校验契约。禁止 LLM 手写 PowerShell 下载循环。
 - **JSON UTF-8 规则**：修改带中文的 spec、plan、manifest 或报告 JSON 时，只能使用 Python 读写，并显式 `encoding="utf-8-sig"` 读取、`encoding="utf-8"` 写入。禁止用 PowerShell `ConvertFrom-Json` / `ConvertTo-Json` / `Set-Content` 改写这类 JSON，避免中文节点名被转码破坏。
 - **禁止手动转录**：不得从终端输出手抄坐标、尺寸、颜色、文本或图片 hash 到 Spec；必须由脚本从 MCP Relay manifest 生成 Spec 或下载计划。
 - **父子相对坐标硬规则**：`prefab_spec.json` 中除根节点外，所有 `NodeSpec.rect.x/y` 必须是相对**直接 Unity 父节点**的 anchoredPosition，不得统一使用相对 Figma 根节点的坐标。因为 `FigmaPrefabGenerator.BuildNodeTree()` 会按 `childIndices` 递归挂载子节点，`ApplyRectTransform()` 会直接把 `node.rect.x/y` 写入当前父节点下的 `RectTransform.anchoredPosition`。如果子节点仍使用根坐标，会导致整批 UI 位置叠加父节点偏移而全部错乱。
@@ -563,15 +566,15 @@ python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/gen_spec
 
 ## Environment Checks
 
-- Confirm `.figma/plugins/figma-mcp-relay/` exists.
-- Confirm `.figma/plugins/figma-mcp-relay/server/figma_mcp_relay_server.py` exists.
-- Confirm `.figma/plugins/figma-mcp-relay/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_hierarchy_cleanup_mcp_client.py` exists when the Figma node still needs cleanup.
-- Confirm `.figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/figma_to_prefab_mcp_client.py` exists.
+- Confirm `<relay-root>/` exists.
+- Confirm `<relay-root>/server/figma_mcp_relay_server.py` exists.
+- Confirm `<relay-root>/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_hierarchy_cleanup_mcp_client.py` exists when the Figma node still needs cleanup.
+- Confirm `<relay-root>/ai/skills/figma-to-prefab/scripts/figma_to_prefab_mcp_client.py` exists.
 - Confirm `figmaMcpRelay.figma_health` succeeds（轻量只读查询，直接 MCP tool 即可）。
 - Confirm Figma Desktop has opened the target file and the MCP Relay plugin is connected before submitting export requests.
-- Confirm `JellybeanUnity/Assets/` exists.
-- Confirm `JellybeanUnity/.tmp/` exists or create it only after user confirmed Unity-side writes.
-- Confirm `JellybeanUnity/Assets/MagicWarrior/Scripts/Editor/FigmaMcpRelay/PrefabImport/FigmaPrefabGenerator.cs` exists.
+- Confirm `<unity-project>/Assets/` and `<unity-project>/ProjectSettings/` exist.
+- Confirm `<unity-project>/.tmp/` exists or create it only after user confirmed Unity-side writes.
+- Confirm `<unity-project>/Assets/MagicWarrior/Scripts/Editor/FigmaMcpRelay/PrefabImport/FigmaPrefabGenerator.cs` exists.
 - Confirm `uloop execute-dynamic-code --help` and `uloop compile --help` are available before Unity-side writes.
 - Do not start Unity until the task is in validation and the user has confirmed Unity-side writes.
 - Do not auto-install dependencies.
@@ -606,7 +609,7 @@ python .figma/plugins/figma-mcp-relay/ai/skills/figma-to-prefab/scripts/gen_spec
 ## Validation
 
 - Validate this skill after edits:
-  `$env:PYTHONUTF8='1'; python C:\Users\li182\.codex\skills\.system\skill-creator\scripts\quick_validate.py .figma\plugins\figma-mcp-relay\ai\skills\figma-to-prefab`
+  `node --test "<relay-root>/tests/path-portability.test.mjs"`
 - Report validation by phase. If a phase was skipped, blocked, or not applicable, say so explicitly; never infer Unity loadability, image importer correctness, compile health, or screenshot fidelity from an earlier Figma/export/spec phase.
 - Confirm the Figma hierarchy cleanup precondition was satisfied before export: MCP Relay/analyze reported the target root `directChildCount <= 15`, or the user confirmed running cleanup for `directChildCount > 15` and `$figma-hierarchy-cleanup-mcp` completed apply + verify with `allPass == true` and empty `blockingErrors`.
 - Confirm MCP Relay result status is `completed`, `blockingErrors` is empty, exported node count matches expected node count, and screenshot path exists.

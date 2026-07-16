@@ -234,7 +234,7 @@ Text 裁切风险：textAutoResize/lineHeight，通过/失败
 运行 `scripts/submit_psd_import_job.py` 自动生成正确格式并提交：
 
 ```powershell
-python .figma/plugins/figma-mcp-relay/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py `
+python "<relay-root>/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py" `
   .tmp/psd-layer-to-figma/psd_layers_xxx/manifest_summary.json `
   --root-name "source.psd_myname" `
   --file-key "ly2b1kkcvLtNBFPSQi4XO4" `
