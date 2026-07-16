@@ -402,15 +402,13 @@ namespace MagicWarrior.Editor.FigmaBridge
         // ─────────────────────── 工具方法 ───────────────────────
 
         /// <summary>
-        /// 将 Unity 资源路径转换为仓库相对路径。
+        /// 将 Unity 资源路径转换为跨进程使用的 Assets 路径。
         /// </summary>
         /// <param name="assetPath">Unity 资源路径，如 Assets/MagicWarrior/...</param>
-        /// <returns>仓库相对路径，如 JellybeanUnity/Assets/MagicWarrior/...</returns>
+        /// <returns>Unity 资源路径，如 Assets/MagicWarrior/...</returns>
         private static string GetRepoPrefabPath(string assetPath)
         {
-            if (assetPath.StartsWith("Assets/", System.StringComparison.Ordinal))
-                return "JellybeanUnity/" + assetPath;
-            return assetPath;
+            return (assetPath ?? "").Replace('\\', '/');
         }
 
         /// <summary>
@@ -425,8 +423,8 @@ namespace MagicWarrior.Editor.FigmaBridge
         {
             try
             {
-                string repoRoot = FindRepoRoot();
-                string outputDir = Path.Combine(repoRoot, TriggerOutputDir);
+                string unityProjectRoot = FindUnityProjectRoot();
+                string outputDir = Path.Combine(unityProjectRoot, TriggerOutputDir);
                 Directory.CreateDirectory(outputDir);
 
                 string timestamp = System.DateTime.UtcNow.ToString("yyyyMMddHHmmss");
@@ -479,14 +477,13 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// 查找仓库根目录。
+        /// 查找当前 Unity 项目根目录。
         /// </summary>
-        private static string FindRepoRoot()
+        private static string FindUnityProjectRoot()
         {
             string dataPath = Application.dataPath;
             string unityRoot = Path.GetDirectoryName(dataPath);
-            string repoRoot = Path.GetDirectoryName(unityRoot);
-            return repoRoot ?? unityRoot ?? dataPath;
+            return unityRoot ?? dataPath;
         }
 
         /// <summary>

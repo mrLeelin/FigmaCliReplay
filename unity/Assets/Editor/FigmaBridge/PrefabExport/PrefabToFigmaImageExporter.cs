@@ -392,16 +392,11 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// 输出与 Python parser 一致的仓库相对资源路径。
+        /// 输出 Unity 原生 Assets 资源路径。
         /// </summary>
         private static string NormalizeAssetPath(string assetPath)
         {
-            if (assetPath.StartsWith("Assets/", StringComparison.Ordinal))
-            {
-                return "JellybeanUnity/" + assetPath;
-            }
-
-            return assetPath.Replace('\\', '/');
+            return (assetPath ?? string.Empty).Replace('\\', '/');
         }
 
         /// <summary>

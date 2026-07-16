@@ -141,16 +141,11 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// 输出与 Python parser 兼容的仓库相对 Prefab 路径。
+        /// 输出 Unity 原生 Assets Prefab 路径。
         /// </summary>
         private static string NormalizePrefabPath(string prefabPath)
         {
-            if (prefabPath.StartsWith("Assets/", StringComparison.Ordinal))
-            {
-                return "JellybeanUnity/" + prefabPath;
-            }
-
-            return prefabPath.Replace('\\', '/');
+            return (prefabPath ?? string.Empty).Replace('\\', '/');
         }
 
         /// <summary>

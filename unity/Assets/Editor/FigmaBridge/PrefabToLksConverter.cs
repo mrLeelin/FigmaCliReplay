@@ -26,16 +26,11 @@ namespace MagicWarrior.Editor.FigmaBridge
     ///   - image.mode == "simple"     → imageType: "Simple"
     ///   - text.fontColor (r,g,b 0-1) → "#RRGGBB"
     ///   - alignment 数值 → "center-middle" 等组合字符串
-    ///   - assets[guid].assetPath 去掉 "JellybeanUnity/" 前缀 → sourceAssetPath
+    ///   - assets[guid].assetPath 归一化为 Assets/... → sourceAssetPath
     ///   - 节点 kind 推断：有 image → "image"，有 text → "text"，否则 "frame"
     /// </summary>
     public static class PrefabToLksConverter
     {
-        // ─────────────────────── 常量 ───────────────────────
-
-        /// <summary>Unity 项目路径前缀，转换时需要去掉</summary>
-        private const string UnityProjectPrefix = "JellybeanUnity/";
-
         // ─────────────────────── 公共接口 ───────────────────────
 
         /// <summary>
@@ -190,9 +185,9 @@ namespace MagicWarrior.Editor.FigmaBridge
             string guid = img.asset ?? img.guid ?? "";
             assetsMap.TryGetValue(guid, out var assetInfo);
 
-            // sourceAssetPath：去掉 "JellybeanUnity/" 前缀
+            // sourceAssetPath：统一为 Unity 原生 Assets 路径
             string rawAssetPath = assetInfo.assetPath ?? "";
-            string sourceAssetPath = StripUnityPrefix(rawAssetPath);
+            string sourceAssetPath = NormalizeAssetPath(rawAssetPath);
 
             // relativePath = "assets/" + 文件名
             string fileName = Path.GetFileName(sourceAssetPath);
@@ -201,10 +196,10 @@ namespace MagicWarrior.Editor.FigmaBridge
             // 收集图片条目
             if (!string.IsNullOrEmpty(relativePath) && !string.IsNullOrEmpty(rawAssetPath))
             {
-                string repoRoot = FindRepoRoot();
-                string absolutePath = string.IsNullOrEmpty(repoRoot)
+                string unityProjectRoot = FindUnityProjectRoot();
+                string absolutePath = string.IsNullOrEmpty(unityProjectRoot)
                     ? rawAssetPath
-                    : Path.GetFullPath(Path.Combine(repoRoot, rawAssetPath));
+                    : Path.GetFullPath(Path.Combine(unityProjectRoot, sourceAssetPath));
 
                 images.Add(new ImageEntry
                 {
@@ -420,36 +415,49 @@ namespace MagicWarrior.Editor.FigmaBridge
         // ─────────────────────── 工具方法 ───────────────────────
 
         /// <summary>
-        /// 去掉路径中的 "JellybeanUnity/" 前缀。
+        /// 接受 Assets/... 或单段旧项目名前缀，并统一返回 Assets/...。
         /// </summary>
-        private static string StripUnityPrefix(string path)
+        private static string NormalizeAssetPath(string path)
         {
             if (string.IsNullOrEmpty(path))
-                return path;
+                return "";
 
-            if (path.StartsWith(UnityProjectPrefix, StringComparison.Ordinal))
-                return path.Substring(UnityProjectPrefix.Length);
+            string normalized = path.Replace('\\', '/').Trim();
+            if (Path.IsPathRooted(normalized) || normalized.StartsWith("/", StringComparison.Ordinal))
+                return "";
 
-            return path;
+            string[] segments = normalized.Split('/');
+            for (int i = 0; i < segments.Length; i++)
+            {
+                if (string.IsNullOrEmpty(segments[i]) || segments[i] == "." || segments[i] == "..")
+                    return "";
+            }
+
+            int firstSlash = normalized.IndexOf('/');
+            if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) &&
+                firstSlash > 0 &&
+                normalized.Substring(firstSlash + 1).StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(firstSlash + 1);
+            }
+
+            if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                return "";
+
+            return normalized;
         }
 
         /// <summary>
-        /// 查找仓库根目录（包含 JellybeanUnity 的上级目录）。
+        /// 查找当前 Unity 项目根目录。
         /// </summary>
-        private static string FindRepoRoot()
+        private static string FindUnityProjectRoot()
         {
-            // Application.dataPath = ".../JellybeanUnity/Assets"
             string dataPath = Application.dataPath;
             if (string.IsNullOrEmpty(dataPath))
                 return "";
 
-            // 向上两级：Assets → JellybeanUnity → 仓库根
             string unityRoot = Path.GetDirectoryName(dataPath);
-            if (string.IsNullOrEmpty(unityRoot))
-                return "";
-
-            string repoRoot = Path.GetDirectoryName(unityRoot);
-            return repoRoot ?? "";
+            return unityRoot ?? "";
         }
 
         /// <summary>

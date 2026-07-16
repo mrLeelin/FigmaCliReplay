@@ -29,10 +29,19 @@ System.Func<string, string> normalizeProjectPath = rawPath =>
         return rawPath;
     }
 
-    var normalized = rawPath.Replace("\\", "/");
-    if (normalized.StartsWith("JellybeanUnity/", System.StringComparison.Ordinal))
+    var normalized = rawPath.Replace("\\", "/").Trim();
+    var segments = normalized.Split('/');
+    if (System.Array.Exists(segments, segment => segment == "." || segment == ".."))
     {
-        normalized = normalized.Substring("JellybeanUnity/".Length);
+        throw new System.Exception("Project path cannot contain traversal segments: " + rawPath);
+    }
+
+    var firstSlash = normalized.IndexOf('/');
+    if (!normalized.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase) &&
+        firstSlash > 0 &&
+        normalized.Substring(firstSlash + 1).StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase))
+    {
+        normalized = normalized.Substring(firstSlash + 1);
     }
 
     return normalized;

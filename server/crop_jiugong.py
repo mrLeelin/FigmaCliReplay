@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -16,23 +17,32 @@ except ImportError:
     HAS_PIL = False
 
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-
-
-def find_repository_root(start_path: Path) -> Path:
-    """从源码或打包产物目录向上定位同时包含 .figma 与 Unity 工程的仓库根目录。"""
-    for candidate in (start_path, *start_path.parents):
-        if (candidate / ".figma").is_dir() and (candidate / "JellybeanUnity" / "Assets").is_dir():
-            return candidate
-    return start_path
-
-
-REPOSITORY_ROOT = find_repository_root(PLUGIN_ROOT)
-UNITY_PROJECT_ROOT = REPOSITORY_ROOT / "JellybeanUnity"
+def resolve_unity_project_root(payload: Dict[str, Any]) -> Path:
+    """Resolve an explicitly configured Unity project and validate its markers."""
+    raw = str(
+        payload.get("unityProjectPath")
+        or payload.get("unityProjectRoot")
+        or os.environ.get("FIGMA_UNITY_PROJECT")
+        or ""
+    ).strip()
+    if not raw:
+        raise ValueError(
+            "Unity project is required: pass unityProjectPath/unityProjectRoot or set FIGMA_UNITY_PROJECT"
+        )
+    root = Path(raw).expanduser().resolve()
+    missing = [name for name in ("Assets", "ProjectSettings") if not (root / name).is_dir()]
+    if missing:
+        raise ValueError(f"Invalid Unity project {root}: missing {', '.join(missing)}")
+    return root
 
 
 def crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
     """处理 Figma 九宫导出请求，裁切图片并写入 Unity Sprite meta。"""
+    try:
+        unity_project_root = resolve_unity_project_root(payload)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "diagnostics": ["fail=invalid Unity project"]}
+
     diagnostics = [
         f"payloadKeys={','.join(sorted(str(key) for key in payload.keys()))}",
         f"targetDirRaw={payload.get('targetDir') or ''}",
@@ -47,7 +57,7 @@ def crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not target_dir:
         diagnostics.append("fail=missing targetDir")
         return {"ok": False, "error": "missing targetDir", "diagnostics": diagnostics}
-    target_path = resolve_export_target_dir(target_dir)
+    target_path = resolve_export_target_dir(target_dir, unity_project_root)
     if not target_path:
         diagnostics.append(f"fail=targetDir not found targetDir={target_dir}")
         return {"ok": False, "error": f"targetDir not found: {target_dir}", "diagnostics": diagnostics}
@@ -66,7 +76,7 @@ def crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "targetDir": str(target_path), "imported": [], "errors": [
                 f"Unity 当前选中图片时只能覆盖 1 张九宫图，当前收到 {len(images)} 张。"
             ], "importedCount": 0, "errorCount": 1, "diagnostics": diagnostics}
-        replace_path = resolve_unity_asset_path(replace_asset_path)
+        replace_path = resolve_unity_asset_path(replace_asset_path, unity_project_root)
         diagnostics.append(f"resolvedReplacePath={replace_path or '<none>'}")
         if not replace_path:
             return {"ok": False, "targetDir": str(target_path), "imported": [], "errors": [
@@ -79,7 +89,12 @@ def crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
     errors = []
     for index, img in enumerate(images):
         try:
-            result = _process_one_image(img, target_path, replace_path if index == 0 else None)
+            result = _process_one_image(
+                img,
+                target_path,
+                unity_project_root,
+                replace_path if index == 0 else None,
+            )
             diagnostics.extend(result.get("diagnostics", []))
             if result.get("error"):
                 errors.append(f"{img.get('fileName', '?')}: {result['error']}")
@@ -96,24 +111,23 @@ def crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
             "diagnostics": diagnostics}
 
 
-def resolve_export_target_dir(target_dir: str) -> Optional[Path]:
+def resolve_export_target_dir(target_dir: str, unity_project_root: Path) -> Optional[Path]:
     """解析导出目标目录，兼容 MCP Relay 从插件目录启动时传入的 Unity 相对路径。"""
     raw_path = Path(target_dir).expanduser()
-    if raw_path.is_absolute():
-        candidates = [raw_path]
-    else:
-        candidates = [
-            UNITY_PROJECT_ROOT / raw_path,
-            REPOSITORY_ROOT / raw_path,
-            raw_path,
-        ]
+    candidates = [raw_path] if raw_path.is_absolute() else [unity_project_root / raw_path]
+    assets_root = (unity_project_root / "Assets").resolve()
     for candidate in candidates:
-        if candidate.exists() and candidate.is_dir():
-            return candidate.resolve()
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(assets_root)
+        except ValueError:
+            continue
+        if resolved.exists() and resolved.is_dir():
+            return resolved
     return None
 
 
-def resolve_unity_asset_path(asset_path: str) -> Optional[Path]:
+def resolve_unity_asset_path(asset_path: str, unity_project_root: Path) -> Optional[Path]:
     """解析 Unity Assets 相对路径，并限制只能覆盖常见图片资源。"""
     if not asset_path:
         return None
@@ -123,8 +137,8 @@ def resolve_unity_asset_path(asset_path: str) -> Optional[Path]:
     suffix = Path(normalized).suffix.lower()
     if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".tga"}:
         return None
-    full_path = (UNITY_PROJECT_ROOT / normalized).resolve()
-    assets_root = (UNITY_PROJECT_ROOT / "Assets").resolve()
+    full_path = (unity_project_root / normalized).resolve()
+    assets_root = (unity_project_root / "Assets").resolve()
     try:
         full_path.relative_to(assets_root)
     except ValueError:
@@ -134,7 +148,12 @@ def resolve_unity_asset_path(asset_path: str) -> Optional[Path]:
     return full_path
 
 
-def _process_one_image(img: Dict[str, Any], target_path: Path, replace_path: Optional[Path] = None) -> Dict[str, Any]:
+def _process_one_image(
+    img: Dict[str, Any],
+    target_path: Path,
+    unity_project_root: Path,
+    replace_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     """处理单张图片：解码 base64、九宫裁切、写 PNG 和 .meta。"""
     diagnostics = [
         f"process fileName={img.get('fileName', '?')} replace={replace_path is not None}",
@@ -182,14 +201,19 @@ def _process_one_image(img: Dict[str, Any], target_path: Path, replace_path: Opt
         meta_mode = _write_meta(out_path, 0, 0, 0, 0, update_existing_meta)
         diagnostics.append(f"metaMode={meta_mode}")
 
-    diagnostics.append(f"relativePath={_unity_relative_path(out_path) if replace_path else file_name}")
-    return {"relativePath": _unity_relative_path(out_path) if replace_path else file_name, "diagnostics": diagnostics}
+    diagnostics.append(
+        f"relativePath={_unity_relative_path(out_path, unity_project_root) if replace_path else file_name}"
+    )
+    return {
+        "relativePath": _unity_relative_path(out_path, unity_project_root) if replace_path else file_name,
+        "diagnostics": diagnostics,
+    }
 
 
-def _unity_relative_path(path: Path) -> str:
+def _unity_relative_path(path: Path, unity_project_root: Path) -> str:
     """把绝对路径转成 Unity 资源相对路径，失败时退回文件名。"""
     try:
-        return str(path.resolve().relative_to(UNITY_PROJECT_ROOT)).replace("\\", "/")
+        return str(path.resolve().relative_to(unity_project_root)).replace("\\", "/")
     except ValueError:
         return path.name
 

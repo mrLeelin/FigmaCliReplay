@@ -9,7 +9,7 @@ PSD 导入 Figma Job 提交脚本。
 本脚本通过共享 MCP client 调用 figmaMcpRelay；本地 HTTP/WebSocket 仅属于 companion 内部 transport。
 
 用法：
-  python .figma/plugins/figma-mcp-relay/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py ^
+  python "<relay-root>/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py" ^
     .tmp/psd-layer-to-figma/psd_layers_xxx/manifest_summary.json ^
     --root-name "source.psd_xxx" ^
     --wait
@@ -36,11 +36,11 @@ PSD 导入 Figma Job 提交脚本。
 
 示例：
   提交并等待结果：
-    python .figma/plugins/figma-mcp-relay/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py ^
+    python "<relay-root>/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py" ^
       .tmp/psd-layers/manifest_summary.json --root-name "source.psd_mydesign" --wait
 
   只生成 payload 不提交（调试用）：
-    python .figma/plugins/figma-mcp-relay/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py ^
+    python "<relay-root>/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py" ^
       .tmp/psd-layers/manifest_summary.json --output debug_payload.json
 """
 
@@ -55,15 +55,15 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-def find_project_root() -> Path:
+def find_relay_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / ".figma" / "plugins" / "figma-mcp-relay").is_dir() and (parent / "JellybeanUnity").is_dir():
+        if (parent / "client" / "figma_mcp_client.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the JellybeanUnity repository root.")
+    raise RuntimeError("Unable to locate the Figma MCP Relay root.")
 
 
-PROJECT_ROOT = find_project_root()
-MCP_CLIENT_DIR = PROJECT_ROOT / ".figma" / "plugins" / "figma-mcp-relay" / "client"
+RELAY_ROOT = find_relay_root()
+MCP_CLIENT_DIR = RELAY_ROOT / "client"
 if str(MCP_CLIENT_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_CLIENT_DIR))
 

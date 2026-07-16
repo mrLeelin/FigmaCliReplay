@@ -470,11 +470,11 @@ namespace MagicWarrior.Editor.FigmaBridge
             AddLog($"[FigmaBridge] 开始导出 Prefab：{prefabPath}");
 
             string prefabName = Path.GetFileNameWithoutExtension(prefabPath);
-            string repoRoot = FindRepoRoot();
-            string outputDir = Path.Combine(repoRoot, TmpOutputPrefix + prefabName);
+            string unityProjectRoot = FindUnityProjectRoot();
+            string outputDir = Path.Combine(unityProjectRoot, TmpOutputPrefix + prefabName);
 
             string parserError;
-            if (!RunCSharpExporter(repoRoot, prefabPath, outputDir, out parserError))
+            if (!RunCSharpExporter(unityProjectRoot, prefabPath, outputDir, out parserError))
             {
                 AddLog($"[FigmaBridge] C# 导出失败：{parserError}");
                 RespondJson(ctx.Response, 500,
@@ -1286,10 +1286,26 @@ namespace MagicWarrior.Editor.FigmaBridge
                 return "";
             }
 
-            const string unityProjectPrefix = "JellybeanUnity/Assets/";
-            if (normalized.StartsWith(unityProjectPrefix, StringComparison.OrdinalIgnoreCase))
+            if (Path.IsPathRooted(normalized) || normalized.StartsWith("/", StringComparison.Ordinal))
             {
-                normalized = "Assets/" + normalized.Substring(unityProjectPrefix.Length);
+                return "";
+            }
+
+            string[] segments = normalized.Split('/');
+            for (int i = 0; i < segments.Length; i++)
+            {
+                if (string.IsNullOrEmpty(segments[i]) || segments[i] == "." || segments[i] == "..")
+                {
+                    return "";
+                }
+            }
+
+            int firstSlash = normalized.IndexOf('/');
+            if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) &&
+                firstSlash > 0 &&
+                normalized.Substring(firstSlash + 1).StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(firstSlash + 1);
             }
 
             if (!normalized.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
@@ -1412,15 +1428,20 @@ namespace MagicWarrior.Editor.FigmaBridge
             // 回退：尝试用 sourceAssetPath 拼接绝对路径
             if (!string.IsNullOrEmpty(sourceAssetPath))
             {
-                string repoRoot = FindRepoRoot();
-                string fullPath;
-                if (sourceAssetPath.StartsWith("Assets/", StringComparison.Ordinal))
-                    fullPath = Path.Combine(repoRoot, "JellybeanUnity", sourceAssetPath);
-                else
-                    fullPath = Path.Combine(repoRoot, sourceAssetPath);
-
-                if (File.Exists(fullPath))
-                    return fullPath;
+                string normalizedAssetPath = NormalizeUnityPrefabAssetPath(sourceAssetPath);
+                if (!string.IsNullOrEmpty(normalizedAssetPath))
+                {
+                    try
+                    {
+                        string fullPath = AssetPathToAbsolutePath(normalizedAssetPath);
+                        if (File.Exists(fullPath))
+                            return fullPath;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return null;
+                    }
+                }
             }
 
             return null;
@@ -1687,15 +1708,13 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// 查找仓库根目录（JellybeanUnity 的上级目录）。
+        /// 查找当前 Unity 项目根目录。
         /// </summary>
-        private static string FindRepoRoot()
+        private static string FindUnityProjectRoot()
         {
-            // Application.dataPath = ".../JellybeanUnity/Assets"
             string dataPath = Application.dataPath;
             string unityRoot = Path.GetDirectoryName(dataPath);
-            string repoRoot = Path.GetDirectoryName(unityRoot);
-            return repoRoot ?? unityRoot ?? dataPath;
+            return unityRoot ?? dataPath;
         }
 
         /// <summary>

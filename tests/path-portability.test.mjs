@@ -134,6 +134,83 @@ test("an explicitly named Unity project overrides an invalid environment default
   }
 });
 
+test("legacy relay normalizes one generic project prefix to Assets paths", () => {
+  const probe = [
+    "import json, sys",
+    `sys.path.insert(0, ${JSON.stringify(path.join(repoRoot, "server"))})`,
+    "from figma_mcp_relay_server import normalize_prefab_import_paths",
+    "print(json.dumps(normalize_prefab_import_paths(['Assets/UI/A.prefab', 'PortableGame/Assets/UI/B.prefab', '../Assets/UI/C.prefab', 'C:/Game/Assets/UI/D.prefab'])))"
+  ].join("; ");
+  const result = spawnSync("python", ["-c", probe], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    timeout: pythonTimeoutMs,
+    env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }
+  });
+
+  assert.equal(result.status, 0, formatSpawnFailure(result));
+  assert.deepEqual(JSON.parse(result.stdout), ["Assets/UI/A.prefab", "Assets/UI/B.prefab"]);
+});
+
+test("legacy crop resolves Assets only inside an explicitly supplied Unity project", () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "relay-crop-"));
+  const unityProject = path.join(fixtureRoot, "PortableGame");
+  const assetPath = path.join(unityProject, "Assets", "UI", "image.png");
+
+  try {
+    fs.mkdirSync(path.dirname(assetPath), { recursive: true });
+    fs.mkdirSync(path.join(unityProject, "ProjectSettings"));
+    fs.writeFileSync(assetPath, "fixture");
+    const probe = [
+      "import json, sys",
+      `sys.path.insert(0, ${JSON.stringify(path.join(repoRoot, "server"))})`,
+      "from crop_jiugong import resolve_export_target_dir, resolve_unity_project_root, resolve_unity_asset_path",
+      `root = resolve_unity_project_root({'unityProjectPath': ${JSON.stringify(unityProject)}})`,
+      "valid = resolve_unity_asset_path('Assets/UI/image.png', root)",
+      "invalid = resolve_unity_asset_path('../Assets/UI/image.png', root)",
+      "invalid_target = resolve_export_target_dir('ProjectSettings', root)",
+      "print(json.dumps({'root': str(root), 'valid': str(valid), 'invalid': invalid is None, 'invalidTarget': invalid_target is None}))"
+    ].join("; ");
+    const result = spawnSync("python", ["-c", probe], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      timeout: pythonTimeoutMs,
+      env: { ...process.env, FIGMA_UNITY_PROJECT: path.join(fixtureRoot, "Missing"), PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }
+    });
+
+    assert.equal(result.status, 0, formatSpawnFailure(result));
+    const resolved = JSON.parse(result.stdout);
+    assert.equal(path.resolve(resolved.root), path.resolve(unityProject));
+    assert.equal(path.resolve(resolved.valid), path.resolve(assetPath));
+    assert.equal(resolved.invalid, true);
+    assert.equal(resolved.invalidTarget, true);
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("Unity Bridge emits Assets paths and accepts one generic legacy project prefix", () => {
+  const bridgeFiles = [
+    "unity/Assets/Editor/FigmaBridge/FigmaBridgeServer.cs",
+    "unity/Assets/Editor/FigmaBridge/FigmaBridgeWindow.cs",
+    "unity/Assets/Editor/FigmaBridge/PrefabToLksConverter.cs",
+    "unity/Assets/Editor/FigmaBridge/PrefabExport/PrefabToFigmaExporter.cs",
+    "unity/Assets/Editor/FigmaBridge/PrefabExport/PrefabToFigmaImageExporter.cs",
+    "ai/skills/figma-to-prefab/roslyn-templates/import_sprites_and_generate_prefabs.cs"
+  ];
+  const sources = Object.fromEntries(
+    bridgeFiles.map((relativePath) => [relativePath, fs.readFileSync(path.join(repoRoot, relativePath), "utf8")])
+  );
+
+  assert.match(sources[bridgeFiles[0]], /firstSlash[\s\S]*Assets\//);
+  assert.match(sources[bridgeFiles[2]], /firstSlash[\s\S]*Assets\//);
+  assert.doesNotMatch(sources[bridgeFiles[3]], /return\s+[^;]*\+\s*prefabPath/);
+  assert.doesNotMatch(sources[bridgeFiles[4]], /return\s+[^;]*\+\s*assetPath/);
+  for (const [relativePath, source] of Object.entries(sources)) {
+    assert.doesNotMatch(source, /JellybeanUnity/, relativePath);
+  }
+});
+
 test("executable workflows do not discover fixed JellybeanUnity or nested .figma roots", () => {
   const executableFiles = [
     ...collectFiles("ai", new Set([".py"])),

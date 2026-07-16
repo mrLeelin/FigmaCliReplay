@@ -37,9 +37,8 @@ DEFAULT_BIND_HOST_IPV6 = "::1"
 DEFAULT_PUBLIC_HOST = "localhost"
 DEFAULT_PORT = 32130
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-PROJECT_ROOT = PLUGIN_ROOT.parents[2]
 PREFAB_TO_FIGMA_SCRIPT_DIR = PLUGIN_ROOT / "ai" / "skills" / "prefab-to-figma" / "scripts"
-PREFAB_TO_FIGMA_TMP_DIR = PROJECT_ROOT / ".tmp" / "prefab-to-figma" / "plugin-import"
+PREFAB_TO_FIGMA_TMP_DIR = PLUGIN_ROOT / ".tmp" / "prefab-to-figma" / "plugin-import"
 CODEX_MCP_SERVER_NAME = "figmaMcpRelay"
 INTERNAL_RELAY_HEADER = "X-Figma-Mcp-Relay-Internal"
 INTERNAL_RELAY_VALUE = "plugin-runtime"
@@ -1317,10 +1316,17 @@ class FigmaMcpRelayHandler(BaseHTTPRequestHandler):
 
     def start_prefab_to_figma_import(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """启动从 Unity Prefab 到 Figma 的无大模型后台导入流程。"""
+        try:
+            unity_project_root = resolve_legacy_unity_project(payload)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        payload["unityProjectPath"] = str(unity_project_root)
         prefab_paths = normalize_prefab_import_paths(payload.get("prefabPaths"))
         if not prefab_paths:
             return {"ok": False, "error": "missing prefabPaths"}
-        invalid_paths = [path for path in prefab_paths if not is_valid_project_prefab_path(path)]
+        invalid_paths = [
+            path for path in prefab_paths if not is_valid_project_prefab_path(path, unity_project_root)
+        ]
         if invalid_paths:
             return {"ok": False, "error": "invalid prefab path", "invalidPaths": invalid_paths}
         if not (payload.get("figmaUrl") or payload.get("fileKey")):
@@ -1449,8 +1455,17 @@ def normalize_prefab_import_paths(raw: Any) -> List[str]:
     seen: set[str] = set()
     for item in items:
         path = str(item or "").strip().replace("\\", "/")
+        if not path or path.startswith("/") or re.match(r"^[A-Za-z]:/", path):
+            continue
+        segments = path.split("/")
+        if any(segment in {"", ".", ".."} for segment in segments):
+            continue
         if path.startswith("Assets/"):
-            path = f"JellybeanUnity/{path}"
+            pass
+        elif len(segments) >= 3 and segments[1].lower() == "assets":
+            path = "Assets/" + "/".join(segments[2:])
+        else:
+            continue
         if not path or path in seen:
             continue
         seen.add(path)
@@ -1458,13 +1473,32 @@ def normalize_prefab_import_paths(raw: Any) -> List[str]:
     return result
 
 
-def is_valid_project_prefab_path(path: str) -> bool:
+def resolve_legacy_unity_project(payload: Dict[str, Any]) -> Path:
+    """Resolve the Unity project from request context or the shared environment contract."""
+    raw = str(
+        payload.get("unityProjectPath")
+        or payload.get("unityProjectRoot")
+        or os.environ.get("FIGMA_UNITY_PROJECT")
+        or ""
+    ).strip()
+    if not raw:
+        raise ValueError(
+            "Unity project is required: pass unityProjectPath/unityProjectRoot or set FIGMA_UNITY_PROJECT"
+        )
+    root = Path(raw).expanduser().resolve()
+    missing = [name for name in ("Assets", "ProjectSettings") if not (root / name).is_dir()]
+    if missing:
+        raise ValueError(f"Invalid Unity project {root}: missing {', '.join(missing)}")
+    return root
+
+
+def is_valid_project_prefab_path(path: str, unity_project_root: Path) -> bool:
     """确认 Prefab 路径在仓库内且文件存在。"""
     if not path.lower().endswith(".prefab"):
         return False
-    candidate = (PROJECT_ROOT / path).resolve()
+    candidate = (unity_project_root / path).resolve()
     try:
-        candidate.relative_to(PROJECT_ROOT.resolve())
+        candidate.relative_to((unity_project_root / "Assets").resolve())
     except ValueError:
         return False
     return candidate.exists() and candidate.is_file()
@@ -1515,6 +1549,7 @@ def run_prefab_to_figma_import_task(state: RelayState, task_id: str, relay_url: 
     if not task:
         return
     payload = task.payload
+    unity_project_root = resolve_legacy_unity_project(payload)
     prefab_paths = normalize_prefab_import_paths(payload.get("prefabPaths"))
     canvas = str(payload.get("canvas") or "auto").strip() or "auto"
     canvas_by_prefab_path = normalize_canvas_by_prefab_path(payload.get("canvasByPrefabPath"))
@@ -1550,6 +1585,7 @@ def run_prefab_to_figma_import_task(state: RelayState, task_id: str, relay_url: 
                     state=state,
                     task_id=task_id,
                     relay_url=relay_url,
+                    unity_project_root=unity_project_root,
                     prefab_path=prefab_path,
                     prefab_canvas=prefab_canvas,
                     out_dir=out_dir,
@@ -1621,6 +1657,7 @@ def run_single_prefab_to_figma_import(
     state: RelayState,
     task_id: str,
     relay_url: str,
+    unity_project_root: Path,
     prefab_path: str,
     prefab_canvas: str,
     out_dir: Path,
@@ -1647,14 +1684,14 @@ def run_single_prefab_to_figma_import(
         sys.executable,
         str(PREFAB_TO_FIGMA_SCRIPT_DIR / "prefab_to_figma.py"),
         "--project-root",
-        ".",
+        str(unity_project_root),
         "--prefab",
         prefab_path,
         "--canvas",
         prefab_canvas,
         "--out",
         str(out_dir),
-    ], PROJECT_ROOT)
+    ], unity_project_root)
 
     package_path = out_dir / "prefab-to-figma.json"
     export_audit_path = out_dir / "prefab_export_audit_report.json"
@@ -1665,7 +1702,7 @@ def run_single_prefab_to_figma_import(
         str(package_path),
         "--output-report",
         str(export_audit_path),
-    ], PROJECT_ROOT)
+    ], PLUGIN_ROOT)
     export_audit = read_json_file(export_audit_path)
     ensure_audit_pass(export_audit, "Prefab 导出审核")
 
@@ -1687,7 +1724,7 @@ def run_single_prefab_to_figma_import(
             sys.executable,
             str(PREFAB_TO_FIGMA_SCRIPT_DIR / "dump_unity_prefab_truth.py"),
             "--project-root",
-            ".",
+            str(unity_project_root),
             "--prefab",
             prefab_path,
             "--canvas",
@@ -1696,7 +1733,7 @@ def run_single_prefab_to_figma_import(
             str(out_dir),
             "--timeout",
             "180",
-        ], PROJECT_ROOT)
+        ], unity_project_root)
         state.update_prefab_import_task(
             task_id,
             stage=f"unity-compare:{prefab_name}",
@@ -1712,7 +1749,7 @@ def run_single_prefab_to_figma_import(
             str(unity_truth_path),
             "--output-report",
             str(unity_truth_compare_path),
-        ], PROJECT_ROOT)
+        ], PLUGIN_ROOT)
         unity_truth_compare = read_json_file(unity_truth_compare_path)
     except Exception as truth_exc:  # noqa: BLE001 - 真值比对降级为非阻塞告警
         # compare_unity_truth 在 allPass=false 时返回码非零，但已写好报告文件，
@@ -1758,7 +1795,7 @@ def run_single_prefab_to_figma_import(
         build_plan_cmd.extend(["--file-key", file_key])
     if target_node_id:
         build_plan_cmd.extend(["--target-node-id", target_node_id])
-    run_checked_command(state, task_id, build_plan_cmd, PROJECT_ROOT)
+    run_checked_command(state, task_id, build_plan_cmd, PLUGIN_ROOT)
     plan_audit_path = out_dir / "figma_write_plan_audit_report.json"
     plan_audit = read_json_file(plan_audit_path)
     ensure_audit_pass(plan_audit, "Figma 写入计划审核")
@@ -1785,7 +1822,7 @@ def run_single_prefab_to_figma_import(
         component_mode,
         "--timeout",
         "300",
-    ], PROJECT_ROOT)
+    ], PLUGIN_ROOT)
 
     verify_report = read_json_file(out_dir / "figma_write_verify_report.json")
     ensure_audit_pass(verify_report, "Figma 写入读回验证")
