@@ -21,6 +21,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from unity_project_paths import normalize_asset_path, resolve_unity_project
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -111,10 +112,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def normalize_unity_asset_path(path: str) -> str:
-    normalized = str(path or "").replace("\\", "/").strip("/")
-    if not normalized.startswith("Assets/"):
-        raise ValueError(f"Expected Unity Assets path, got: {path}")
-    return normalized
+    return normalize_asset_path(path)
 
 
 def unity_disk_path(asset_path: str) -> Path:
@@ -182,7 +180,9 @@ def copy_if_exists(src: Path, dst_dir: Path) -> str:
 
 
 def run_verify(prefab_path: str, spec_path: Path) -> dict:
-    argv = [str(VERIFY_PREFAB), "--prefab", prefab_path, "--json"]
+    if UNITY_PROJECT is None:
+        raise RuntimeError("Unity project context has not been initialized.")
+    argv = [str(VERIFY_PREFAB), "--unity-project", str(UNITY_PROJECT), "--prefab", prefab_path, "--json"]
     if spec_path.is_file():
         argv += ["--spec", str(spec_path)]
     result = run_python(argv, timeout=45)
@@ -398,6 +398,7 @@ def run_iteration(
 
     cmd = [
         str(RUN_FULL_IMPORT),
+        "--unity-project", str(UNITY_PROJECT),
         "--figma-url", args.figma_url,
         "--target-prefab", prefab_path,
         "--target-image-dir", image_dir,
@@ -506,13 +507,11 @@ def run_iteration(
 def main() -> int:
     global UNITY_PROJECT, UNITY_TMP
     args = parse_args()
-    raw_unity_project = args.unity_project.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
-    if not raw_unity_project:
-        raise SystemExit("Unity project is required. Pass --unity-project <path> or set FIGMA_UNITY_PROJECT.")
-    UNITY_PROJECT = Path(raw_unity_project).expanduser().resolve()
-    missing = [name for name in ("Assets", "ProjectSettings") if not (UNITY_PROJECT / name).is_dir()]
-    if missing:
-        raise SystemExit(f"Invalid Unity project {UNITY_PROJECT}: missing {', '.join(missing)}")
+    try:
+        UNITY_PROJECT = resolve_unity_project(args.unity_project)
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
+    os.environ["FIGMA_UNITY_PROJECT"] = str(UNITY_PROJECT)
     UNITY_TMP = UNITY_PROJECT / ".tmp"
     if args.iterations <= 0:
         raise SystemExit("--iterations must be > 0")

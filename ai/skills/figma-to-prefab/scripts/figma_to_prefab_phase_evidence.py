@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from unity_project_paths import resolve_unity_project
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -48,12 +49,7 @@ def requested_unity_tmp(unity_project: str, unity_tmp: str) -> Path:
     if unity_tmp.strip():
         return resolve_path(unity_tmp)
     raw_project = unity_project.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
-    project_root = None
-    if raw_project:
-        project_root = Path(raw_project).expanduser().resolve()
-        missing = [name for name in ("Assets", "ProjectSettings") if not (project_root / name).is_dir()]
-        if missing:
-            raise RuntimeError(f"Invalid Unity project {project_root}: missing {', '.join(missing)}")
+    project_root = resolve_unity_project(unity_project) if raw_project else None
     if project_root:
         return project_root / ".tmp"
     return RELAY_ROOT / ".tmp"

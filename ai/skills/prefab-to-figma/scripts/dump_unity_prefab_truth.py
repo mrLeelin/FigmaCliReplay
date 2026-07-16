@@ -18,6 +18,12 @@ import sys
 import tempfile
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+FIGMA_TO_PREFAB_SCRIPTS = SCRIPT_DIR.parents[1] / "figma-to-prefab" / "scripts"
+if str(FIGMA_TO_PREFAB_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(FIGMA_TO_PREFAB_SCRIPTS))
+from unity_project_paths import normalize_asset_path, resolve_unity_project  # noqa: E402
+
 
 TRUTH_FILE_NAME = "unity_runtime_truth.json"
 
@@ -35,12 +41,10 @@ def parse_canvas(value: str) -> tuple[float, float]:
 
 
 def unity_project_root(project_root: Path) -> Path:
-    candidate = project_root / "JellybeanUnity"
-    if (candidate / "Assets").exists():
-        return candidate.resolve()
-    if (project_root / "Assets").exists():
-        return project_root.resolve()
-    raise FileNotFoundError(f"Unity project Assets folder not found under {project_root}")
+    try:
+        return resolve_unity_project(str(project_root), env={})
+    except RuntimeError as error:
+        raise FileNotFoundError(str(error)) from error
 
 
 def unity_asset_path(project_root: Path, prefab_path: Path) -> str:
@@ -48,18 +52,14 @@ def unity_asset_path(project_root: Path, prefab_path: Path) -> str:
     unity_root = unity_project_root(repo_root)
     raw = prefab_path
     if not raw.is_absolute():
-        raw = (repo_root / raw).resolve()
+        asset_path = normalize_asset_path(raw.as_posix())
+        raw = (unity_root / asset_path).resolve()
     else:
         raw = raw.resolve()
     try:
         rel_to_unity = raw.relative_to(unity_root).as_posix()
-    except ValueError:
-        try:
-            rel_to_repo = raw.relative_to(repo_root).as_posix()
-        except ValueError as exc:
-            raise ValueError(f"Prefab path is outside project root: {raw}") from exc
-        prefix = "JellybeanUnity/"
-        rel_to_unity = rel_to_repo[len(prefix):] if rel_to_repo.startswith(prefix) else rel_to_repo
+    except ValueError as exc:
+        raise ValueError(f"Prefab path is outside Unity project root: {raw}") from exc
     if not rel_to_unity.startswith("Assets/"):
         raise ValueError(f"Prefab must resolve to a Unity Assets path, got: {rel_to_unity}")
     return rel_to_unity
@@ -377,7 +377,8 @@ def run_dump(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dump Unity runtime truth for a UGUI Prefab")
-    parser.add_argument("--project-root", default=".")
+    parser.add_argument("--project-root", "--unity-project", dest="project_root", default=".",
+                        help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--prefab", required=True)
     parser.add_argument("--canvas", required=True)
     parser.add_argument("--out", required=True)

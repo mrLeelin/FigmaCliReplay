@@ -1,16 +1,13 @@
 """九宫源图裁剪：将全尺寸九宫源图裁剪为最小可拉伸尺寸。"""
 import json, sys, os
+from pathlib import Path
 from PIL import Image
+from unity_project_paths import normalize_asset_path, resolve_unity_project
 
 import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument("--spec", default="JellybeanUnity/.tmp/prefab_spec.json")
-parser.add_argument("--image-dir", default="JellybeanUnity/Assets/_Resources/Sharders/Textures",
-                    help="目标图片目录，默认为 Sharders/Textures/")
-args = parser.parse_args()
 
-SPEC_PATH = args.spec
-IMAGE_DIR = args.image_dir
+SPEC_PATH = ""
+IMAGE_DIR = ""
 
 def crop_nine_slice(img, left, right, top, bottom):
     """9slice: 9 宫格裁剪。"""
@@ -86,6 +83,20 @@ def crop_v3slice(img, top, bottom):
     return dst
 
 def main():
+    global SPEC_PATH, IMAGE_DIR
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
+    parser.add_argument("--spec", default="")
+    parser.add_argument("--image-dir", default="Assets/_Resources/Sharders/Textures",
+                        help="目标图片目录，默认为 Sharders/Textures/")
+    args = parser.parse_args()
+    try:
+        unity_project = resolve_unity_project(args.unity_project)
+    except RuntimeError as error:
+        parser.error(str(error))
+    SPEC_PATH = args.spec or str(unity_project / ".tmp" / "prefab_spec.json")
+    raw_image_dir = Path(args.image_dir)
+    IMAGE_DIR = str(raw_image_dir if raw_image_dir.is_absolute() else unity_project / normalize_asset_path(args.image_dir))
     with open(SPEC_PATH, encoding="utf-8") as f:
         spec = json.load(f)
 

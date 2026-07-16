@@ -18,11 +18,15 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+FIGMA_TO_PREFAB_SCRIPTS = SCRIPT_DIR.parents[1] / "figma-to-prefab" / "scripts"
+if str(FIGMA_TO_PREFAB_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(FIGMA_TO_PREFAB_SCRIPTS))
 
 from asset_resolver import SpriteAsset, build_guid_index, resolve_sprite  # noqa: E402
 from nine_slice import build_nine_slice, has_border  # noqa: E402
 from rect_transform import Rect, resolve_rect  # noqa: E402
 from unity_yaml import NUMBER_PATTERN, UnityDocument, UnityNode, build_node_tree, extract_common_fields, extract_ref, load_unity_documents, parse_unity_documents  # noqa: E402
+from unity_project_paths import normalize_asset_path, resolve_unity_project  # noqa: E402
 
 
 AUDIT_REPORT_FILE_NAME = "prefab_export_audit_report.json"
@@ -1699,15 +1703,9 @@ def _resolve_unity_asset_path(resource_path: str, project_root: Path) -> Path:
     raw_path = Path(resource_path)
     if raw_path.is_absolute():
         return raw_path
-    normalized = resource_path.replace("\\", "/")
+    normalized = normalize_asset_path(resource_path)
     root = project_root.resolve()
-    candidates = [root / normalized]
-    if normalized.startswith("Assets/"):
-        candidates.append(root / "JellybeanUnity" / normalized)
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+    return root / normalized
 
 
 def _build_text_data(
@@ -3295,19 +3293,13 @@ def _select_guid_index_root(project_root: Path, prefab_path: Path) -> Path:
     for ancestor in (prefab_path, *prefab_path.parents):
         if ancestor.name != "Assets" or not ancestor.exists():
             continue
-        for candidate in (
-            project_root / "Assets",
-            project_root / "JellybeanUnity" / "Assets",
-        ):
+        for candidate in (project_root / "Assets",):
             candidate = candidate.resolve()
             if candidate.exists() and _is_path_within(prefab_path, candidate):
                 return candidate
         return ancestor
 
-    for candidate in (
-        project_root / "Assets",
-        project_root / "JellybeanUnity" / "Assets",
-    ):
+    for candidate in (project_root / "Assets",):
         if candidate.exists():
             return candidate
 
@@ -3455,7 +3447,8 @@ def main() -> int:
     """CLI 入口。"""
 
     parser = argparse.ArgumentParser(description="Static Unity UGUI Prefab to Figma intermediate exporter")
-    parser.add_argument("--project-root", default=".")
+    parser.add_argument("--project-root", "--unity-project", dest="project_root", default=".",
+                        help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--prefab")
     parser.add_argument("--canvas")
     parser.add_argument("--out")
@@ -3468,6 +3461,11 @@ def main() -> int:
     if args.self_test:
         _run_self_test()
         return 0
+
+    try:
+        args.project_root = str(resolve_unity_project(args.project_root, env={}))
+    except RuntimeError as error:
+        parser.error(str(error))
 
     if args.batch_dir:
         return _run_batch(args)

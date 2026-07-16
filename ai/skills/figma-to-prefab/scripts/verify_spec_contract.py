@@ -8,17 +8,7 @@ import json
 import os
 import sys
 from pathlib import Path
-
-
-def resolve_unity_project(explicit: str) -> Path:
-    raw = explicit.strip() or os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
-    if not raw:
-        raise RuntimeError("Unity project is required. Pass --unity-project <path> or set FIGMA_UNITY_PROJECT.")
-    root = Path(raw).expanduser().resolve()
-    missing = [name for name in ("Assets", "ProjectSettings") if not (root / name).is_dir()]
-    if missing:
-        raise RuntimeError(f"Invalid Unity project {root}: missing {', '.join(missing)}")
-    return root
+from unity_project_paths import resolve_unity_project
 
 
 def load_json(path: Path) -> dict:

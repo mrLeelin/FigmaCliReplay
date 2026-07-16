@@ -18,29 +18,12 @@ import os
 import re
 import sys
 from pathlib import Path
+from unity_project_paths import normalize_asset_path, resolve_unity_project
 
 TMP_DEFAULT_FONT_GUID = "8f586378b4e144a9851e7b34d9b748ee"
 
 
-def find_unity_project_root(start_dir=None):
-    """从当前目录向上解析 Unity 工程根，兼容仓库根和工程根。"""
-    configured = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
-    if configured:
-        candidate = Path(configured).expanduser().resolve()
-        if (candidate / "Assets").is_dir() and (candidate / "ProjectSettings").is_dir():
-            return candidate
-        raise RuntimeError(f"FIGMA_UNITY_PROJECT is not a Unity project: {candidate}")
-    current = Path(start_dir or ".").resolve()
-    for candidate in [current, *current.parents]:
-        if (candidate / "Assets").is_dir() and (candidate / "ProjectSettings").is_dir():
-            return candidate
-        nested = candidate / "JellybeanUnity"
-        if (nested / "Assets").is_dir() and (nested / "ProjectSettings").is_dir():
-            return nested
-    return current
-
-
-UNITY_PROJECT_ROOT = find_unity_project_root()
+UNITY_PROJECT_ROOT = Path.cwd().resolve()
 
 
 def read_configured_font_asset():
@@ -62,16 +45,29 @@ FIGMA_TEXT_MAT_ASSET_DIR = str(Path(COMMON_FONT_ASSET).parent).replace("\\", "/"
 def resolve_asset_path(path):
     """把 Unity Assets 路径或本地路径解析为磁盘路径。"""
     raw = str(path or "").replace("\\", "/")
-    if raw.startswith("JellybeanUnity/Assets/"):
-        raw = raw[len("JellybeanUnity/"):]
-    if raw.startswith("Assets/"):
-        return UNITY_PROJECT_ROOT / raw
+    try:
+        return UNITY_PROJECT_ROOT / normalize_asset_path(raw)
+    except ValueError:
+        pass
     return Path(path)
 
 
 COMMON_FONT_META = resolve_asset_path(COMMON_FONT_ASSET + ".meta")
 COMMON_FONT_MAT_META = resolve_asset_path(COMMON_FONT_MAT + ".meta")
 FIGMA_TEXT_MAT_DIR = resolve_asset_path(FIGMA_TEXT_MAT_ASSET_DIR)
+
+
+def configure_unity_project(explicit: str = "") -> None:
+    global UNITY_PROJECT_ROOT, COMMON_FONT_ASSET, COMMON_FONT_MAT, FIGMA_TEXT_MAT_ASSET_DIR
+    global COMMON_FONT_META, COMMON_FONT_MAT_META, FIGMA_TEXT_MAT_DIR
+    UNITY_PROJECT_ROOT = resolve_unity_project(explicit)
+    os.environ["FIGMA_UNITY_PROJECT"] = str(UNITY_PROJECT_ROOT)
+    COMMON_FONT_ASSET = read_configured_font_asset()
+    COMMON_FONT_MAT = str(Path(COMMON_FONT_ASSET).with_suffix(".mat")).replace("\\", "/") if COMMON_FONT_ASSET else ""
+    FIGMA_TEXT_MAT_ASSET_DIR = str(Path(COMMON_FONT_ASSET).parent).replace("\\", "/") if COMMON_FONT_ASSET else ""
+    COMMON_FONT_META = resolve_asset_path(COMMON_FONT_ASSET + ".meta")
+    COMMON_FONT_MAT_META = resolve_asset_path(COMMON_FONT_MAT + ".meta")
+    FIGMA_TEXT_MAT_DIR = resolve_asset_path(FIGMA_TEXT_MAT_ASSET_DIR)
 
 
 def make_blocking_errors(checks):
@@ -443,10 +439,15 @@ def verify_prefab(prefab_path, spec_path=""):
 
 def main():
     parser = argparse.ArgumentParser(description="Unity Prefab YAML 静态验证")
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--prefab", required=True, help="Prefab 文件路径")
     parser.add_argument("--spec", default="", help="可选 prefab_spec.json，用于允许本次生成的 TMP 材质")
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式")
     args = parser.parse_args()
+    try:
+        configure_unity_project(args.unity_project)
+    except RuntimeError as error:
+        parser.error(str(error))
 
     result = verify_prefab(args.prefab, args.spec)
 

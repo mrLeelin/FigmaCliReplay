@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import re
+import os
 
 # ── 本地白像素 Sprite ─────────────────────────
 # SOLID fill 无效果节点复用此 1×1 白像素 + Image.color
@@ -50,6 +51,7 @@ from pathlib import Path
 from nine_slice_common import detect_type_and_border
 from name_utils import sanitize_name, normalize_unity_display_name, strip_outer_brackets, clamp, unity_node_name
 from constraints_utils import convert_figma_bounds_to_unity_rect, figma_constraints_to_rect_transform_spec
+from unity_project_paths import resolve_unity_project
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -929,11 +931,11 @@ def apply_auto_componentsets_to_data(
 
 
 def unity_tmp_relative_path(path: Path) -> str:
-    """把 JellybeanUnity/.tmp 下的 spec 路径转为 Unity 工程内相对路径。"""
+    """把 Unity 工程 .tmp 下的 spec 路径转为工程内相对路径。"""
     normalized = str(path).replace("\\", "/")
-    marker = "JellybeanUnity/"
-    if marker in normalized:
-        return normalized.split(marker, 1)[1]
+    marker = "/.tmp/"
+    if marker in "/" + normalized:
+        return ".tmp/" + ("/" + normalized).split(marker, 1)[1]
     return normalized
 
 
@@ -961,16 +963,28 @@ def infer_target_dir(spec: dict) -> str:
 def main() -> int:
     """命令行入口。"""
     parser = argparse.ArgumentParser(description="自动识别 ComponentSet 并生成旁边 Prefab specs")
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="MCP Relay manifest 目录")
-    parser.add_argument("--main-spec", default="JellybeanUnity/.tmp/prefab_spec.json", help="主 spec 路径")
-    parser.add_argument("--download-plan", default="JellybeanUnity/.tmp/image_download_plan.json", help="图片计划路径")
-    parser.add_argument("--component-spec-dir", default="JellybeanUnity/.tmp/figma_component_specs", help="ComponentSet spec 输出目录")
+    parser.add_argument("--main-spec", default="", help="主 spec 路径")
+    parser.add_argument("--download-plan", default="", help="图片计划路径")
+    parser.add_argument("--component-spec-dir", default="", help="ComponentSet spec 输出目录")
     parser.add_argument("--target-dir", default="", help="旁边 Prefab 输出目录，默认从主 spec prefabPath 推断")
     parser.add_argument("--target-image-dir", required=True, help="本次图片输出目录")
     parser.add_argument("--output-main-spec", default="", help="改写后的主 spec 输出路径，默认覆盖 --main-spec")
     parser.add_argument("--output-plan", default="", help="合并后的图片计划输出路径，默认覆盖 --download-plan")
-    parser.add_argument("--output-report", default="JellybeanUnity/.tmp/componentset_report.json", help="结构化报告输出路径")
+    parser.add_argument("--output-report", default="", help="结构化报告输出路径")
     args = parser.parse_args()
+
+    try:
+        unity_project = resolve_unity_project(args.unity_project)
+    except RuntimeError as error:
+        parser.error(str(error))
+    os.environ["FIGMA_UNITY_PROJECT"] = str(unity_project)
+    unity_tmp = unity_project / ".tmp"
+    args.main_spec = args.main_spec or str(unity_tmp / "prefab_spec.json")
+    args.download_plan = args.download_plan or str(unity_tmp / "image_download_plan.json")
+    args.component_spec_dir = args.component_spec_dir or str(unity_tmp / "figma_component_specs")
+    args.output_report = args.output_report or str(unity_tmp / "componentset_report.json")
 
     main_spec_path = Path(args.main_spec)
     plan_path = Path(args.download_plan)

@@ -33,6 +33,7 @@ from pathlib import Path
 
 from name_utils import infer_prefab_name_from_figma_root, is_placeholder_prefab_name
 from process_images import validate_export_health_contract
+from unity_project_paths import normalize_asset_path, resolve_unity_project
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -42,23 +43,9 @@ SKILL_DIR = SCRIPT_DIR.parent
 PLUGIN_ROOT = SCRIPT_DIR.parents[3]
 
 
-def is_unity_project(path: Path) -> bool:
-    return (path / "Assets").is_dir() and (path / "ProjectSettings").is_dir()
-
-
-def find_legacy_unity_project() -> Path | None:
-    for parent in Path(__file__).resolve().parents:
-        nested = parent / "JellybeanUnity"
-        if is_unity_project(nested):
-            return nested.resolve()
-    return None
-
-
 def configure_project_paths(unity_project: str | Path) -> None:
     global UNITY_PROJECT, TMP_DIR, VERIFY_PREFAB_REPORT
-    resolved = Path(unity_project).expanduser().resolve()
-    if not is_unity_project(resolved):
-        raise ValueError(f"Unity project must contain Assets and ProjectSettings: {resolved}")
+    resolved = resolve_unity_project(unity_project)
     UNITY_PROJECT = resolved
     TMP_DIR = UNITY_PROJECT / ".tmp"
     VERIFY_PREFAB_REPORT = TMP_DIR / "verify_prefab_result.json"
@@ -66,7 +53,7 @@ def configure_project_paths(unity_project: str | Path) -> None:
 
 
 REPO_ROOT = PLUGIN_ROOT
-UNITY_PROJECT = find_legacy_unity_project() or PLUGIN_ROOT
+UNITY_PROJECT = PLUGIN_ROOT
 TMP_DIR = UNITY_PROJECT / ".tmp"
 MCP_MANIFEST_DIR = PLUGIN_ROOT / ".tmp" / "figma-to-prefab"
 
@@ -200,10 +187,7 @@ def to_posix(path: str | Path) -> str:
 
 
 def normalize_unity_asset_path(path: str) -> str:
-    normalized = str(path or "").replace("\\", "/").strip()
-    if normalized.startswith("JellybeanUnity/"):
-        normalized = normalized[len("JellybeanUnity/") :]
-    return normalized.strip("/")
+    return normalize_asset_path(path).strip("/")
 
 
 def normalize_unity_asset_dir(path: str) -> str:
@@ -375,7 +359,7 @@ def fail(msg: str, code: int = 1) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Figma → Unity Prefab 一键导入")
-    parser.add_argument("--unity-project", default=os.environ.get("FIGMA_UNITY_PROJECT", ""),
+    parser.add_argument("--unity-project", default="",
                         help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--figma-url", required=True, help="Figma 节点 URL（含 node-id）")
     parser.add_argument("--target-prefab", required=True, help="目标 Prefab 资产路径，如 Assets/.../UI_Foo.prefab")
@@ -405,12 +389,9 @@ def main():
     parser.add_argument("--workers", type=int, default=6, help="process_images 并行线程数（默认 6）")
 
     args = parser.parse_args()
-    unity_project = args.unity_project or find_legacy_unity_project()
-    if not unity_project:
-        parser.error("--unity-project is required when running outside the JellybeanUnity repository")
     try:
-        configure_project_paths(unity_project)
-    except ValueError as error:
+        configure_project_paths(args.unity_project)
+    except RuntimeError as error:
         parser.error(str(error))
     workflow_started = time.perf_counter()
     timings: list[dict] = []
@@ -564,6 +545,7 @@ def main():
 
     gen_argv = [
         str(GEN_SPEC),
+        "--unity-project", str(UNITY_PROJECT),
         "--figma-url", args.figma_url,
         "--target-prefab", args.target_prefab,
         "--target-image-dir", args.target_image_dir,
@@ -658,6 +640,7 @@ def main():
 
     pi_result, timing = run_timed("processImages", [
         str(PROCESS_IMAGES),
+        "--unity-project", str(UNITY_PROJECT),
         "--manifest-dir", str(manifest_dir),
         "--output-dir", str(UNITY_PROJECT / args.target_image_dir),
         "--download-plan", str(download_plan),
@@ -689,6 +672,7 @@ def main():
     print("  → verify_prefab.py...")
     vp_result, timing = run_timed("verifyPrefab", [
         str(VERIFY_PREFAB),
+        "--unity-project", str(UNITY_PROJECT),
         "--prefab", args.target_prefab,
         "--json",
     ], timeout=30)

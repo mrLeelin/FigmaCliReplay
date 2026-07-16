@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import sys
 import tempfile
 from typing import Any
@@ -31,6 +32,16 @@ from compare_unity_truth import compare_package  # noqa: E402
 from rect_transform import extract_rotation_z  # noqa: E402
 from prefab_to_figma_mcp_client import build_asset_entries, build_verify_report  # noqa: E402
 from unity_yaml import parse_unity_documents  # noqa: E402
+
+
+def configured_unity_project() -> Path | None:
+    raw = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser().resolve()
+    if (candidate / "Assets").is_dir() and (candidate / "ProjectSettings").is_dir():
+        return candidate
+    return None
 
 
 def main() -> int:
@@ -68,7 +79,9 @@ def main() -> int:
 def _check_guid_index_root_uses_full_unity_assets_fixture() -> None:
     """验证 prefab 在 Assets 子目录时，GUID 索引仍覆盖完整 Unity Assets。"""
 
-    project_root = Path.cwd() / "JellybeanUnity"
+    project_root = configured_unity_project()
+    if project_root is None:
+        return
     prefab_path = project_root / "Assets" / "MagicWarrior" / "Assets" / "Resources" / "GUi" / "RuntimeOneBtnTips.prefab"
     if not prefab_path.exists():
         return
@@ -571,9 +584,11 @@ def _check_auto_canvas_falls_back_to_child_rect_fixture() -> None:
 
 
 def _check_nested_prefab_instance_uses_stripped_parent_override_size_fixture() -> None:
+    project_root = configured_unity_project()
+    if project_root is None:
+        return
     prefab_path = (
-        Path.cwd()
-        / "JellybeanUnity"
+        project_root
         / "Assets"
         / "MagicWarrior"
         / "_Resources"

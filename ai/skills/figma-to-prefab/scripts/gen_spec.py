@@ -27,6 +27,7 @@ import sys
 from auto_componentset_specs import apply_auto_componentsets_to_data
 from name_utils import sanitize_name, normalize_unity_display_name, strip_outer_brackets, clamp, unity_node_name
 from constraints_utils import convert_figma_bounds_to_unity_rect, figma_constraints_to_rect_transform_spec
+from unity_project_paths import normalize_asset_path, resolve_unity_project
 
 # Windows GBK 编码兼容 — 强制 stdout 使用 UTF-8
 if hasattr(sys.stdout, "reconfigure"):
@@ -40,26 +41,8 @@ from urllib.parse import urlparse, parse_qs
 PLUGIN_ROOT = Path(__file__).resolve().parents[4]
 
 
-def is_unity_project(path: Path) -> bool:
-    return (path / "Assets").is_dir() and (path / "ProjectSettings").is_dir()
-
-
-def find_unity_project_root() -> Path:
-    configured = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
-    if configured:
-        candidate = Path(configured).expanduser().resolve()
-        if is_unity_project(candidate):
-            return candidate
-        raise RuntimeError(f"FIGMA_UNITY_PROJECT is not a Unity project: {candidate}")
-    for parent in Path(__file__).resolve().parents:
-        nested = parent / "JellybeanUnity"
-        if is_unity_project(nested):
-            return nested.resolve()
-    raise RuntimeError("Unable to locate a Unity project. Pass --unity-project to run_full_import.py.")
-
-
 PROJECT_ROOT = PLUGIN_ROOT
-UNITY_PROJECT = find_unity_project_root()
+UNITY_PROJECT = PLUGIN_ROOT
 COMMON_DIR = UNITY_PROJECT / "Assets" / "_Art" / "Texture" / "GUI" / "_Common"
 
 # ── 本地白像素 Sprite ─────────────────────────
@@ -70,6 +53,14 @@ WHITE_PIXEL_IMAGE_ID = "builtin_white_1x1"  # 特殊 imageId，不被视为"需�
 
 # ── 公共 Prefab 路径 ────────────────────────────
 COMMON_PREFAB_DIR = UNITY_PROJECT / "Assets" / "MagicWarrior" / "_Resources" / "Prefabs" / "UGUI" / "_Common"
+
+
+def configure_unity_project(explicit: str = "") -> None:
+    global UNITY_PROJECT, COMMON_DIR, COMMON_PREFAB_DIR
+    UNITY_PROJECT = resolve_unity_project(explicit)
+    os.environ["FIGMA_UNITY_PROJECT"] = str(UNITY_PROJECT)
+    COMMON_DIR = UNITY_PROJECT / "Assets" / "_Art" / "Texture" / "GUI" / "_Common"
+    COMMON_PREFAB_DIR = UNITY_PROJECT / "Assets" / "MagicWarrior" / "_Resources" / "Prefabs" / "UGUI" / "_Common"
 
 # ── 公共贴图缓存（运行时从 common_texture.py 构建） ──────────
 # gen_spec.py 启动时加载 .tmp/common_texture_index.json，按节点名匹配现有公共贴图
@@ -264,8 +255,10 @@ def _unity_asset_exists(asset_path):
     normalized = str(asset_path or "").replace("\\", "/")
     if normalized.startswith("Assets/"):
         return (UNITY_PROJECT / normalized).is_file()
-    if normalized.startswith("JellybeanUnity/"):
-        return (REPO_ROOT / normalized).is_file()
+    try:
+        return (UNITY_PROJECT / normalize_asset_path(normalized)).is_file()
+    except ValueError:
+        pass
     raw_path = Path(normalized)
     if raw_path.is_absolute():
         return raw_path.is_file()
@@ -1181,8 +1174,6 @@ def build_spec(
         _dp = str(target_path or "").replace("\\", "/")
         if _dp.startswith("Assets/"):
             meta_path = str(UNITY_PROJECT / _dp) + ".meta"
-        elif _dp.startswith("JellybeanUnity/"):
-            meta_path = str(REPO_ROOT / _dp) + ".meta"
         else:
             meta_path = str(REPO_ROOT / _dp) + ".meta"
         if not os.path.isfile(meta_path):
@@ -1345,12 +1336,10 @@ def check_file_mismatch(images_spec, image_dir_abs):
 def unity_project_relative_path(path):
     """把仓库根路径或 Unity 工程路径统一转为 Unity 工程内相对路径。"""
     normalized = str(path).replace("\\", "/")
-    marker = "JellybeanUnity/"
-    if normalized.startswith(marker):
-        return normalized[len(marker):]
-    if marker in normalized:
-        return normalized.split(marker, 1)[1]
-    return normalized
+    try:
+        return str(Path(path).resolve().relative_to(UNITY_PROJECT.resolve())).replace("\\", "/")
+    except (ValueError, OSError):
+        return normalized
 
 
 def make_check(pass_state, summary=None, details=None):
@@ -1546,26 +1535,27 @@ def build_audit_report(spec, dl_plan, node_types, sixed_summary, dedup_summary, 
 
 def main():
     parser = argparse.ArgumentParser(description="Figma → Unity Prefab Spec 生成器")
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--self-test", action="store_true", help="运行 Constraints/RectTransform 转换自测")
     parser.add_argument("--figma-url", help="Figma 设计稿 URL")
     parser.add_argument("--target-prefab", help="目标 Prefab 路径，如 Assets/_Resources/X/UI_X.prefab")
     parser.add_argument("--target-image-dir", help="图片输出目录，如 Assets/_Art/Texture/GUI/X/")
     parser.add_argument("--prefab-name", help="Prefab 根节点名（默认从 URL 推断）")
     parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="MCP Relay manifest 目录")
-    parser.add_argument("--output-spec", default="JellybeanUnity/.tmp/prefab_spec.json", help="Spec 输出路径")
-    parser.add_argument("--output-plan", default="JellybeanUnity/.tmp/image_download_plan.json", help="下载计划输出路径")
-    parser.add_argument("--output-roslyn-import-plan", default="JellybeanUnity/.tmp/roslyn_import_plan.txt",
+    parser.add_argument("--output-spec", default="", help="Spec 输出路径")
+    parser.add_argument("--output-plan", default="", help="下载计划输出路径")
+    parser.add_argument("--output-roslyn-import-plan", default="",
                         help="Roslyn Prefab 生成 code-file 读取的导入计划")
     parser.add_argument("--output-report", default="", help="Markdown 确认报告输出路径（留空则输出到 stdout）")
-    parser.add_argument("--output-audit-report", default="JellybeanUnity/.tmp/spec_audit_report.json",
+    parser.add_argument("--output-audit-report", default="",
                         help="结构化审核报告输出路径")
     parser.add_argument("--auto-componentsets", dest="auto_componentsets", action="store_true", default=True,
                         help="默认开启：自动检测本节点内 ComponentSet 并生成旁边 Prefab specs")
     parser.add_argument("--no-auto-componentsets", dest="auto_componentsets", action="store_false",
                         help="关闭自动 ComponentSet 检测")
-    parser.add_argument("--component-spec-dir", default="JellybeanUnity/.tmp/figma_component_specs",
+    parser.add_argument("--component-spec-dir", default="",
                         help="自动 ComponentSet spec 输出目录")
-    parser.add_argument("--componentset-report", default="JellybeanUnity/.tmp/componentset_report.json",
+    parser.add_argument("--componentset-report", default="",
                         help="自动 ComponentSet 结构化报告输出路径")
     parser.add_argument("--check-disk-dir", default="", help="检查磁盘文件与 Spec 一致性（图片目录绝对路径）")
     parser.add_argument("--check-disk-prewrite", action="store_true",
@@ -1581,6 +1571,17 @@ def main():
         run_self_test()
         print("figma-to-prefab gen_spec self-test passed")
         return 0
+    try:
+        configure_unity_project(args.unity_project)
+    except RuntimeError as error:
+        parser.error(str(error))
+    unity_tmp = UNITY_PROJECT / ".tmp"
+    args.output_spec = args.output_spec or str(unity_tmp / "prefab_spec.json")
+    args.output_plan = args.output_plan or str(unity_tmp / "image_download_plan.json")
+    args.output_roslyn_import_plan = args.output_roslyn_import_plan or str(unity_tmp / "roslyn_import_plan.txt")
+    args.output_audit_report = args.output_audit_report or str(unity_tmp / "spec_audit_report.json")
+    args.component_spec_dir = args.component_spec_dir or str(unity_tmp / "figma_component_specs")
+    args.componentset_report = args.componentset_report or str(unity_tmp / "componentset_report.json")
     missing_required = [
         name for name in ("figma_url", "target_prefab", "target_image_dir")
         if not getattr(args, name)

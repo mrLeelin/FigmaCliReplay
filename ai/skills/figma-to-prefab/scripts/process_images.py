@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from nine_slice_common import detect_type_and_border
 from name_utils import sanitize_name
+from unity_project_paths import normalize_asset_path, resolve_unity_project
 from io import BytesIO
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -21,36 +22,13 @@ if hasattr(sys.stdout, "reconfigure"):
 PLUGIN_ROOT = Path(__file__).resolve().parents[4]
 
 
-def is_unity_project(path):
-    return (path / "Assets").is_dir() and (path / "ProjectSettings").is_dir()
-
-
 def find_repository_root():
     """Standalone relay runtime root for manifests and caches."""
     return PLUGIN_ROOT
 
 
-def find_unity_project_root():
-    """解析 Unity 工程根目录，避免把 Assets 写到仓库根。"""
-    configured = os.environ.get("FIGMA_UNITY_PROJECT", "").strip()
-    if configured:
-        candidate = Path(configured).expanduser().resolve()
-        if is_unity_project(candidate):
-            return candidate
-        raise RuntimeError(f"FIGMA_UNITY_PROJECT is not a Unity project: {candidate}")
-    repo_root = find_repository_root()
-    nested = repo_root / "JellybeanUnity"
-    if is_unity_project(nested):
-        return nested.resolve()
-    current = Path.cwd().resolve()
-    for candidate in [current, *current.parents]:
-        if is_unity_project(candidate):
-            return candidate.resolve()
-    return PLUGIN_ROOT
-
-
 REPOSITORY_ROOT = find_repository_root()
-UNITY_PROJECT_ROOT = find_unity_project_root()
+UNITY_PROJECT_ROOT = PLUGIN_ROOT
 
 
 def get_png_from_base64(b64_str):
@@ -117,10 +95,10 @@ def md5_of_base64(b64_str):
 def resolve_unity_asset_path(asset_path):
     """把 Unity Assets 相对路径转换为仓库内实际文件路径。"""
     normalized = str(asset_path).replace("\\", "/")
-    if normalized.startswith("JellybeanUnity/"):
-        return (REPOSITORY_ROOT / normalized).resolve()
-    if normalized.startswith("Assets/"):
-        return (UNITY_PROJECT_ROOT / normalized).resolve()
+    try:
+        return (UNITY_PROJECT_ROOT / normalize_asset_path(normalized)).resolve()
+    except ValueError:
+        pass
     raw_path = Path(normalized)
     return raw_path if raw_path.is_absolute() else (REPOSITORY_ROOT / raw_path).resolve()
 
@@ -131,10 +109,10 @@ def resolve_output_dir(output_dir):
     raw_path = Path(normalized)
     if raw_path.is_absolute():
         return raw_path.resolve()
-    if normalized.startswith("JellybeanUnity/"):
-        return (REPOSITORY_ROOT / normalized).resolve()
-    if normalized.startswith("Assets/"):
-        return (UNITY_PROJECT_ROOT / normalized).resolve()
+    try:
+        return (UNITY_PROJECT_ROOT / normalize_asset_path(normalized)).resolve()
+    except ValueError:
+        pass
     return (REPOSITORY_ROOT / raw_path).resolve()
 
 
@@ -1285,21 +1263,28 @@ def write_guard_failure_report(output_report, output_dir, blocking_errors):
 
 
 def main():
+    global UNITY_PROJECT_ROOT
     parser = argparse.ArgumentParser(description="并行九宫合成 + 图片导出")
+    parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab",
                         help="MCP Relay manifest 目录")
-    parser.add_argument("--output-dir", default="JellybeanUnity/Assets/_Art/Texture/GUI/Sharders",
+    parser.add_argument("--output-dir", default="Assets/_Art/Texture/GUI/Sharders",
                         help="PNG 输出目录")
-    parser.add_argument("--common-dir", default="JellybeanUnity/Assets/_Art/Texture/GUI/_Common/Element",
+    parser.add_argument("--common-dir", default="Assets/_Art/Texture/GUI/_Common/Element",
                         help="公共贴图目录")
     parser.add_argument("--workers", type=int, default=6, help="并行线程数")
-    parser.add_argument("--output-report", default="JellybeanUnity/.tmp/image_process_report.json",
+    parser.add_argument("--output-report", default="",
                         help="结构化图片处理报告输出路径")
-    parser.add_argument("--download-plan", default="JellybeanUnity/.tmp/image_download_plan.json",
+    parser.add_argument("--download-plan", default="",
                         help="图片下载/校验计划路径")
     args = parser.parse_args()
-    if not is_unity_project(UNITY_PROJECT_ROOT):
-        parser.error("FIGMA_UNITY_PROJECT must point to a Unity project containing Assets and ProjectSettings")
+    try:
+        UNITY_PROJECT_ROOT = resolve_unity_project(args.unity_project)
+    except RuntimeError as error:
+        parser.error(str(error))
+    os.environ["FIGMA_UNITY_PROJECT"] = str(UNITY_PROJECT_ROOT)
+    args.output_report = args.output_report or str(UNITY_PROJECT_ROOT / ".tmp" / "image_process_report.json")
+    args.download_plan = args.download_plan or str(UNITY_PROJECT_ROOT / ".tmp" / "image_download_plan.json")
 
     manifest_dir = resolve_manifest_dir(args.manifest_dir)
     output_dir = resolve_output_dir(args.output_dir)
