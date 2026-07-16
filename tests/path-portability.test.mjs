@@ -99,7 +99,7 @@ function findViolations(relativeFiles, patterns) {
 function normalizePortablePathScanText(source) {
   return source
     .replace(/\\+/g, "/")
-    .replace(/[\s"'`()]+/g, "")
+    .replace(/[\s"'`() +]+/g, "")
     .replace(/,+/g, "/")
     .replace(/\/+\.?\.\//g, "/")
     .toLowerCase();
@@ -280,16 +280,17 @@ test("current workflow documentation contains no machine-local or fixed reposito
 test("all active Relay text surfaces reject normalized nested and machine-local paths", () => {
   const files = [
     "ui.html",
-    ...collectFiles("prompts", new Set([".md", ".txt"])),
-    ...collectFiles("ai/skills", new Set([".md", ".py", ".json", ".txt"])),
-    ...collectFiles("client", new Set([".py", ".md"])),
-    ...collectFiles("server", new Set([".py", ".md"]))
+    ...collectFiles("prompts", new Set([".md", ".txt", ".yaml", ".yml"])),
+    ...collectFiles("ai/skills", new Set([".md", ".py", ".json", ".txt", ".yaml", ".yml", ".cs", ".js", ".mjs", ".ts", ".ps1", ".sh", ".bat"])),
+    ...collectFiles("client", new Set([".py", ".md", ".json", ".yaml", ".yml", ".js", ".mjs", ".ts", ".ps1", ".sh", ".bat"])),
+    ...collectFiles("server", new Set([".py", ".md", ".json", ".yaml", ".yml", ".js", ".mjs", ".ts", ".ps1", ".sh", ".bat"]))
   ];
   const violations = findNormalizedPortablePathViolations(files);
   assert.deepEqual(violations, [], `Normalized fixed path dependencies:\n${violations.join("\n")}`);
 
   for (const fixture of [
     'Path(".figma") / "plugins" / "figma-mcp-relay"',
+    '".figma/" + "plugins/" + "figma-mcp-relay"',
     ".figma\\\\plugins\\\\figma-mcp-relay",
     "Jellybean Unity marker: JellybeanUnity",
     "E:\\Project\\Game"
@@ -327,18 +328,29 @@ test("Python entry points resolve the standalone Relay root and client module", 
   const help = runPython(refreshScript, ["--help"]);
   assert.equal(help.status, 0, formatSpawnFailure(help));
   const refreshProbe = spawnSync("python", ["-c", [
-    "import importlib.util",
+    "import importlib.util, inspect, sys, types",
+    "fake = types.ModuleType('figma_mcp_client')",
+    "fake.query_components = lambda **kwargs: 'fake'",
+    "sys.modules['figma_mcp_client'] = fake",
+    "before = list(sys.path)",
     `p = ${JSON.stringify(path.join(repoRoot, refreshScript))}`,
     "spec = importlib.util.spec_from_file_location('refresh_component_cache_probe', p)",
     "module = importlib.util.module_from_spec(spec)",
     "spec.loader.exec_module(module)",
     "print(module.resolve_relay_root())",
-    "print(module.load_query_components().__module__)"
+    "query_components = module.load_query_components()",
+    "print(query_components.__module__)",
+    "print(inspect.getsourcefile(query_components))",
+    "print(before == sys.path)",
+    "print(sys.modules['figma_mcp_client'] is fake)"
   ].join("; ")], { cwd: os.tmpdir(), encoding: "utf8", timeout: pythonTimeoutMs });
   assert.equal(refreshProbe.status, 0, formatSpawnFailure(refreshProbe));
-  const [refreshRoot, queryModule] = refreshProbe.stdout.trim().split(/\r?\n/);
+  const [refreshRoot, queryModule, querySource, pathUnchanged, fakePreserved] = refreshProbe.stdout.trim().split(/\r?\n/);
   assert.equal(path.resolve(refreshRoot), repoRoot);
-  assert.equal(queryModule, "figma_mcp_client");
+  assert.match(queryModule, /^_figma_mcp_client_[a-f0-9]+$/);
+  assert.equal(path.resolve(querySource), path.join(repoRoot, "client", "figma_mcp_client.py"));
+  assert.equal(pathUnchanged, "True");
+  assert.equal(fakePreserved, "True");
 });
 
 test("UI derives quoted executable paths from Relay health and injects the full import script path", async () => {

@@ -20,9 +20,19 @@ PSD → Figma 组件缓存刷新工具。
 import json
 import sys
 import os
+import hashlib
+import importlib.util
 from pathlib import Path
-sys.path.insert(0, os.path.dirname(__file__))
-from cache_component_index import save_cache
+
+_SCRIPT_DIR = os.path.dirname(__file__)
+_ADDED_SCRIPT_DIR = _SCRIPT_DIR not in sys.path
+if _ADDED_SCRIPT_DIR:
+    sys.path.insert(0, _SCRIPT_DIR)
+try:
+    from cache_component_index import save_cache
+finally:
+    if _ADDED_SCRIPT_DIR:
+        sys.path.remove(_SCRIPT_DIR)
 
 
 GENERATE_JS_HELP = "--generate-js is deprecated. Use --from-mcp."
@@ -39,11 +49,19 @@ def resolve_relay_root() -> Path:
 
 def load_query_components():
     """Import the Relay client from the standalone checkout."""
-    client_dir = resolve_relay_root() / "client"
-    client_path = str(client_dir)
-    if client_path not in sys.path:
-        sys.path.insert(0, client_path)
-    from figma_mcp_client import query_components
+    client_file = (resolve_relay_root() / "client" / "figma_mcp_client.py").resolve()
+    if not client_file.is_file():
+        raise RuntimeError(f"Relay client module not found: {client_file}")
+    module_hash = hashlib.sha256(str(client_file).encode("utf-8")).hexdigest()[:12]
+    module_name = f"_figma_mcp_client_{module_hash}"
+    spec = importlib.util.spec_from_file_location(module_name, client_file)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load Relay client module: {client_file}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    query_components = getattr(module, "query_components", None)
+    if not callable(query_components):
+        raise RuntimeError(f"Relay client has no query_components: {client_file}")
     return query_components
 
 
