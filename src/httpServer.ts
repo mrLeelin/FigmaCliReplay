@@ -7,7 +7,7 @@ import { PLUGIN_ROOT, publicUrl } from "./config.js";
 import { logError, logInfo, logWarn } from "./logger.js";
 import { RelayMcpHttpEndpoint } from "./mcpServer.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
-import { getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
+import { applyPsdImportTask, getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
 import { followupAiRun, getAiRun, localAiRunnerStatus, runLocalAiCleanup, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
 import { redactLargeRelayPayload, type RuntimeRelay } from "./runtimeRelay.js";
 import { UnityProjectRegistry } from "./unityProjectRegistry.js";
@@ -433,6 +433,18 @@ async function handlePost(
   if (pathname === "/psd-to-figma/import") {
     try {
       const task = startPsdImportTask(config, payload);
+      jsonResponse(response, 200, { ok: true, task });
+    } catch (error) {
+      jsonResponse(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+  // Route shape: /psd-to-figma/import/[^/]+/apply
+  const psdApplyMatch = pathname.match(/^\/psd-to-figma\/import\/([^/]+)\/apply$/);
+  if (psdApplyMatch) {
+    const taskId = decodeURIComponent(psdApplyMatch[1] || "");
+    try {
+      const task = applyPsdImportTask(config, taskId, payload);
       jsonResponse(response, 200, { ok: true, task });
     } catch (error) {
       jsonResponse(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });

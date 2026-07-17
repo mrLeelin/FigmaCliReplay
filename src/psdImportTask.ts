@@ -7,10 +7,12 @@ import { PLUGIN_ROOT, publicUrl } from "./config.js";
 import { logInfo, logWarn } from "./logger.js";
 import { isRecord } from "./utils.js";
 
-type PsdImportTaskStatus = "queued" | "running" | "completed" | "error";
+type PsdImportMode = "initial" | "incremental-preview" | "incremental-apply";
+type PsdImportTaskStatus = "queued" | "running" | "preview-ready" | "completed" | "error";
 
 export interface PsdImportTask {
   taskId: string;
+  mode: PsdImportMode;
   status: PsdImportTaskStatus;
   stage: string;
   percent: number;
@@ -24,6 +26,8 @@ export interface PsdImportTask {
     fileKey: string;
     sessionId: string;
     targetNodeId: string;
+    targetName: string;
+    targetType: string;
   };
   startedAt: number;
   updatedAt: number;
@@ -31,6 +35,8 @@ export interface PsdImportTask {
   logs: string[];
   error?: string;
   summary?: unknown;
+  preview?: unknown;
+  baselineFingerprint?: string;
 }
 
 const tasks = new Map<string, PsdImportTask>();
@@ -51,6 +57,16 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
   const fileKey = stringValue(target.fileKey);
   const sessionId = stringValue(target.sessionId);
   const targetNodeId = stringValue(target.targetNodeId);
+  const targetName = stringValue(target.targetName);
+  const targetType = stringValue(target.targetType).toUpperCase();
+  const requestedMode = stringValue(payload.mode) || "initial";
+  if (requestedMode !== "initial" && requestedMode !== "incremental-preview") {
+    throw new Error(`unsupported PSD import mode: ${requestedMode}`);
+  }
+  const mode: PsdImportMode = requestedMode;
+  if (mode === "incremental-preview" && (!targetNodeId || (targetType !== "FRAME" && targetType !== "COMPONENT"))) {
+    throw new Error("incremental PSD import requires one FRAME or COMPONENT target");
+  }
   if (!fileKey && !sessionId) {
     throw new Error("target.fileKey or target.sessionId is required");
   }
@@ -69,6 +85,7 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
   const now = Date.now();
   const task: PsdImportTask = {
     taskId,
+    mode,
     status: "queued",
     stage: "queued",
     percent: 0,
@@ -78,19 +95,41 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
     manifestSummaryPath,
     resultPath,
     timelinePath,
-    target: { fileKey, sessionId, targetNodeId },
+    target: { fileKey, sessionId, targetNodeId, targetName, targetType },
     startedAt: now,
     updatedAt: now,
     logs: []
   };
   tasks.set(taskId, task);
-  void runPsdImportTask(config, task);
+  void runPsdImportTask(config, task, { reuseExportArtifacts: false });
   return serializePsdImportTask(task);
 }
 
 export function getPsdImportTask(taskId: string): PsdImportTask | undefined {
   const task = tasks.get(taskId);
   return task ? serializePsdImportTask(task) : undefined;
+}
+
+export function applyPsdImportTask(config: GatewayConfig, taskId: string, payload: unknown): PsdImportTask {
+  const task = tasks.get(taskId);
+  if (!task || task.status !== "preview-ready") {
+    throw new Error("PSD incremental preview is not ready");
+  }
+  const providedFingerprint = isRecord(payload) ? stringValue(payload.baselineFingerprint) : "";
+  if (!providedFingerprint || providedFingerprint !== task.baselineFingerprint) {
+    throw new Error("PSD incremental preview fingerprint does not match");
+  }
+  if (isRecord(task.preview) && task.preview.canApply === false) {
+    throw new Error("PSD incremental preview contains blocking conflicts");
+  }
+  task.mode = "incremental-apply";
+  task.status = "queued";
+  task.stage = "queued_apply";
+  task.percent = 0;
+  task.error = undefined;
+  task.updatedAt = Date.now();
+  void runPsdImportTask(config, task, { reuseExportArtifacts: true });
+  return serializePsdImportTask(task);
 }
 
 function serializePsdImportTask(task: PsdImportTask): PsdImportTask {
@@ -100,16 +139,22 @@ function serializePsdImportTask(task: PsdImportTask): PsdImportTask {
   };
 }
 
-async function runPsdImportTask(config: GatewayConfig, task: PsdImportTask): Promise<void> {
+async function runPsdImportTask(
+  config: GatewayConfig,
+  task: PsdImportTask,
+  options: { reuseExportArtifacts: boolean }
+): Promise<void> {
   try {
-    setTaskStage(task, "exporting_psd_layers", 10, "开始导出 PSD 图层");
-    const exportScript = path.join(PLUGIN_ROOT, "ai", "skills", "psd-layer-to-figma", "scripts", "export_psd_layers.py");
-    await runPythonScript(task, exportScript, [
-      task.sourcePsdPath,
-      "--out",
-      task.artifactDir,
-      "--summary"
-    ]);
+    if (!options.reuseExportArtifacts) {
+      setTaskStage(task, "exporting_psd_layers", 10, "开始导出 PSD 图层");
+      const exportScript = path.join(PLUGIN_ROOT, "ai", "skills", "psd-layer-to-figma", "scripts", "export_psd_layers.py");
+      await runPythonScript(task, exportScript, [
+        task.sourcePsdPath,
+        "--out",
+        task.artifactDir,
+        "--summary"
+      ]);
+    }
     if (!fs.existsSync(task.manifestSummaryPath)) {
       throw new Error(`manifest_summary.json was not created: ${task.manifestSummaryPath}`);
     }
@@ -118,8 +163,12 @@ async function runPsdImportTask(config: GatewayConfig, task: PsdImportTask): Pro
     const submitScript = path.join(PLUGIN_ROOT, "ai", "skills", "psd-layer-to-figma", "scripts", "submit_psd_import_job.py");
     const submitArgs = [
       task.manifestSummaryPath,
+      "--import-mode",
+      task.mode,
       "--root-name",
       rootNameFromFile(task.fileName),
+      "--source-file-name",
+      task.fileName,
       "--relay-url",
       publicUrl(config),
       "--wait",
@@ -139,9 +188,30 @@ async function runPsdImportTask(config: GatewayConfig, task: PsdImportTask): Pro
     if (task.target.targetNodeId) {
       submitArgs.push("--target-node-id", task.target.targetNodeId);
     }
+    if (task.mode === "incremental-apply" && task.baselineFingerprint) {
+      submitArgs.push("--baseline-fingerprint", task.baselineFingerprint);
+    }
     await runPythonScript(task, submitScript, submitArgs);
 
-    setTaskStage(task, "completed", 100, "PSD 导入完成");
+    const result = readResultSummary(task.resultPath);
+    task.summary = result;
+    if (task.mode === "incremental-preview") {
+      if (!isRecord(result) || !stringValue(result.baselineFingerprint)) {
+        throw new Error("PSD incremental preview did not return a baseline fingerprint");
+      }
+      task.preview = result;
+      task.baselineFingerprint = stringValue(result.baselineFingerprint);
+      task.status = "preview-ready";
+      task.stage = "preview_ready";
+      task.percent = 100;
+      task.updatedAt = Date.now();
+      task.logs.push(formatTaskLog(task, "PSD 增量差异已生成，等待确认"));
+      return;
+    }
+    if (task.mode === "incremental-apply" && (!isRecord(result) || result.status !== "applied")) {
+      throw new Error("PSD incremental apply was not completed");
+    }
+    setTaskStage(task, "completed", 100, task.mode === "incremental-apply" ? "PSD 增量更新完成" : "PSD 导入完成");
     task.status = "completed";
     task.completedAt = Date.now();
     task.updatedAt = task.completedAt;
@@ -156,6 +226,14 @@ async function runPsdImportTask(config: GatewayConfig, task: PsdImportTask): Pro
     task.logs.push(formatTaskLog(task, `错误：${task.error}`));
     logWarn("PSD import task failed", { taskId: task.taskId, error: task.error });
   }
+}
+
+function readResultSummary(resultPath: string): unknown {
+  if (!fs.existsSync(resultPath)) {
+    throw new Error(`Figma result was not created: ${resultPath}`);
+  }
+  const parsed: unknown = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+  return isRecord(parsed) && "result" in parsed ? parsed.result : parsed;
 }
 
 function setTaskStage(task: PsdImportTask, stage: string, percent: number, log: string): void {

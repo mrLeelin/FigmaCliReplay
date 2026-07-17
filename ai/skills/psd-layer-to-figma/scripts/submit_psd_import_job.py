@@ -204,6 +204,9 @@ def build_payload(
     file_key: str = "",
     session_id: str = "",
     target_node_id: str = "",
+    import_mode: str = "initial",
+    baseline_fingerprint: str = "",
+    source_file_name: str = "",
 ) -> dict:
     """构建 IMPORT_PSD_JOB 格式的 payload。
 
@@ -227,7 +230,9 @@ def build_payload(
 
     job = {
         "type": "IMPORT_PSD_JOB",          # ← 必须精确，不能写变体
+        "mode": import_mode,
         "name": root_name,
+        "sourceFileName": source_file_name or root_name,
         "manifest": manifest,               # ← 内嵌完整 JSON，不是路径
         "assets": assets,
         "componentLibrary": {
@@ -241,6 +246,10 @@ def build_payload(
         job["sessionId"] = session_id
     if target:
         job["target"] = target
+    if target_node_id:
+        job["targetNodeId"] = target_node_id
+    if baseline_fingerprint:
+        job["baselineFingerprint"] = baseline_fingerprint
 
     payload = {
         "job": job,
@@ -615,6 +624,14 @@ def main() -> int:
     parser.add_argument("--file-key", default="", help="目标 Figma fileKey；建议始终传入以稳定路由")
     parser.add_argument("--session-id", default="", help="目标 Figma 插件 sessionId；多窗口时优先级最高")
     parser.add_argument("--target-node-id", default="", help="导入根 Frame 的目标 parent nodeId；不传则当前 Page")
+    parser.add_argument(
+        "--import-mode",
+        choices=("initial", "incremental-preview", "incremental-apply"),
+        default="initial",
+        help="首次导入、增量预览或确认后的增量应用",
+    )
+    parser.add_argument("--baseline-fingerprint", default="", help="增量应用必须携带的预览指纹")
+    parser.add_argument("--source-file-name", default="", help="仅保存文件名，用于隐藏的 PSD 来源校验")
     parser.add_argument("--x", type=float, default=None, help="Imported root Frame x position")
     parser.add_argument("--y", type=float, default=None, help="Imported root Frame y position")
     parser.add_argument("--no-preflight", action="store_true", help="跳过 /health target 预检")
@@ -639,6 +656,12 @@ def main() -> int:
     except RuntimeError as e:
         print(f"[FAIL] Fast repeat guard failed: {e}")
         return 1
+    if args.import_mode != "initial" and not args.target_node_id.strip():
+        print("[FAIL] Incremental import requires --target-node-id")
+        return 1
+    if args.import_mode == "incremental-apply" and not args.baseline_fingerprint.strip():
+        print("[FAIL] Incremental apply requires --baseline-fingerprint")
+        return 1
 
     # 读取 manifest
     with timeline.step("resolve_manifest_path", manifestPath=args.manifest_path):
@@ -662,6 +685,9 @@ def main() -> int:
             file_key=args.file_key.strip(),
             session_id=args.session_id.strip(),
             target_node_id=args.target_node_id.strip(),
+            import_mode=args.import_mode,
+            baseline_fingerprint=args.baseline_fingerprint.strip(),
+            source_file_name=args.source_file_name.strip(),
         )
         if args.x is not None:
             payload["job"]["x"] = args.x
