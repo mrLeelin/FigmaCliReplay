@@ -4088,7 +4088,10 @@ function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame, context) {
       }
     }
     if (item.source.mode === "nine-slice") {
-      if (node.type !== "FRAME" || validateSliceFrame(node) !== 0 || !hasNineSliceSourceFill(node)) {
+      const expectedImageHash = context && context.imageHashes
+        ? context.imageHashes.get(String(item.source.assetId))
+        : "";
+      if (node.type !== "FRAME" || validateSliceFrame(node) !== 0 || !hasExpectedNineSliceImageHash(node, expectedImageHash)) {
         errors.push(`Added Layer ID ${layerId} has invalid slice structure`);
       }
     }
@@ -5421,6 +5424,23 @@ function hasNineSliceSourceFill(frame) {
     return false;
   }
   return frame.fills.some((fill) => fill && fill.type === "IMAGE" && !!fill.imageHash);
+}
+
+function hasExpectedNineSliceImageHash(frame, expectedImageHash) {
+  if (!frame || !expectedImageHash || !Array.isArray(frame.fills) || !("children" in frame)) {
+    return false;
+  }
+  const sourcePaints = frame.fills.filter((paint) => paint && paint.type === "IMAGE");
+  if (sourcePaints.length !== 1 || sourcePaints[0].imageHash !== expectedImageHash) {
+    return false;
+  }
+  const slices = frame.children.filter((child) => String(child.name).startsWith("__slice_"));
+  return slices.length > 0 && slices.every((slice) => {
+    const imagePaints = Array.isArray(slice.fills)
+      ? slice.fills.filter((paint) => paint && paint.type === "IMAGE")
+      : [];
+    return imagePaints.length === 1 && imagePaints[0].imageHash === expectedImageHash;
+  });
 }
 
 // 根据 slices 数量推断报告用切片类型。
