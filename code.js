@@ -1,4 +1,4 @@
-// Figma MCP Relay build #130
+// Figma MCP Relay build #131
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -47,15 +47,15 @@ function applyImageValidationErrors(exports, errors) {
     if (item) item.health = createImageHealth("blocked", error.code || "invalidImagePayload", { sourceExportId: error.sourceExportId || "" });
   }
 }
-// Figma MCP Relay build #130
+// Figma MCP Relay build #131
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (130 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 130)", { timeout: 1000 });
-console.log("[FigmaMcpRelay] 插件初始化完成, build=130, time=" + Date.now());
+// DIAG: 插件启动标记 (131 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 131)", { timeout: 1000 });
+console.log("[FigmaMcpRelay] 插件初始化完成, build=131, time=" + Date.now());
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -246,7 +246,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "130",
+        build: "131",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -12988,4 +12988,94 @@ function roundHierarchyNumber(value) {
     return 0;
   }
   return Math.round(number * 1000) / 1000;
+}
+function normalizePsdLayerId(value) {
+  var text = String(value == null ? "" : value).trim();
+  return /^\d+$/.test(text) && text !== "0" ? text : "";
+}
+
+
+function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
+  var currentById = new Map();
+  var conflicts = [];
+
+  for (var current of currentNodes || []) {
+    var currentId = normalizePsdLayerId(current && current.layerId);
+    if (!currentId) continue;
+    if (currentById.has(currentId)) {
+      conflicts.push({
+        kind: "duplicate-target-layer-id",
+        layerId: currentId,
+        first: currentById.get(currentId),
+        duplicate: current,
+      });
+      continue;
+    }
+    currentById.set(currentId, current);
+  }
+
+  var incomingById = new Map();
+  for (var source of incomingLayers || []) {
+    var sourceId = normalizePsdLayerId(source && source.layerId);
+    if (!sourceId) {
+      conflicts.push({
+        kind: "missing-source-layer-id",
+        name: source && source.name ? String(source.name) : "",
+      });
+      continue;
+    }
+    if (incomingById.has(sourceId)) {
+      conflicts.push({
+        kind: "duplicate-source-layer-id",
+        layerId: sourceId,
+        first: incomingById.get(sourceId),
+        duplicate: source,
+      });
+      continue;
+    }
+    incomingById.set(sourceId, source);
+  }
+
+  var changed = [];
+  var unchanged = [];
+  var added = [];
+  var missing = [];
+
+  for (var incomingEntry of incomingById.entries()) {
+    var layerId = incomingEntry[0];
+    var sourceLayer = incomingEntry[1];
+    var target = currentById.get(layerId);
+    if (!target) {
+      added.push({ source: sourceLayer });
+      continue;
+    }
+
+    var targetHash = String(target.contentHash || "");
+    var sourceHash = String(sourceLayer.contentHash || "");
+    var pair = { source: sourceLayer, target: target };
+    if (targetHash && targetHash === sourceHash) unchanged.push(pair);
+    else changed.push(pair);
+  }
+
+  for (var currentEntry of currentById.entries()) {
+    if (!incomingById.has(currentEntry[0])) {
+      missing.push({ target: currentEntry[1] });
+    }
+  }
+
+  return {
+    changed: changed,
+    unchanged: unchanged,
+    added: added,
+    missing: missing,
+    conflicts: conflicts,
+    canApply: conflicts.length === 0,
+    summary: {
+      changed: changed.length,
+      unchanged: unchanged.length,
+      added: added.length,
+      missing: missing.length,
+      conflicts: conflicts.length,
+    },
+  };
 }
