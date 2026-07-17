@@ -1,0 +1,42 @@
+[      99ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8765/favicon.ico:0
+[    2421ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/ai-runner/status:0
+[    2421ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/mcp/config/status?client=codex:0
+[    2421ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/unity-projects:0
+[    2421ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[    2422ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[    5296ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[    6289ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[    8159ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   10163ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   12008ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   14022ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   15867ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   17877ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   19735ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   21751ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   23600ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   25630ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   27453ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   29518ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   31305ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   33386ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   35171ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   37297ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   39040ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   41210ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   42914ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   45195ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   46767ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   49344ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   50633ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   53335ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   54504ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   58112ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   58375ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   62244ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   64101ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   66118ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   69969ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   71604ms] [ERROR] WebSocket connection to 'ws://localhost:32130/figma' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8765/ui.html:3385
+[   73818ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0
+[   77684ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:32130/figma/pending?sessionId=figma-relay-session-1784203190287-bf687bbd61ebe:0

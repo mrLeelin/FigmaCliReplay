@@ -91,16 +91,21 @@ dist/                     TypeScript 鏋勫缓杈撳嚭锛岃嚜鍔ㄧ敓鎴愶�
 ## 浜屾湡鏀归€犵偣
 
 - `/mcp` 浣跨敤瀹樻柟 `@modelcontextprotocol/sdk` 鐨?Streamable HTTP transport锛屼笉鍐嶆妸鎵嬪啓 JSON-RPC 瀛愰泦浼鎴愭爣鍑嗕紶杈撱€?- MCP session 浣跨敤 SDK 鐨?`Mcp-Session-Id` 鏈哄埗锛涙爣鍑?MCP client 浼氬湪 initialize 鍚庤嚜鍔ㄦ惡甯?session銆?- Figma 鎻掍欢 WebSocket 鏀寔澶?session registry銆傚彧鏈変竴涓彃浠剁獥鍙ｅ湪绾挎椂鍙互鐪佺暐鐩爣锛涘涓獥鍙ｅ湪绾挎椂搴斾紶 `target.sessionId` 鎴?`target.fileKey`锛屽惁鍒?Gateway 浼氭嫆缁濈寽娴嬨€?- WebSocket ACK 鍚庢湁鎵ц lease锛屾彃浠?UI 鍏抽棴鎴栧崱浣忔椂浼?requeue 鍒?polling fallback锛屼笉鍐嶇瓑 1 灏忔椂 TTL銆?- `/assets` 榛樿鍙厑璁镐笓鐢ㄤ复鏃剁洰褰曪紝涓嶅厑璁歌鍙栨暣涓彃浠剁洰褰曪紝骞舵樉寮忔帓闄?`.local/`銆?- HTTP 鍜?WebSocket 浼氭牎楠屾湰鍦?Host/Origin锛岄檷浣庢湰鍦?MCP 绔彛琚法绔欑綉椤垫互鐢ㄧ殑椋庨櫓銆?- `scripts/setup_mcp_config.ps1` 鍜?`scripts/doctor_mcp.ps1` 浼氭鏌ヨ繍琛屼腑鐨?Gateway 鏄惁鏉ヨ嚜褰撳墠鎻掍欢鐩綍锛岄伩鍏嶅悓浜嬫満鍣ㄤ笂杩炲埌鍙︿竴涓?checkout銆?
-## 插件内 AI 执行
+## 插件内 AI 工具
 
-在“AI 提示词”页选择 Codex CLI 或 Claude Code，然后选择 Figma 节点并点击“AI 自动整理节点”。插件会自动切换到“AI 执行”页：
+“AI 整理节点”使用独立的事务流程，不再依赖可恢复的 CLI 会话：
 
-- 实时追加当前任务的新输出；
-- 执行期间可以停止任务；
-- 当前回合完成并取得 CLI 会话 ID 后，可以输入补充要求继续同一会话；
-- 关闭插件面板或 Figma 会话断开时，Relay 会停止仍在运行的关联 AI 进程。
+1. 在“AI 工具”中只需选择一个 AI：Codex 或 Claude Code。不可用的 AI 会显示原因，失败时不会静默切换。
+2. 在 Figma 中选择一个需要整理的根节点，点击“AI 自动整理节点”。
+3. 插件在当前页面显示进度；分析完成后，同一个弹窗会逐条显示将进行的整理。此时 Figma 尚未被修改。
+4. 点击“确认整理”后，插件在后台应用同一份内容并检查位置、尺寸、PSD 身份和层级规则；失败时自动恢复原状。
+5. 如果自动回滚不完整，插件保留一个隐藏、锁定的 `__cleanup_backup__*` 备份，并提供“恢复所选节点 / 删除备份 / 暂不处理”。恢复前需要在画布中只选择一个受损根节点；恢复后的根节点 ID 会变化。
 
-AI 执行不再打开 PowerShell 或独立 WPF 窗口。完整落盘日志位于插件运行目录的 `.tmp/ai-runs/<runId>/execution.log`。
+整理流程不会自动创建 Component、ComponentSet 或 Variant，也不会在普通设计节点上持久保存 Figma Node ID。隐藏恢复备份不会参与后续 PSD 增量更新、Unity 导出或下一次整理快照。
+
+规划 AI 和确定性执行程序是内部安全边界，界面不会把它们显示成两个选项。其他非整理 AI 模板仍可在“任务详情”查看输出、停止任务，并在 CLI 返回可恢复会话 ID 时继续同一会话。关闭插件面板或 Figma 会话断开时，Relay 会停止仍在运行的关联 AI 进程。
+
+AI 执行不打开 PowerShell 或独立 WPF 窗口。诊断产物位于插件运行目录的 `.tmp/ai-runs/<runId>/`。
 
 ## MCP tools
 

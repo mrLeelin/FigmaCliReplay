@@ -1,0 +1,45 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - heading "LKS Figma MCP Relay" [level=1] [ref=e3]
+    - generic "发布版本" [ref=e4]: v0.1.37
+    - generic "Unity Bridge 版本" [ref=e5]: Bridge --
+  - generic [ref=e6]:
+    - heading "Figma 定位" [level=2] [ref=e7]
+    - generic [ref=e8]:
+      - generic [ref=e9]: Figma Key
+      - generic [ref=e10]:
+        - textbox "Figma Key" [ref=e11]:
+          - /placeholder: 自动读取当前文件 key，也可粘贴覆盖
+        - button "读取 Key" [ref=e12] [cursor=pointer]
+        - button "复制链接" [disabled] [ref=e13]
+      - generic [ref=e14]: 当前定位：未读取
+  - tablist [ref=e15]:
+    - button "同步Unity" [ref=e16] [cursor=pointer]
+    - button "切九宫" [active] [ref=e17] [cursor=pointer]
+    - button "AI 提示词" [ref=e18] [cursor=pointer]
+    - button "AI 执行" [ref=e19] [cursor=pointer]
+    - button "设置；未连接：本地 MCP Companion、Unity 网关" [ref=e20] [cursor=pointer]: 设置 !
+  - text: ▸
+  - generic [ref=e36]:
+    - heading "切九宫" [level=2] [ref=e37]
+    - generic [ref=e38]:
+      - generic [ref=e39]:
+        - generic [ref=e40]: Left
+        - spinbutton "Left" [ref=e41]: "0"
+      - generic [ref=e42]:
+        - generic [ref=e43]: Bottom
+        - spinbutton "Bottom" [ref=e44]: "0"
+      - generic [ref=e45]:
+        - generic [ref=e46]: Right
+        - spinbutton "Right" [ref=e47]: "0"
+      - generic [ref=e48]:
+        - generic [ref=e49]: Top
+        - spinbutton "Top" [ref=e50]: "0"
+    - generic [ref=e51]:
+      - button "自动识别" [ref=e52] [cursor=pointer]
+      - button "切九宫" [ref=e53] [cursor=pointer]
+    - generic [ref=e54]: 选择 1 个带图片填充的节点，可自动识别或手动输入 Unity spriteBorder。Frame/Group 会在原节点内生成 __slice_*；Rectangle 这类叶子节点会原地转换为同名 Frame，并把旧图隐藏在该 Frame 下。
+  - text: ✓
+  - generic [ref=e32]:
+    - heading "日志" [level=2] [ref=e33]
+    - generic [ref=e34]: "[14:00:12] 切换本地 MCP Companion 地址：http://localhost:32130 [14:00:12] 插件已启动。选择 Figma 节点后，连接 Unity 网关并点击「导出选中图片到 Unity」。 [14:00:12] AI 提示词模板已加载：cleanup=1963, componentVariants=1080, unity=1562"

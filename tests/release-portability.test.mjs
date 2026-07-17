@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 const packageScript = fs.readFileSync(new URL("../scripts/package_release.ps1", import.meta.url), "utf8");
+const hiddenStartScript = fs.readFileSync(new URL("../scripts/start_mcp_hidden.ps1", import.meta.url), "utf8");
 const installScriptUrl = new URL("../scripts/install_unity_bridge.ps1", import.meta.url);
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname.slice(1));
 
@@ -13,6 +14,13 @@ test("release packaging owns its Unity bridge and stops it before replacing a re
   assert.doesNotMatch(packageScript, /JellybeanUnity\\Assets\\Editor\\FigmaBridge/);
   assert.match(packageScript, /Join-Path \$PluginRoot "unity\\Assets\\Editor\\FigmaBridge"/);
   assert.ok(packageScript.indexOf("Stop-RelayFromPath -RelayPath $releaseRoot") < packageScript.indexOf("Remove-Item -LiteralPath $releaseRoot"));
+});
+
+test("background Relay launch cannot open a visible console window", () => {
+  const startProcessLine = hiddenStartScript.split(/\r?\n/).find((line) => /Start-Process\s+-FilePath\s+\$node\.Source/.test(line)) || "";
+  assert.match(startProcessLine, /-WindowStyle\s+Hidden/);
+  assert.match(startProcessLine, /-RedirectStandardOutput/);
+  assert.match(startProcessLine, /-RedirectStandardError/);
 });
 
 test("Unity bridge installer copies only the editor plugin and preserves ProjectSettings", () => {

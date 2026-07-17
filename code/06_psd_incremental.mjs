@@ -43,12 +43,29 @@ export function measurePsdLayerIdentity(currentNodes, incomingLayers) {
   };
 }
 
+export function isPsdIncrementalCandidate(record) {
+  var node = record && record.node;
+  if (!node) return true;
+  if (typeof isCleanupRecoveryNode === "function") {
+    return !isCleanupRecoveryNode(node);
+  }
+  var current = node;
+  while (current) {
+    if (typeof current.name === "string" && current.name.startsWith("__cleanup_backup__")) {
+      return false;
+    }
+    current = current.parent || null;
+  }
+  return true;
+}
+
 
 export function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
   var currentById = new Map();
   var conflicts = [];
 
   for (var current of currentNodes || []) {
+    if (!isPsdIncrementalCandidate(current)) continue;
     var currentId = normalizePsdLayerId(current && current.layerId);
     if (!currentId) continue;
     if (currentById.has(currentId)) {

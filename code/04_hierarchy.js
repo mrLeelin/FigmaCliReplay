@@ -2509,7 +2509,7 @@ async function exportFigmaToPrefabJob(job) {
 
 /** 递归收集 Figma 节点树，并转换为相对父节点的数据记录。 */
 async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequests, warnings, parentId, parentBounds) {
-  if (!node || node.removed || node.visible === false) {
+  if (!node || node.removed || node.visible === false || isCleanupRecoveryNode(node)) {
     return;
   }
 
@@ -2607,7 +2607,7 @@ async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequ
 
   if ("children" in node && Array.isArray(node.children)) {
     for (const child of node.children) {
-      if (child && child.visible !== false) {
+      if (child && child.visible !== false && !isCleanupRecoveryNode(child)) {
         record.childIds.push(child.id);
         // 传递当前节点 bounds 作为子节点的 parentBounds
         await collectFigmaPrefabNodes(child, root, rootBounds, output, imageRequests, warnings, node.id, bounds);

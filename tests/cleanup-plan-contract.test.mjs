@@ -3,9 +3,12 @@ import test from "node:test";
 
 import {
   CleanupPlanMarker,
+  computeCleanupSnapshotHash,
   extractCleanupPlan,
+  toFigmaCleanupTransactionPlan,
   toPipelineRootPlan,
   validateCleanupPlan,
+  validateCleanupPlanV2,
 } from "../dist/cleanupPlan.js";
 
 const snapshot = {
@@ -21,6 +24,30 @@ const snapshot = {
     { id: "D", parentId: "A", type: "TEXT", name: "D", siblingIndex: 0, depth: 2 },
   ],
 };
+
+const v2Snapshot = {
+  ...snapshot,
+  nodes: [
+    ...snapshot.nodes,
+    { id: "E", parentId: "R", type: "FRAME", name: "E", siblingIndex: 3, depth: 1 },
+  ],
+};
+
+function validV2Plan(overrides = {}) {
+  return {
+    schemaVersion: 2,
+    rootNodeId: "R",
+    snapshotHash: computeCleanupSnapshotHash(v2Snapshot),
+    operations: [
+      { id: "group-hud", type: "CREATE_GROUP", parentNodeId: "R", name: "HUD", childNodeIds: ["A", "B"] },
+      { id: "group-actions", type: "CREATE_GROUP", parentNodeId: "R", name: "Actions", childNodeIds: ["C", "E"] },
+    ],
+    preconditions: [],
+    verification: { preserveAbsoluteBoundsTolerance: 0.01 },
+    warnings: [],
+    ...overrides,
+  };
+}
 
 function validPlan(overrides = {}) {
   return {
@@ -45,6 +72,16 @@ test("extracts exactly one marked cleanup plan", () => {
     /exactly one cleanup plan marker/i,
   );
   assert.throws(() => extractCleanupPlan(`${CleanupPlanMarker}\n{broken`), /invalid cleanup plan JSON/i);
+});
+
+test("extracts a marked cleanup plan wrapped in one JSON code fence", () => {
+  const plan = validPlan();
+  const fencedPlan = `${CleanupPlanMarker}\n\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\``;
+  assert.deepEqual(extractCleanupPlan(fencedPlan), plan);
+  assert.throws(
+    () => extractCleanupPlan(`${fencedPlan}\nAdditional explanation`),
+    /invalid cleanup plan JSON/i,
+  );
 });
 
 test("normalizes a valid plan and drops unknown display fields", () => {
@@ -115,5 +152,68 @@ test("adapts the validated contract to the existing root pipeline plan", () => {
     ],
     warnings: ["One ambiguous decorative layer"],
     blockingErrors: [],
+  });
+});
+
+test("validates an exact V2 hierarchy plan and canonical snapshot hash", () => {
+  const plan = validV2Plan();
+  assert.match(plan.snapshotHash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(validateCleanupPlanV2(plan, v2Snapshot), plan);
+  assert.throws(
+    () => validateCleanupPlanV2({ ...plan, snapshotHash: "0".repeat(64) }, v2Snapshot),
+    /snapshot hash/i,
+  );
+});
+
+test("rejects component writes, duplicate operation ids, and redundant wrappers", () => {
+  const plan = validV2Plan();
+  assert.throws(
+    () => validateCleanupPlanV2({ ...plan, operations: [{ id: "component", type: "CREATE_COMPONENT", nodeId: "A" }] }, v2Snapshot),
+    /unsupported cleanup operation/i,
+  );
+  assert.throws(
+    () => validateCleanupPlanV2({ ...plan, operations: [plan.operations[0], { ...plan.operations[1], id: plan.operations[0].id }] }, v2Snapshot),
+    /duplicate cleanup operation id/i,
+  );
+  const alreadyWrapped = {
+    ...v2Snapshot,
+    nodes: v2Snapshot.nodes.map((node) => node.id === "A" ? { ...node, name: "[Background]" } : node),
+  };
+  assert.throws(
+    () => validateCleanupPlanV2({
+      ...plan,
+      snapshotHash: computeCleanupSnapshotHash(alreadyWrapped),
+      operations: [{ id: "wrapper", type: "CREATE_GROUP", parentNodeId: "R", name: "Background", childNodeIds: ["A"] }],
+    }, alreadyWrapped),
+    /single-child group|redundant wrapper/i,
+  );
+});
+
+test("accepts an explicit no-op only for an already organized root", () => {
+  const organized = {
+    ...v2Snapshot,
+    nodes: v2Snapshot.nodes.map((node) => node.parentId === "R" ? { ...node, name: `[${node.name}]` } : node),
+  };
+  const noOp = {
+    ...validV2Plan(),
+    snapshotHash: computeCleanupSnapshotHash(organized),
+    operations: [],
+  };
+  assert.deepEqual(validateCleanupPlanV2(noOp, organized), noOp);
+  assert.throws(
+    () => validateCleanupPlanV2({ ...validV2Plan(), operations: [] }, v2Snapshot),
+    /no-op.*already organized/i,
+  );
+});
+
+test("adapts V2 without adding post-approval operations", () => {
+  const plan = validateCleanupPlanV2(validV2Plan(), v2Snapshot);
+  assert.deepEqual(toFigmaCleanupTransactionPlan(plan, v2Snapshot), {
+    schemaVersion: 2,
+    operation: "figma-hierarchy-cleanup-transaction",
+    target: { nodeId: "R", snapshotHash: plan.snapshotHash },
+    operations: plan.operations,
+    verification: plan.verification,
+    createBackup: true,
   });
 });

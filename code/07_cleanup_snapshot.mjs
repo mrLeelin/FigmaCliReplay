@@ -17,8 +17,20 @@ export const CleanupSnapshotLimits = Object.freeze({
   maxBytes: 256 * 1024,
 });
 
+export function isCleanupRecoveryNode(node) {
+  let current = node || null;
+  while (current) {
+    if (typeof current.name === "string" && current.name.startsWith("__cleanup_backup__")) {
+      return true;
+    }
+    current = current.parent || null;
+  }
+  return false;
+}
+
 export function buildCleanupSnapshot(root, requestedLimits = CleanupSnapshotLimits) {
   if (!root || !root.id) throw new Error("cleanup snapshot requires one root node");
+  if (isCleanupRecoveryNode(root)) throw new Error("cleanup recovery backup cannot be used as a cleanup root");
   const limits = normalizeCleanupSnapshotLimits(requestedLimits);
   const nodes = [];
   collectCleanupSnapshotNodes(root, 0, nodes, limits);
@@ -63,6 +75,7 @@ function nonNegativeCleanupLimit(value, fallback) {
 }
 
 function collectCleanupSnapshotNodes(node, depth, output, limits) {
+  if (isCleanupRecoveryNode(node)) return;
   if (depth > limits.maxDepth) {
     throw new Error(`cleanup snapshot exceeds depth ${limits.maxDepth}`);
   }
@@ -78,7 +91,9 @@ function collectCleanupSnapshotNodes(node, depth, output, limits) {
 
 function buildCleanupSnapshotNode(node, depth, maxTextCharacters) {
   const psd = readCleanupPsdMetadata(node);
-  const children = Array.isArray(node.children) ? node.children : [];
+  const children = Array.isArray(node.children)
+    ? node.children.filter((child) => !isCleanupRecoveryNode(child))
+    : [];
   const record = {
     id: String(node.id || ""),
     parentId: node.parent && node.parent.id ? String(node.parent.id) : "",
@@ -108,7 +123,9 @@ function buildCleanupSnapshotNode(node, depth, maxTextCharacters) {
 }
 
 function cleanupSiblingIndex(node) {
-  const siblings = node.parent && Array.isArray(node.parent.children) ? node.parent.children : [];
+  const siblings = node.parent && Array.isArray(node.parent.children)
+    ? node.parent.children.filter((sibling) => !isCleanupRecoveryNode(sibling))
+    : [];
   const index = siblings.indexOf(node);
   return index >= 0 ? index : 0;
 }

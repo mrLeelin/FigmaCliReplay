@@ -3794,6 +3794,7 @@ async function resolvePsdIncrementalTarget(job) {
 function collectPsdBoundNodes(root) {
   const found = [];
   const visit = (node) => {
+    if (isCleanupRecoveryNode(node)) return;
     const layerId = normalizePsdLayerId(readSharedPluginData(node, "psdLayerId"));
     if (layerId) {
       found.push({
@@ -7009,6 +7010,9 @@ function isHierarchySelectedNode(node, selectedNodeId) {
 
 /** 递归采集节点树，保留 siblingIndex 作为 Unity 排序依据。 */
 async function collectHierarchyExportNode(node, parentPath, siblingIndex, syncImages, selectedAncestorIds, selectedNodeId, rootNode, insideNestedPrefabOverride, geometrySyncSelectionId, insideGeometrySyncSelection) {
+  if (isCleanupRecoveryNode(node)) {
+    throw new Error("cleanup recovery backup cannot be exported");
+  }
   const name = String(node.name || "Unnamed");
   const path = parentPath ? parentPath + "/" + name : name;
   const rawSyncBoundaryKind = getHierarchySyncBoundaryKind(node, parentPath, "");
@@ -7072,7 +7076,7 @@ async function collectHierarchyExportNode(node, parentPath, siblingIndex, syncIm
   const restrictOpaqueChildrenToSelectedPath = isOpaquePrefab && isSelectedAncestor && !isSelectedNode;
 
   if ("children" in node && Array.isArray(node.children)) {
-    let children = node.children.filter(isHierarchyExportNode);
+    let children = node.children.filter(child => isHierarchyExportNode(child) && !isCleanupRecoveryNode(child));
     if (restrictOpaqueChildrenToSelectedPath) {
       children = children.filter(child => isHierarchySelectedAncestor(child, selectedAncestorIds));
     }

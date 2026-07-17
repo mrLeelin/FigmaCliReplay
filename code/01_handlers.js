@@ -12,6 +12,57 @@ await handleFigmaHierarchyCleanupAnalyze(message);
     return;
   }
 
+  if (message.type === "FIGMA_HIERARCHY_CLEANUP_TRANSACTION") {
+    await handleFigmaHierarchyCleanupTransaction(message);
+    return;
+  }
+
+  if (message.type === "QUERY_CLEANUP_RECOVERY_BACKUPS") {
+    await handleQueryCleanupRecoveryBackups(message);
+    return;
+  }
+
+  if (message.type === "RESTORE_CLEANUP_RECOVERY_BACKUP") {
+    await handleRestoreCleanupRecoveryBackup(message);
+    return;
+  }
+
+  if (message.type === "DELETE_CLEANUP_RECOVERY_BACKUP") {
+    await handleDeleteCleanupRecoveryBackup(message);
+    return;
+  }
+
+  if (message.type === "GET_CLEANUP_PROVIDER_PREFERENCE") {
+    const providerId = await figma.clientStorage.getAsync("cleanup.preferredPlanningProvider");
+    figma.ui.postMessage({
+      type: "GET_CLEANUP_PROVIDER_PREFERENCE_RESULT",
+      requestId: message.requestId,
+      providerId: providerId === "codex" || providerId === "claude-code" ? providerId : ""
+    });
+    return;
+  }
+
+  if (message.type === "SET_CLEANUP_PROVIDER_PREFERENCE") {
+    const providerId = String(message.providerId || "");
+    if (!(providerId === "codex" || providerId === "claude-code")) {
+      figma.ui.postMessage({
+        type: "SET_CLEANUP_PROVIDER_PREFERENCE_RESULT",
+        requestId: message.requestId,
+        ok: false,
+        error: "unsupported cleanup planning provider"
+      });
+      return;
+    }
+    await figma.clientStorage.setAsync("cleanup.preferredPlanningProvider", providerId);
+    figma.ui.postMessage({
+      type: "SET_CLEANUP_PROVIDER_PREFERENCE_RESULT",
+      requestId: message.requestId,
+      ok: true,
+      providerId: providerId
+    });
+    return;
+  }
+
   if (message.type === "FIGMA_HIERARCHY_WRAP_CHAIN") {
     await handleFigmaHierarchyWrapChain(message);
     return;

@@ -1,0 +1,36 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - heading "LKS Figma MCP Relay" [level=1] [ref=e3]
+    - generic "发布版本" [ref=e4]: v0.1.37
+    - generic "Unity Bridge 版本" [ref=e5]: Bridge --
+  - generic [ref=e6]:
+    - heading "Figma 定位" [level=2] [ref=e7]
+    - generic [ref=e8]:
+      - generic [ref=e9]: Figma Key
+      - generic [ref=e10]:
+        - textbox "Figma Key" [ref=e11]:
+          - /placeholder: 自动读取当前文件 key，也可粘贴覆盖
+        - button "读取 Key" [ref=e12] [cursor=pointer]
+        - button "复制链接" [disabled] [ref=e13]
+      - generic [ref=e14]: 当前定位：未读取
+  - tablist [ref=e15]:
+    - button "同步Unity" [ref=e16] [cursor=pointer]
+    - button "切九宫" [ref=e17] [cursor=pointer]
+    - button "AI 提示词" [ref=e18] [cursor=pointer]
+    - button "AI 执行" [ref=e19] [cursor=pointer]
+    - button "设置；未连接：本地 MCP Companion、Unity 网关" [ref=e20] [cursor=pointer]: 设置 !
+  - text: ▸
+  - generic [ref=e21]:
+    - tablist "同步 Unity" [ref=e22]:
+      - button "图片导出" [ref=e23] [cursor=pointer]
+      - button "Figma导入Prefab" [ref=e24] [cursor=pointer]
+      - button "Prefab导入Figma" [ref=e25] [cursor=pointer]
+      - button "字体同步" [ref=e26] [cursor=pointer]
+    - generic [ref=e28]:
+      - heading "图片导出" [level=2] [ref=e29]
+      - generic [ref=e30]: Unity 图片目标：未连接
+      - button "导出选中图片到 Unity" [disabled] [ref=e31]
+  - text: ✓
+  - generic [ref=e32]:
+    - heading "日志" [level=2] [ref=e33]
+    - generic [ref=e34]: "[19:59:50] 切换本地 MCP Companion 地址：http://localhost:32130 [19:59:50] 插件已启动。选择 Figma 节点后，连接 Unity 网关并点击「导出选中图片到 Unity」。 [19:59:50] AI 提示词模板已加载：cleanup=1963, componentVariants=1080, unity=1562"

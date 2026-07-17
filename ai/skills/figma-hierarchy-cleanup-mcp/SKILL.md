@@ -5,6 +5,12 @@ description: Use when整理 Figma 节点层级、给 Figma 节点打组、生产
 
 # Figma Hierarchy Cleanup MCP Relay
 
+## 插件内“AI 整理节点”V2 边界
+
+当任务由 Figma 插件中的“AI 整理节点”按钮启动时，以插件 V2 控制器为唯一入口：Provider 只生成 `CleanupPlanV2`，用户在插件内预览并确认后，由 `apply_cleanup_plan.py` 提交一个精确事务。该流程禁止调用 `run_cleanup_pipeline.py`、自动嵌套发现、自动 Component/ComponentSet/Variant 创建或任何未出现在预览计划中的写操作；也不依赖 Codex/Claude 的恢复会话。
+
+本文后续关于 `run_cleanup_pipeline.py`、AutoComponentSet 和多轮人工确认的规则，只适用于用户显式发起的旧版/手动 agent 工作流，不得套用到插件 V2 按钮流程。组件化需求必须作为独立任务、独立计划和独立确认处理。
+
 ## Hypothesis-Action-Verification Loop
 
 Use this loop for every write or cross-phase operation. Treat each step as a hypothesis that can be disproved by live evidence, not as a linear checklist.

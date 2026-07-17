@@ -4,11 +4,14 @@ import path from "node:path";
 
 import type { GatewayConfig } from "./config.js";
 import { PLUGIN_ROOT, publicUrl } from "./config.js";
+import { getCleanupRuntime, type CleanupRuntime } from "./cleanup/cleanupRuntime.js";
+import { CleanupError } from "./cleanup/cleanupTypes.js";
+import type { CleanupSnapshotV1 } from "./cleanupPlan.js";
 import { logError, logInfo, logWarn } from "./logger.js";
 import { RelayMcpHttpEndpoint } from "./mcpServer.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 import { applyPsdImportTask, getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
-import { followupAiRun, getAiRun, localAiRunnerStatus, runLocalAiCleanup, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
+import { followupAiRun, getAiRun, localAiRunnerStatus, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
 import { redactLargeRelayPayload, type RuntimeRelay } from "./runtimeRelay.js";
 import { UnityProjectRegistry } from "./unityProjectRegistry.js";
 import { readUnityGatewayDiscovery } from "./unityGatewayDiscovery.js";
@@ -30,7 +33,8 @@ import {
 export function createRelayHttpServer(
   config: GatewayConfig,
   relay: RuntimeRelay,
-  unityProjects = new UnityProjectRegistry()
+  unityProjects = new UnityProjectRegistry(),
+  cleanupRuntime = getCleanupRuntime()
 ) {
   const mcpEndpoint = new RelayMcpHttpEndpoint(relay);
   const server = createServer(async (request, response) => {
@@ -67,7 +71,7 @@ export function createRelayHttpServer(
         return;
       }
       if (request.method === "GET") {
-        handleGet(config, relay, unityProjects, request, requestUrl, response);
+        await handleGet(config, relay, unityProjects, cleanupRuntime, request, requestUrl, response);
         return;
       }
       if (request.method === "POST") {
@@ -75,7 +79,7 @@ export function createRelayHttpServer(
           return;
         }
         const payload = await readJson(request);
-        await handlePost(config, relay, unityProjects, request, requestUrl, payload, response);
+        await handlePost(config, relay, unityProjects, cleanupRuntime, request, requestUrl, payload, response);
         return;
       }
       jsonResponse(response, 405, { error: "method not allowed" });
@@ -92,14 +96,15 @@ export function createRelayHttpServer(
   return server;
 }
 
-function handleGet(
+async function handleGet(
   config: GatewayConfig,
   relay: RuntimeRelay,
   unityProjects: UnityProjectRegistry,
+  cleanupRuntime: CleanupRuntime,
   request: IncomingMessage,
   requestUrl: URL,
   response: ServerResponse
-): void {
+): Promise<void> {
   const pathname = requestUrl.pathname;
   if (pathname === "/health") {
     const payload = relay.status();
@@ -123,11 +128,15 @@ function handleGet(
   }
   if (pathname === "/mcp/clients") {
     jsonResponse(response, 200, relay.mcpClientsStatus());
+    return Promise.resolve();
+  }
+  if (pathname === "/ai-runner/providers") {
+    jsonResponse(response, 200, { ok: true, providers: await cleanupRuntime.providers.list() });
     return;
   }
   if (pathname === "/ai-runner/status") {
     jsonResponse(response, 200, localAiRunnerStatus());
-    return;
+    return Promise.resolve();
   }
   if (pathname === "/unity-projects") {
     jsonResponse(response, 200, unityProjects.list());
@@ -148,13 +157,30 @@ function handleGet(
   }
   const runMatch = pathname.match(/^\/ai-runner\/runs\/([^/]+)$/);
   if (runMatch) {
+    if (cleanupRuntime.controller.has(runMatch[1])) {
+      respondWithCleanupAction(response, () => cleanupRuntime.controller.get(
+        runMatch[1],
+        cleanupCapability(request),
+        Number.parseInt(requestUrl.searchParams.get("afterSequence") || "0", 10) || 0,
+      ));
+      return Promise.resolve();
+    }
     try {
       const afterSequence = Number.parseInt(requestUrl.searchParams.get("afterSequence") || "0", 10) || 0;
       jsonResponse(response, 200, getAiRun(runMatch[1], String(request.headers["x-ai-run-capability"] || ""), afterSequence));
     } catch (error) {
       jsonResponse(response, 403, { ok: false, error: error instanceof Error ? error.message : String(error) });
     }
-    return;
+    return Promise.resolve();
+  }
+  const cleanupRunMatch = pathname.match(/^\/cleanup\/runs\/([^/]+)$/);
+  if (cleanupRunMatch) {
+    respondWithCleanupAction(response, () => cleanupRuntime.controller.get(
+      cleanupRunMatch[1],
+      cleanupCapability(request),
+      Number.parseInt(requestUrl.searchParams.get("afterSequence") || "0", 10) || 0,
+    ));
+    return Promise.resolve();
   }
   if (pathname === config.mcpPath) {
     jsonResponse(response, 405, { error: "MCP endpoint accepts POST requests" });
@@ -234,18 +260,51 @@ function handleGet(
     return;
   }
   jsonResponse(response, 404, { error: `unknown endpoint: ${pathname}` });
+  return Promise.resolve();
 }
 
 async function handlePost(
   config: GatewayConfig,
   relay: RuntimeRelay,
   unityProjects: UnityProjectRegistry,
+  cleanupRuntime: CleanupRuntime,
   request: IncomingMessage,
   requestUrl: URL,
   payload: unknown,
   response: ServerResponse
 ): Promise<void> {
   const pathname = requestUrl.pathname;
+  if (pathname === "/cleanup/runs") {
+    if (!isRecord(payload) || (!isFigmaPluginRequest(request) && !relay.hasLivePluginSession(payload.sessionId))) {
+      jsonResponse(response, 403, { ok: false, error: "Cleanup actions require a live local Figma plugin session." });
+      return;
+    }
+    try {
+      await cleanupRuntime.providers.resolve(payload.providerId);
+      const result = await cleanupRuntime.controller.start({
+        sessionId: String(payload.sessionId || ""),
+        providerId: cleanupProviderId(payload.providerId),
+        snapshot: payload.snapshot as CleanupSnapshotV1,
+      });
+      jsonResponse(response, 200, result);
+    } catch (error) {
+      cleanupErrorResponse(response, error);
+    }
+    return;
+  }
+  const cleanupAction = pathname.match(/^\/cleanup\/runs\/([^/]+)\/(approve|cancel)$/);
+  if (cleanupAction) {
+    respondWithCleanupAction(response, () => {
+      const token = cleanupCapability(request);
+      if (cleanupAction[2] === "cancel") return cleanupRuntime.controller.cancel(cleanupAction[1], token);
+      if (!isRecord(payload)) throw new CleanupError("CLEANUP_REQUEST_INVALID", "approval body must be an object");
+      return cleanupRuntime.controller.approve(cleanupAction[1], token, {
+        approval: payload.approval === true,
+        snapshotHash: String(payload.snapshotHash || ""),
+      });
+    });
+    return;
+  }
   if (pathname === "/unity-projects/add" || pathname === "/unity-projects/select" || pathname === "/unity-projects/remove" || pathname === "/unity-projects/install-bridge") {
     if (!canManageUnityProjects(config, relay, request, payload)) {
       jsonResponse(response, 403, { ok: false, error: "Unity project changes require the local admin token or an online Figma plugin session." });
@@ -406,7 +465,7 @@ async function handlePost(
       const result = pathname === "/ai-runner/config"
         ? writeLocalAiRunnerConfig(payload)
         : pathname === "/ai-runner/run-cleanup"
-          ? runLocalAiCleanup(payload)
+          ? await startLegacyCleanup(cleanupRuntime, payload)
           : runLocalAiPrompt(payload);
       jsonResponse(response, 200, result);
     } catch (error) {
@@ -452,6 +511,48 @@ async function handlePost(
     return;
   }
   jsonResponse(response, 404, { error: `unknown endpoint: ${pathname}` });
+}
+
+async function startLegacyCleanup(cleanupRuntime: CleanupRuntime, payload: Record<string, unknown>) {
+  logWarn("Deprecated cleanup start endpoint used", { pathname: "/ai-runner/run-cleanup" });
+  const configuredProvider = localAiRunnerStatus().config.runner === "claude" ? "claude-code" : "codex";
+  const providerId = cleanupProviderId(payload.providerId || configuredProvider);
+  await cleanupRuntime.providers.resolve(providerId);
+  return await cleanupRuntime.controller.start({
+    sessionId: String(payload.sessionId || ""),
+    providerId,
+    snapshot: payload.snapshot as CleanupSnapshotV1,
+  });
+}
+
+function cleanupProviderId(value: unknown): "codex" | "claude-code" {
+  if (value === "codex" || value === "claude-code") return value;
+  throw new CleanupError("PROVIDER_UNAVAILABLE", `unknown planning provider: ${String(value || "missing")}`);
+}
+
+function cleanupCapability(request: IncomingMessage): string {
+  return String(request.headers["x-ai-run-capability"] || "");
+}
+
+function respondWithCleanupAction(response: ServerResponse, action: () => unknown): void {
+  try {
+    jsonResponse(response, 200, action());
+  } catch (error) {
+    cleanupErrorResponse(response, error);
+  }
+}
+
+function cleanupErrorResponse(response: ServerResponse, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = error instanceof CleanupError ? error.code : undefined;
+  const status = code === "CLEANUP_ALREADY_RUNNING"
+    ? 409
+    : code === "CLEANUP_CAPABILITY_INVALID"
+      ? 403
+      : code === "CLEANUP_RUN_NOT_FOUND"
+        ? 404
+        : 400;
+  jsonResponse(response, status, { ok: false, ...(code ? { code } : {}), error: message });
 }
 
 function canManageUnityProjects(

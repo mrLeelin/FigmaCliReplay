@@ -106,7 +106,7 @@ function Start-GatewayProcess {
         "--asset-root", (Join-Path $PluginRoot ".tmp")
     )
 
-    return Start-Process -FilePath $node.Source -ArgumentList $arguments -WorkingDirectory $PluginRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+    return Start-Process -FilePath $node.Source -ArgumentList $arguments -WorkingDirectory $PluginRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
 }
 
 function Wait-ForGateway {

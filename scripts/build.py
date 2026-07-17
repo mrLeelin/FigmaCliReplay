@@ -44,6 +44,7 @@ ORDER = [
     "05_utils.js",
     "06_psd_incremental.mjs",
     "07_cleanup_snapshot.mjs",
+    "08_cleanup_transaction.mjs",
 ]
 
 PROMPT_FILES = {

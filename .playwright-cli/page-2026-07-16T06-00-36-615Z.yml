@@ -1,0 +1,62 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - heading "LKS Figma MCP Relay" [level=1] [ref=e3]
+    - generic "发布版本" [ref=e4]: v0.1.37
+    - generic "Unity Bridge 版本" [ref=e5]: Bridge --
+  - generic [ref=e6]:
+    - heading "Figma 定位" [level=2] [ref=e7]
+    - generic [ref=e8]:
+      - generic [ref=e9]: Figma Key
+      - generic [ref=e10]:
+        - textbox "Figma Key" [ref=e11]:
+          - /placeholder: 自动读取当前文件 key，也可粘贴覆盖
+        - button "读取 Key" [ref=e12] [cursor=pointer]
+        - button "复制链接" [disabled] [ref=e13]
+      - generic [ref=e14]: 当前定位：未读取
+  - tablist [ref=e15]:
+    - button "同步Unity" [ref=e16] [cursor=pointer]
+    - button "切九宫" [ref=e17] [cursor=pointer]
+    - button "AI 提示词" [ref=e18] [cursor=pointer]
+    - button "AI 执行" [ref=e19] [cursor=pointer]
+    - button "设置；未连接：本地 MCP Companion、Unity 网关" [active] [ref=e20] [cursor=pointer]: 设置 !
+  - generic [ref=e97]:
+    - generic [ref=e98]:
+      - generic [ref=e99]:
+        - heading "本地 MCP Companion" [level=2] [ref=e100]
+        - generic [ref=e101]: 未连接
+      - generic [ref=e102]:
+        - textbox [ref=e103]: http://localhost:32130
+        - button "连接" [ref=e104] [cursor=pointer]
+        - button "插件目录" [ref=e105] [cursor=pointer]
+      - generic [ref=e106]: 连接异常：Failed to fetch 1500ms 后重试。
+      - generic [ref=e108]:
+        - generic [ref=e109]:
+          - button "▸" [ref=e110] [cursor=pointer]
+          - generic [ref=e111]:
+            - generic [ref=e112]: MCP 服务器
+            - generic [ref=e113]: Codex App 用户级配置
+        - generic [ref=e114]: 未配置
+    - generic [ref=e115]:
+      - generic [ref=e116]:
+        - heading "Unity 网关" [level=2] [ref=e117]
+        - generic [ref=e118]: 未连接
+      - generic [ref=e119]:
+        - generic [ref=e120]: 目标 Unity 工程
+        - combobox "目标 Unity 工程" [ref=e121]
+      - generic [ref=e122]:
+        - textbox "输入 Unity 工程根目录，例如 <unity-project>" [ref=e123]
+        - button "添加工程" [ref=e124] [cursor=pointer]
+      - generic [ref=e125]:
+        - button "移除" [ref=e126] [cursor=pointer]
+        - button "安装/更新 Bridge" [ref=e127] [cursor=pointer]
+        - button "刷新工程" [ref=e128] [cursor=pointer]
+      - generic [ref=e129]: 读取 Unity 工程失败：Failed to fetch
+      - generic [ref=e130]:
+        - textbox "自动扫描 localhost:32129-32135，并匹配当前 Unity 工程" [ref=e131]: http://localhost:32129
+        - button "自动连接" [ref=e132] [cursor=pointer]
+        - button "断开" [disabled] [ref=e133]
+      - generic [ref=e134]: 等待连接 Unity 网关...
+  - text: ✓
+  - generic [ref=e32]:
+    - heading "日志" [level=2] [ref=e33]
+    - generic [ref=e34]: "[14:00:12] 切换本地 MCP Companion 地址：http://localhost:32130 [14:00:12] 插件已启动。选择 Figma 节点后，连接 Unity 网关并点击「导出选中图片到 Unity」。 [14:00:12] AI 提示词模板已加载：cleanup=1963, componentVariants=1080, unity=1562"

@@ -27,3 +27,17 @@ test("Unity AI task carries the selected project snapshot and explicit script pa
   assert.match(ui, /unityProject:\s*selectedUnityProject/);
   assert.match(ui, /--unity-project\s+\\?"?\{\{unityProjectPath\}\}/);
 });
+
+test("adding a Unity project gives immediate progress and always restores the button", () => {
+  const functionStart = ui.indexOf("async function addUnityProject()");
+  const functionEnd = ui.indexOf("async function selectUnityProject()", functionStart);
+  const source = ui.slice(functionStart, functionEnd);
+  const progressIndex = source.indexOf('unityProjectStatus.textContent = "正在添加 Unity 工程');
+  const fetchIndex = source.indexOf('fetchWithTimeout(relayEndpoint("/unity-projects/add")');
+
+  assert.ok(progressIndex >= 0, "add flow should show progress immediately");
+  assert.ok(fetchIndex > progressIndex, "progress should be visible before the network request starts");
+  assert.match(source, /addUnityProjectBtn\.disabled = true/);
+  assert.match(source, /finally\s*\{[\s\S]*?addUnityProjectBtn\.disabled = false/);
+  assert.match(source, /本地 MCP Companion 未连接，无法添加 Unity 工程/);
+});

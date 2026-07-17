@@ -1,5 +1,7 @@
 # Figma Cleanup Plan Performance Design
 
+> 历史说明：本文描述的是 Cleanup Plan V1 的性能收敛方案，包含旧的 `componentCandidates` 与 PlanReview 会话模型。插件当前实现以 [Cleanup Module V2](./2026-07-17-cleanup-module-v2-design.md) 为准；V1 内容仅保留为迁移背景，不再是运行契约。
+
 ## Goal
 
 Reduce the initial hierarchy-cleanup PlanReview for a medium Figma selection from the observed 8-14 minute path to a predictable target of under 2 minutes, while keeping the initial turn read-only and preserving the existing explicit approval gate before any Figma mutation.

@@ -1,0 +1,68 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - heading "LKS Figma MCP Relay" [level=1] [ref=e3]
+    - generic "发布版本" [ref=e4]: v0.1.37
+    - generic "Unity Bridge 版本" [ref=e5]: Bridge --
+  - generic [ref=e6]:
+    - heading "Figma 定位" [level=2] [ref=e7]
+    - generic [ref=e8]:
+      - generic [ref=e9]: Figma Key
+      - generic [ref=e10]:
+        - textbox "Figma Key" [ref=e11]:
+          - /placeholder: 自动读取当前文件 key，也可粘贴覆盖
+        - button "读取 Key" [ref=e12] [cursor=pointer]
+        - button "复制链接" [disabled] [ref=e13]
+      - generic [ref=e14]: 当前定位：未读取
+  - tablist [ref=e15]:
+    - button "同步Unity" [ref=e16] [cursor=pointer]
+    - button "切九宫" [ref=e17] [cursor=pointer]
+    - button "AI 提示词" [active] [ref=e18] [cursor=pointer]
+    - button "AI 执行" [ref=e19] [cursor=pointer]
+    - button "设置；未连接：本地 MCP Companion、Unity 网关" [ref=e20] [cursor=pointer]: 设置 !
+  - text: ▸
+  - generic [ref=e56]:
+    - heading "AI 提示词" [level=2] [ref=e57]
+    - generic [ref=e58]:
+      - generic [ref=e59]: 选择模板
+      - generic [ref=e60]:
+        - generic [ref=e61] [cursor=pointer]:
+          - generic [ref=e62]: 🗂️
+          - generic [ref=e63]: 整理节点
+          - generic [ref=e64]: 清理层级、打组、语义化
+          - generic [ref=e65]: 可生成
+          - text: ✓
+        - generic [ref=e66] [cursor=pointer]:
+          - generic [ref=e67]: 🧩
+          - generic [ref=e68]: 组件变体
+          - generic [ref=e69]: 多选节点生成 ComponentSet
+          - generic [ref=e70]: 可生成
+        - generic [ref=e71] [cursor=pointer]:
+          - generic [ref=e72]: 🎮
+          - generic [ref=e73]: 导入 Unity
+          - generic [ref=e74]: Figma → UGUI Prefab
+          - generic [ref=e75]: 需连 Unity
+    - generic [ref=e77]:
+      - checkbox "启用 SubAgent" [checked] [ref=e78]
+      - text: 启用 SubAgent
+    - generic [ref=e79]:
+      - button "生成提示词" [ref=e80] [cursor=pointer]
+      - button "复制提示词" [disabled] [ref=e81]
+      - button "AI 自动整理节点" [ref=e82] [cursor=pointer]
+    - generic [ref=e83]:
+      - generic [ref=e84]: 本机 AI 执行器
+      - generic [ref=e86]:
+        - generic [ref=e88]:
+          - generic [ref=e89]: 执行器
+          - combobox "执行器" [ref=e90]:
+            - option "Codex CLI" [selected]
+            - option "Claude Code"
+        - generic [ref=e91]: 读取本机 AI 设置失败：Failed to fetch
+    - generic [ref=e92]: 选择 1 个或多个 Figma 节点后生成提示词。
+    - generic [ref=e93]: 选中节点：未读取
+    - generic [ref=e94]:
+      - generic [ref=e95]: 提示词预览
+      - textbox "提示词预览" [ref=e96]:
+        - /placeholder: 生成后可在这里预览和编辑提示词
+  - generic [ref=e32]:
+    - heading "日志" [level=2] [ref=e33]
+    - generic [ref=e34]: "[14:00:12] 切换本地 MCP Companion 地址：http://localhost:32130 [14:00:12] 插件已启动。选择 Figma 节点后，连接 Unity 网关并点击「导出选中图片到 Unity」。 [14:00:12] AI 提示词模板已加载：cleanup=1963, componentVariants=1080, unity=1562"

@@ -34,7 +34,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         /// <summary>服务器版本号</summary>
         // BEGIN_RELEASE_VERSION
-        private const string Version = "0.1.40";
+        private const string Version = "0.1.44";
         // END_RELEASE_VERSION
 
         /// <summary>临时输出目录前缀（相对于仓库根目录）</summary>
