@@ -3630,6 +3630,233 @@ async function importPsdJob(job, assets) {
   };
 }
 
+// 只读计算 PSD 增量差异；此阶段不得修改 Figma 文档。
+async function previewPsdIncrementalUpdate(job, assets) {
+  const prepared = await preparePsdIncrementalUpdate(job, assets);
+  return buildPsdIncrementalResult(prepared, prepared.diff.canApply ? "preview-ready" : "preview-blocked");
+}
+
+// 重新校验预览指纹后，仅替换 PSD 拥有的像素或文字内容。
+async function applyPsdIncrementalUpdate(job, assets) {
+  const prepared = await preparePsdIncrementalUpdate(job, assets);
+  const expectedFingerprint = String(job && job.baselineFingerprint || "");
+  if (!prepared.diff.canApply) {
+    return buildPsdIncrementalResult(prepared, "apply-blocked");
+  }
+  if (!expectedFingerprint || expectedFingerprint !== prepared.baselineFingerprint) {
+    prepared.diff.conflicts.push({
+      kind: "stale-preview",
+      message: "Figma 节点或 PSD 内容在确认前发生了变化，请重新预览。"
+    });
+    prepared.diff.summary.conflicts = prepared.diff.conflicts.length;
+    prepared.diff.canApply = false;
+    return buildPsdIncrementalResult(prepared, "apply-blocked");
+  }
+
+  const imagePaints = new Map();
+  for (const pair of prepared.diff.changed) {
+    if (pair.source.mode === "text") {
+      await figma.loadFontAsync(pair.target.node.fontName);
+    } else {
+      imagePaints.set(pair.source.layerId, await createImagePaint(pair.source, prepared.context, "FILL", null));
+    }
+  }
+  for (const item of prepared.diff.added) {
+    if (item.source.mode === "text") {
+      await loadBestFont(item.source, prepared.context);
+    } else {
+      await createImagePaint(item.source, prepared.context, "FILL", null);
+    }
+  }
+
+  for (const pair of prepared.diff.changed) {
+    const node = pair.target.node;
+    if (pair.source.mode === "text") {
+      node.characters = String(pair.source.chars || "");
+    } else {
+      node.fills = [imagePaints.get(pair.source.layerId)];
+    }
+    writeLayerMetadata(node, pair.source, {});
+  }
+
+  let stagingFrame = null;
+  if (prepared.diff.added.length > 0) {
+    stagingFrame = findPsdIncrementalStagingFrame(prepared.target) || createPsdIncrementalStagingFrame(prepared.target);
+    for (const item of prepared.diff.added) {
+      const node = await createLayerNode(stagingFrame, item.source, prepared.context);
+      if (node) {
+        prepared.context.nodeByLayerIdx.set(String(item.source.idx), node.id);
+      }
+    }
+  }
+
+  writePsdRootMetadata(prepared.target, job, prepared.manifest);
+  if (typeof figma.commitUndo === "function") {
+    figma.commitUndo();
+  }
+
+  const result = buildPsdIncrementalResult(prepared, "applied");
+  result.updatedCount = prepared.diff.changed.length;
+  result.addedCount = prepared.diff.added.length;
+  result.retainedMissingCount = prepared.diff.missing.length;
+  result.stagingFrameId = stagingFrame ? stagingFrame.id : "";
+  return result;
+}
+
+async function preparePsdIncrementalUpdate(job, assets) {
+  const manifest = normalizeManifest(job && job.manifest);
+  const target = await resolvePsdIncrementalTarget(job);
+  const context = {
+    job,
+    manifest,
+    assetBytes: buildAssetBytesMap(assets),
+    componentIndexes: await buildComponentIndexes(job),
+    commonReports: [],
+    sliceReports: [],
+    textReports: [],
+    imageHashes: new Map(),
+    nodeByLayerIdx: new Map(),
+    warnings: [],
+    errors: [],
+    stats: { image: 0, text: 0, commonInstance: 0, commonFallbackImage: 0, nineSlice: 0, slice: 0 }
+  };
+  const currentNodes = collectPsdBoundNodes(target);
+  const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
+  appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
+  return {
+    target,
+    manifest,
+    context,
+    diff,
+    baselineFingerprint: buildPsdIncrementalFingerprint(target, currentNodes, manifest.layers)
+  };
+}
+
+async function resolvePsdIncrementalTarget(job) {
+  const nodeId = String(job && job.targetNodeId || "");
+  if (!nodeId) {
+    throw new Error("增量更新缺少 targetNodeId。");
+  }
+  const node = await figma.getNodeByIdAsync(nodeId).catch(() => null);
+  if (!node) {
+    throw new Error(`找不到增量更新目标：${nodeId}`);
+  }
+  if (node.type !== "FRAME" && node.type !== "COMPONENT") {
+    throw new Error(`增量更新只支持 FRAME 或 COMPONENT，当前为 ${node.type}。`);
+  }
+  return node;
+}
+
+function collectPsdBoundNodes(root) {
+  const found = [];
+  const visit = (node) => {
+    const layerId = normalizePsdLayerId(readSharedPluginData(node, "psdLayerId"));
+    if (layerId) {
+      found.push({
+        layerId,
+        nodeId: node.id,
+        node,
+        name: String(node.name || ""),
+        nodeType: node.type,
+        contentHash: readSharedPluginData(node, "psdContentHash"),
+        ownership: readSharedPluginData(node, "psdOwnership")
+      });
+    }
+    if ("children" in node) {
+      for (const child of node.children) visit(child);
+    }
+  };
+  visit(root);
+  return found;
+}
+
+function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest) {
+  const schemaVersion = readSharedPluginData(target, "psdSchemaVersion");
+  if (schemaVersion !== "2") {
+    diff.conflicts.push({ kind: "missing-target-metadata", message: "目标不是带增量元数据的 PSD 导入结果。" });
+  }
+  const storedSourceKey = readSharedPluginData(target, "psdSourceKey");
+  const incomingSourceKey = buildPsdSourceKey(job, manifest);
+  if (storedSourceKey && incomingSourceKey && storedSourceKey !== incomingSourceKey) {
+    diff.conflicts.push({ kind: "source-mismatch", expected: storedSourceKey, actual: incomingSourceKey });
+  }
+  for (const pair of diff.changed) {
+    const node = pair.target.node;
+    if (pair.source.mode === "text") {
+      const fontName = node && node.fontName;
+      if (!node || node.type !== "TEXT" || !fontName || typeof fontName !== "object") {
+        diff.conflicts.push({ kind: "unsupported-text-target", layerId: pair.source.layerId, nodeId: pair.target.nodeId });
+      }
+    } else if (!node || !("fills" in node)) {
+      diff.conflicts.push({ kind: "unsupported-image-target", layerId: pair.source.layerId, nodeId: pair.target.nodeId });
+    }
+  }
+  diff.summary.conflicts = diff.conflicts.length;
+  diff.canApply = diff.conflicts.length === 0;
+}
+
+function buildPsdIncrementalFingerprint(target, currentNodes, incomingLayers) {
+  const current = currentNodes
+    .map((item) => `${item.layerId}:${item.nodeId}:${item.contentHash}`)
+    .sort()
+    .join("|");
+  const incoming = incomingLayers
+    .map((item) => `${normalizePsdLayerId(item.layerId)}:${item.contentHash}`)
+    .sort()
+    .join("|");
+  return `${target.id}::${current}::${incoming}`;
+}
+
+function buildPsdIncrementalResult(prepared, status) {
+  const serializePair = (item) => ({
+    layerId: normalizePsdLayerId(item.source && item.source.layerId || item.target && item.target.layerId),
+    sourceName: String(item.source && item.source.name || ""),
+    targetName: String(item.target && item.target.name || ""),
+    targetNodeId: String(item.target && item.target.nodeId || "")
+  });
+  return {
+    status,
+    canApply: prepared.diff.canApply,
+    targetNodeId: prepared.target.id,
+    targetName: prepared.target.name,
+    baselineFingerprint: prepared.baselineFingerprint,
+    summary: prepared.diff.summary,
+    groups: {
+      changed: prepared.diff.changed.map(serializePair),
+      unchanged: prepared.diff.unchanged.map(serializePair),
+      added: prepared.diff.added.map(serializePair),
+      missing: prepared.diff.missing.map(serializePair),
+      conflicts: prepared.diff.conflicts.map((item) => ({
+        kind: String(item.kind || "unknown"),
+        layerId: normalizePsdLayerId(item.layerId),
+        nodeId: String(item.nodeId || item.duplicate && item.duplicate.nodeId || ""),
+        name: String(item.name || ""),
+        message: String(item.message || ""),
+        expected: String(item.expected || ""),
+        actual: String(item.actual || "")
+      }))
+    },
+    warnings: prepared.context.warnings,
+    errors: prepared.context.errors
+  };
+}
+
+function findPsdIncrementalStagingFrame(target) {
+  if (!("children" in target)) return null;
+  return target.children.find((child) => child.type === "FRAME" && child.name === "__PSD新增待整理") || null;
+}
+
+function createPsdIncrementalStagingFrame(target) {
+  const frame = figma.createFrame();
+  frame.name = "__PSD新增待整理";
+  frame.resize(positiveOr(target.width, 1), positiveOr(target.height, 1));
+  frame.fills = [];
+  frame.strokes = [];
+  frame.clipsContent = false;
+  target.appendChild(frame);
+  return frame;
+}
+
 // 规范化 manifest_summary 数据，兼容不同摘要脚本输出格式。
 function normalizeManifest(rawManifest) {
   if (!rawManifest || typeof rawManifest !== "object") {
@@ -3678,6 +3905,8 @@ function normalizeLayer(layer) {
     rawPsdLayerName: String(layer.rawPsdLayerName || layer.name || ""),
     normalizedLayerName: String(layer.normalizedLayerName || layer.name || ""),
     semanticMode: String(layer.semanticMode || layer.mode || "image"),
+    layerId: normalizePsdLayerId(layer.layerId),
+    contentHash: String(layer.contentHash || ""),
     normalizationWarnings: Array.isArray(layer.normalizationWarnings) ? layer.normalizationWarnings : []
   });
   applyNestedManifestCompatibility(normalized, layer, mode, width, height);
@@ -3761,15 +3990,32 @@ async function createRootFrame(job, manifest) {
   root.fills = [];
   root.strokes = [];
   root.clipsContent = false;
-  writePluginData(root, {
-    importKind: "psd-layer-to-figma",
-    schemaVersion: String(job.schemaVersion || 1),
-    source: String(job.source || "")
-  });
+  writePsdRootMetadata(root, job, manifest);
 
   const parent = await resolveTargetParent(job.target);
   parent.appendChild(root);
   return root;
+}
+
+function writePsdRootMetadata(root, job, manifest) {
+  writePluginData(root, {
+    importKind: "psd-layer-to-figma",
+    schemaVersion: String(job.schemaVersion || 2),
+    source: String(job.source || ""),
+    psdSchemaVersion: "2",
+    psdSourceKey: buildPsdSourceKey(job, manifest),
+    psdCanvasWidth: String(manifest.canvas.width),
+    psdCanvasHeight: String(manifest.canvas.height)
+  });
+}
+
+function buildPsdSourceKey(job, manifest) {
+  const source = String(job && (job.sourceFileName || job.name) || "")
+    .split(/[\\/]/)
+    .pop()
+    .trim()
+    .toLowerCase();
+  return `${source}:${manifest.canvas.width}x${manifest.canvas.height}`;
 }
 
 // 解析目标父节点；目标不是容器时回退到当前页面。
@@ -4236,7 +4482,11 @@ function writeLayerMetadata(node, layer, extra) {
     normalizedLayerName: layer.normalizedLayerName,
     semanticMode: layer.semanticMode,
     normalizationWarnings: JSON.stringify(layer.normalizationWarnings || []),
-    psdLayerIndex: String(layer.idx)
+    psdLayerIndex: String(layer.idx),
+    psdLayerId: normalizePsdLayerId(layer.layerId),
+    psdOriginalName: String(layer.rawPsdLayerName || layer.name || ""),
+    psdContentHash: String(layer.contentHash || ""),
+    psdOwnership: layer.mode === "text" ? "text-content" : "image-content"
   };
   Object.assign(metadata, extra || {});
   writePluginData(node, metadata);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
@@ -66,4 +67,15 @@ test("missing and duplicate incoming ids are blocking conflicts", () => {
     diff.conflicts.map((item) => item.kind),
     ["missing-source-layer-id", "duplicate-source-layer-id"],
   );
+});
+
+test("Figma runtime exposes preview/apply without overwriting organized node identity", () => {
+  const source = fs.readFileSync(new URL("../code/05_utils.js", import.meta.url), "utf8");
+
+  assert.match(source, /async function previewPsdIncrementalUpdate\(/);
+  assert.match(source, /async function applyPsdIncrementalUpdate\(/);
+  assert.match(source, /psdLayerId/);
+  assert.match(source, /psdContentHash/);
+  assert.doesNotMatch(source, /targetNode\.name\s*=/);
+  assert.doesNotMatch(source, /targetNode\.x\s*=/);
 });

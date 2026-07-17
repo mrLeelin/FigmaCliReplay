@@ -197,14 +197,25 @@ async function handleImportPsdJob(message) {
 
   state.importing = true;
   try {
-    const result = await importPsdJob(message.job, message.assets || []);
+    const mode = String(message.job && message.job.mode || "initial-import");
+    const result = mode === "incremental-preview"
+      ? await previewPsdIncrementalUpdate(message.job, message.assets || [])
+      : mode === "incremental-apply"
+        ? await applyPsdIncrementalUpdate(message.job, message.assets || [])
+        : await importPsdJob(message.job, message.assets || []);
     state.lastResult = result;
     figma.ui.postMessage({
       type: "IMPORT_PSD_RESULT",
       requestId: message.requestId,
       result
     });
-    figma.notify(`PSD 导入完成：${result.createdCount} 个节点`);
+    if (mode === "incremental-preview") {
+      figma.notify(result.canApply ? "PSD 增量差异已生成" : "PSD 增量更新存在冲突", { error: !result.canApply });
+    } else if (mode === "incremental-apply") {
+      figma.notify(result.status === "applied" ? "PSD 增量更新完成" : "PSD 增量更新未执行", { error: result.status !== "applied" });
+    } else {
+      figma.notify(`PSD 导入完成：${result.createdCount} 个节点`);
+    }
   } catch (error) {
     const result = {
       status: "error", createdCount: 0,
