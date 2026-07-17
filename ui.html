@@ -732,7 +732,7 @@
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
   <div class="app-title-row">
     <h1>LKS Figma MCP Relay</h1>
-    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.39<!-- END_RELEASE_VERSION --></span>
+    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.40<!-- END_RELEASE_VERSION --></span>
     <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
   </div>
 
@@ -1466,6 +1466,16 @@
       aiCleanupPlanPreviewEl.style.display = "";
     }
 
+    function invalidateTerminalCleanupRun(run) {
+      var terminal = !!run && run.template === "cleanup" && (run.status === "cancelled" || run.status === "failed");
+      if (!terminal) return false;
+      run.planReady = false;
+      run.planSummary = null;
+      run.sessionAvailable = false;
+      aiCleanupBusy = false;
+      return true;
+    }
+
     function aiTemplateActionLabel(template) {
       if (template === "unity") return "导入到 Unity";
       if (template === "componentVariants") return "AI 创建组件变体";
@@ -1480,6 +1490,7 @@
 
     function refreshAiExecutionControls() {
       var run = activeAiCleanupRun;
+      var cleanupTerminal = invalidateTerminalCleanupRun(run);
       var running = !!run && (run.status === "starting" || run.status === "running");
       var cleanupApprovalReady = !!run && run.template === "cleanup" && run.status === "completed"
         && run.planReady === true && run.sessionAvailable === true && run.phase === "awaiting-approval";
@@ -1489,6 +1500,7 @@
         ? !cleanupApprovalReady
         : !resumable || !aiExecutionFollowupInput.value.trim();
       aiExecutionContinueBtn.textContent = run && run.template === "cleanup" ? "确认并执行整理" : "继续执行";
+      aiExecutionContinueBtn.hidden = cleanupTerminal;
       aiExecutionStopBtn.disabled = !running;
       if (!run) {
         aiExecutionMetaEl.textContent = "当前任务：未启动";
@@ -1504,7 +1516,8 @@
       var idleText = run.lastOutputAt ? "；最近输出 " + formatAiExecutionDuration(idleMs) + " 前" : "；等待首条输出";
       var phaseText = aiRunPhaseText(run.phase);
       aiExecutionStatusEl.textContent = (phaseText ? phaseText + "；" : "") + aiRunStatusText(run.status) + "；已运行 " + elapsedText + idleText
-        + ((run.status === "completed" || run.status === "failed") && !run.sessionAvailable ? "；当前 CLI 未返回可继续的会话 ID。" : "");
+        + (cleanupTerminal ? "；请回到“AI 提示词”重新生成整理计划。" : "")
+        + (!cleanupTerminal && (run.status === "completed" || run.status === "failed") && !run.sessionAvailable ? "；当前 CLI 未返回可继续的会话 ID。" : "");
       renderCleanupPlanPreview(run);
     }
 

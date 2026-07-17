@@ -35,6 +35,15 @@ test("cleanup approval is enabled only for a validated resumable plan", () => {
   assert.match(ui, /JSON\.stringify\(\{ text: text \}\)/);
 });
 
+test("cancelled cleanup invalidates the stale approval UI and unlocks restart", () => {
+  assert.match(ui, /function invalidateTerminalCleanupRun/);
+  assert.match(ui, /run\.planReady = false/);
+  assert.match(ui, /run\.planSummary = null/);
+  assert.match(ui, /aiExecutionContinueBtn\.hidden = cleanupTerminal/);
+  assert.match(ui, /请回到“AI 提示词”重新生成整理计划/);
+  assert.match(ui, /aiCleanupBusy = false/);
+});
+
 test("updated plugin UI script remains syntactically valid", () => {
   const script = ui.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
   assert.ok(script.length > 0);
