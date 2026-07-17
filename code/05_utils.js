@@ -3700,7 +3700,7 @@ async function applyPsdIncrementalUpdate(job, assets) {
       if (pair.target.ownership === "text-content") {
         node.characters = String(pair.source.chars || "");
       } else if (pair.target.ownership === "image-content") {
-        node.fills = [imagePaints.get(pair.source.layerId)];
+        node.fills = replacePsdOwnedImageHash(node.fills, imagePaints.get(pair.source.layerId));
       } else {
         throw new Error(`PSD ownership 不允许写入节点 ${node.id}`);
       }
@@ -3845,9 +3845,13 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
       node && node.type === "TEXT" ? node.textAutoResize : ""
     );
     const fontName = node && node.type === "TEXT" ? node.fontName : null;
-    if (conflictKind || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
+    const imagePaintCount = node && node.type === "RECTANGLE" && Array.isArray(node.fills)
+      ? node.fills.filter((paint) => paint && paint.type === "IMAGE").length
+      : 0;
+    const paintConflict = pair.source.mode === "image" && imagePaintCount !== 1 ? "unsafe-image-fill-structure" : "";
+    if (conflictKind || paintConflict || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
       diff.conflicts.push({
-        kind: conflictKind || "unsupported-text-font",
+        kind: conflictKind || paintConflict || "unsupported-text-font",
         layerId: pair.source.layerId,
         nodeId: pair.target.nodeId
       });
@@ -3984,13 +3988,28 @@ function verifyPsdAppliedContent(changedPairs, imagePaints) {
       if (node.characters !== String(pair.source.chars || "")) errors.push(`${node.id} 文本内容不一致`);
     } else {
       const expectedPaint = imagePaints.get(pair.source.layerId);
-      const actualPaint = Array.isArray(node.fills) ? node.fills[0] : null;
+      const actualPaint = Array.isArray(node.fills)
+        ? node.fills.find((paint) => paint && paint.type === "IMAGE")
+        : null;
       if (!actualPaint || actualPaint.type !== "IMAGE" || actualPaint.imageHash !== expectedPaint.imageHash) {
         errors.push(`${node.id} 图片内容不一致`);
       }
     }
   }
   return errors;
+}
+
+function replacePsdOwnedImageHash(fills, decodedPaint) {
+  let replaced = 0;
+  const updated = fills.map((paint) => {
+    if (!paint || paint.type !== "IMAGE") return paint;
+    replaced += 1;
+    return Object.assign({}, paint, { imageHash: decodedPaint.imageHash });
+  });
+  if (replaced !== 1) {
+    throw new Error(`图片节点需要且只能包含一个 IMAGE fill，当前为 ${replaced}`);
+  }
+  return updated;
 }
 
 function capturePsdContentRollback(node) {

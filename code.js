@@ -1,4 +1,4 @@
-// Figma MCP Relay build #139
+// Figma MCP Relay build #140
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -47,15 +47,15 @@ function applyImageValidationErrors(exports, errors) {
     if (item) item.health = createImageHealth("blocked", error.code || "invalidImagePayload", { sourceExportId: error.sourceExportId || "" });
   }
 }
-// Figma MCP Relay build #139
+// Figma MCP Relay build #140
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (139 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 139)", { timeout: 1000 });
-console.log("[FigmaMcpRelay] 插件初始化完成, build=139, time=" + Date.now());
+// DIAG: 插件启动标记 (140 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 140)", { timeout: 1000 });
+console.log("[FigmaMcpRelay] 插件初始化完成, build=140, time=" + Date.now());
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -246,7 +246,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "139",
+        build: "140",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -10040,7 +10040,7 @@ async function applyPsdIncrementalUpdate(job, assets) {
       if (pair.target.ownership === "text-content") {
         node.characters = String(pair.source.chars || "");
       } else if (pair.target.ownership === "image-content") {
-        node.fills = [imagePaints.get(pair.source.layerId)];
+        node.fills = replacePsdOwnedImageHash(node.fills, imagePaints.get(pair.source.layerId));
       } else {
         throw new Error(`PSD ownership 不允许写入节点 ${node.id}`);
       }
@@ -10185,9 +10185,13 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
       node && node.type === "TEXT" ? node.textAutoResize : ""
     );
     const fontName = node && node.type === "TEXT" ? node.fontName : null;
-    if (conflictKind || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
+    const imagePaintCount = node && node.type === "RECTANGLE" && Array.isArray(node.fills)
+      ? node.fills.filter((paint) => paint && paint.type === "IMAGE").length
+      : 0;
+    const paintConflict = pair.source.mode === "image" && imagePaintCount !== 1 ? "unsafe-image-fill-structure" : "";
+    if (conflictKind || paintConflict || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
       diff.conflicts.push({
-        kind: conflictKind || "unsupported-text-font",
+        kind: conflictKind || paintConflict || "unsupported-text-font",
         layerId: pair.source.layerId,
         nodeId: pair.target.nodeId
       });
@@ -10324,13 +10328,28 @@ function verifyPsdAppliedContent(changedPairs, imagePaints) {
       if (node.characters !== String(pair.source.chars || "")) errors.push(`${node.id} 文本内容不一致`);
     } else {
       const expectedPaint = imagePaints.get(pair.source.layerId);
-      const actualPaint = Array.isArray(node.fills) ? node.fills[0] : null;
+      const actualPaint = Array.isArray(node.fills)
+        ? node.fills.find((paint) => paint && paint.type === "IMAGE")
+        : null;
       if (!actualPaint || actualPaint.type !== "IMAGE" || actualPaint.imageHash !== expectedPaint.imageHash) {
         errors.push(`${node.id} 图片内容不一致`);
       }
     }
   }
   return errors;
+}
+
+function replacePsdOwnedImageHash(fills, decodedPaint) {
+  let replaced = 0;
+  const updated = fills.map((paint) => {
+    if (!paint || paint.type !== "IMAGE") return paint;
+    replaced += 1;
+    return Object.assign({}, paint, { imageHash: decodedPaint.imageHash });
+  });
+  if (replaced !== 1) {
+    throw new Error(`图片节点需要且只能包含一个 IMAGE fill，当前为 ${replaced}`);
+  }
+  return updated;
 }
 
 function capturePsdContentRollback(node) {

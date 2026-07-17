@@ -82,6 +82,7 @@ test("Figma runtime exposes preview/apply without overwriting organized node ide
   assert.match(source, /layoutPositioning = "ABSOLUTE"/);
   assert.match(source, /rollbackPsdIncrementalMutation/);
   assert.match(source, /verifyPsdProtectedSnapshot/);
+  assert.match(source, /replacePsdOwnedImageHash/);
   assert.doesNotMatch(source, /targetNode\.name\s*=/);
   assert.doesNotMatch(source, /targetNode\.x\s*=/);
 });
