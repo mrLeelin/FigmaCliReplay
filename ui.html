@@ -369,6 +369,32 @@
     .psd-window-drop-overlay.active {
       display: flex;
     }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 10020;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: rgba(3, 8, 14, 0.78);
+    }
+    .modal-backdrop[hidden] { display: none; }
+    .modal-card {
+      width: min(460px, 100%);
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid rgba(125,211,252,0.28);
+      border-radius: 14px;
+      background: #111c27;
+      box-shadow: 0 22px 70px rgba(0,0,0,0.55);
+    }
+    .modal-card details { margin-top: 10px; }
+    .modal-card summary { cursor: pointer; color: var(--accent); }
+    .psd-diff-group { margin-top: 8px; color: var(--muted); }
+    .psd-diff-group strong { color: var(--text); }
+    .psd-diff-list { margin: 4px 0 0; padding-left: 18px; }
     .psd-drop-title {
       color: var(--text);
       font-weight: 600;
@@ -1032,6 +1058,21 @@
     <div class="log" id="log">等待操作...</div>
   </div>
 
+  <div class="modal-backdrop" id="psdIncrementalDialog" hidden>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="psdIncrementalDialogTitle">
+      <h2 id="psdIncrementalDialogTitle">确认 PSD 增量更新</h2>
+      <div id="psdIncrementalDialogSummary" class="status-box"></div>
+      <details>
+        <summary>查看受影响图层</summary>
+        <div id="psdIncrementalDialogDetails"></div>
+      </details>
+      <div class="button-row">
+        <button class="secondary" id="cancelPsdIncrementalBtn" type="button">取消</button>
+        <button id="confirmPsdIncrementalBtn" type="button">确认增量更新</button>
+      </div>
+    </section>
+  </div>
+
   <script>
     // ─── DOM ───
     const logEl = document.getElementById("log");
@@ -1091,6 +1132,11 @@
     const aiPromptPsdFileSection = document.getElementById("aiPromptPsdFileSection");
     const aiPromptPsdDropZone = document.getElementById("aiPromptPsdDropZone");
     const psdWindowDropOverlay = document.getElementById("psdWindowDropOverlay");
+    const psdIncrementalDialog = document.getElementById("psdIncrementalDialog");
+    const psdIncrementalDialogSummary = document.getElementById("psdIncrementalDialogSummary");
+    const psdIncrementalDialogDetails = document.getElementById("psdIncrementalDialogDetails");
+    const cancelPsdIncrementalBtn = document.getElementById("cancelPsdIncrementalBtn");
+    const confirmPsdIncrementalBtn = document.getElementById("confirmPsdIncrementalBtn");
     const aiPromptPsdFileBox = document.getElementById("aiPromptPsdFileBox");
     const generateAiPromptBtn = document.getElementById("generateAiPromptBtn");
     const copyAiPromptBtn = document.getElementById("copyAiPromptBtn");
@@ -1332,6 +1378,7 @@
     let pendingPsdImportSelectionRequestId = "";
     let pendingPsdImportSelectionResolve = null;
     let pendingPsdImportSelectionReject = null;
+    let activePsdIncrementalPreview = null;
     let prefabImportBusy = false;
     let prefabImportTaskId = "";
     let prefabImportPollTimer = null;
@@ -2282,10 +2329,22 @@
       psdImportQueueActive = true;
       var total = files.length;
       var failed = 0;
+      var selection = await querySelectionForPsdImport();
+      var dropMode = resolvePsdDropMode(selection);
+      if (dropMode.mode === "incremental-preview" && total !== 1) {
+        psdImportQueueActive = false;
+        throw new Error("选择增量更新目标后只能拖入一个 PSD 文件");
+      }
       appendLog("PSD 批量导入开始：共 " + total + " 个文件");
       for (var i = 0; i < total; i++) {
         try {
-          await startPsdImportFromDroppedFile(files[i], { index: i + 1, total: total, fileName: files[i].name || "" });
+          await startPsdImportFromDroppedFile(files[i], {
+            index: i + 1,
+            total: total,
+            fileName: files[i].name || "",
+            selection: selection,
+            dropMode: dropMode
+          });
         } catch (error) {
           failed += 1;
           var message = error && error.message ? error.message : String(error);
@@ -2315,8 +2374,9 @@
         setAiPromptStatus("PSD 导入：读取拖入文件... " + formatPsdImportContext(psdImportCurrentContext));
         appendLog("PSD 导入开始：" + formatPsdImportContext(psdImportCurrentContext));
 
-        var selection = await querySelectionForPsdImport();
-        var target = buildPsdImportTarget(selection);
+        var selection = psdImportCurrentContext.selection || await querySelectionForPsdImport();
+        var dropMode = psdImportCurrentContext.dropMode || resolvePsdDropMode(selection);
+        var target = buildPsdImportTarget(selection, dropMode);
         var fileBase64 = await readFileAsBase64(file);
         setAiPromptStatus("PSD 导入：上传 PSD 并启动任务... " + formatPsdImportContext(psdImportCurrentContext));
 
@@ -2326,6 +2386,7 @@
           body: JSON.stringify({
             fileName: file.name,
             fileBase64: fileBase64,
+            mode: dropMode.mode,
             target: target
           })
         }, 30000);
@@ -2404,19 +2465,36 @@
       return true;
     }
 
-    function buildPsdImportTarget(selection) {
+    function resolvePsdDropMode(selection) {
       var nodes = Array.isArray(selection && selection.nodes) ? selection.nodes : [];
-      var validationError = validatePsdImportPromptSelection(nodes);
-      if (validationError) {
-        throw new Error(validationError);
+      if (nodes.length === 0) {
+        return { mode: "initial", targetNodeId: "", targetName: "", targetType: "" };
       }
+      if (nodes.length !== 1) {
+        throw new Error("PSD 增量更新只能选择一个 FRAME 或 COMPONENT");
+      }
+      var node = nodes[0] || {};
+      if (!(node.type === "FRAME" || node.type === "COMPONENT")) {
+        throw new Error("PSD 增量更新目标必须是 FRAME 或 COMPONENT");
+      }
+      return {
+        mode: "incremental-preview",
+        targetNodeId: String(node.id || ""),
+        targetName: String(node.name || ""),
+        targetType: String(node.type || "")
+      };
+    }
+
+    function buildPsdImportTarget(selection, dropMode) {
       var fileKey = String(selection && selection.fileKey || "").trim();
       if (!fileKey) {
         throw new Error("当前插件环境未返回 Figma fileKey，无法稳定路由 PSD 导入任务");
       }
       var target = { fileKey: fileKey };
-      if (nodes.length === 1 && nodes[0] && nodes[0].id) {
-        target.targetNodeId = nodes[0].id;
+      if (dropMode.mode === "incremental-preview") {
+        target.targetNodeId = dropMode.targetNodeId;
+        target.targetName = dropMode.targetName;
+        target.targetType = dropMode.targetType;
       }
       return target;
     }
@@ -2446,9 +2524,21 @@
         }
         var task = data.task || {};
         renderPsdImportTaskStatus(task);
+        if (task.status === "preview-ready") {
+          psdImportBusy = false;
+          clearPsdImportPollTimer();
+          showPsdIncrementalPreview(task.preview, {
+            taskId: task.taskId,
+            fileName: task.fileName,
+            targetName: task.target && task.target.targetName || "",
+            targetType: task.target && task.target.targetType || ""
+          });
+          return;
+        }
         if (task.status === "completed" || task.status === "error") {
           psdImportBusy = false;
           clearPsdImportPollTimer();
+          activePsdIncrementalPreview = null;
           if (task.status === "completed") {
             finishPsdImportTaskPromise(null, task);
           } else {
@@ -2488,6 +2578,8 @@
       var text = "PSD 导入：" + context + "\n" + stage + " (" + percent + "%)";
       if (task.status === "completed") {
         text = "PSD 导入完成：" + context + " (100%)";
+      } else if (task.status === "preview-ready") {
+        text = "PSD 增量差异已生成：" + context + "，等待确认";
       } else if (task.status === "error") {
         text = "PSD 导入失败：" + context + " (" + percent + "%)\n" + (task.error || "unknown error");
       }
@@ -2501,6 +2593,93 @@
           psdImportLastRenderedLog = latest;
           appendLog("PSD 导入进度：" + context + " " + latest, task.status === "error");
         }
+      }
+    }
+
+    function showPsdIncrementalPreview(preview, capturedTarget) {
+      preview = preview || {};
+      var summary = preview.summary || {};
+      activePsdIncrementalPreview = {
+        taskId: String(capturedTarget && capturedTarget.taskId || psdImportTaskId || ""),
+        baselineFingerprint: String(preview.baselineFingerprint || ""),
+        target: {
+          fileName: String(capturedTarget && capturedTarget.fileName || ""),
+          name: String(capturedTarget && capturedTarget.targetName || preview.targetName || ""),
+          type: String(capturedTarget && capturedTarget.targetType || "")
+        }
+      };
+      psdIncrementalDialogSummary.textContent = [
+        "PSD：" + activePsdIncrementalPreview.target.fileName,
+        "目标：" + (activePsdIncrementalPreview.target.name || "未命名") + "（" + (activePsdIncrementalPreview.target.type || "FRAME/COMPONENT") + "）",
+        "替换 " + Number(summary.changed || 0)
+          + " · 新增 " + Number(summary.added || 0)
+          + " · 保留缺失 " + Number(summary.missing || 0)
+          + " · 未变化 " + Number(summary.unchanged || 0)
+          + " · 冲突 " + Number(summary.conflicts || 0)
+      ].join("\n");
+      psdIncrementalDialogDetails.innerHTML = renderPsdIncrementalGroups(preview.groups || {});
+      confirmPsdIncrementalBtn.disabled = Number(summary.conflicts || 0) > 0 || !activePsdIncrementalPreview.baselineFingerprint;
+      psdIncrementalDialog.hidden = false;
+      cancelPsdIncrementalBtn.focus();
+      appendLog("PSD 增量预览：替换 " + Number(summary.changed || 0) + "，新增 " + Number(summary.added || 0) + "，冲突 " + Number(summary.conflicts || 0));
+    }
+
+    function renderPsdIncrementalGroups(groups) {
+      var definitions = [
+        ["changed", "将替换"],
+        ["added", "新增待整理"],
+        ["missing", "PSD 已缺失但保留"],
+        ["unchanged", "未变化"],
+        ["conflicts", "冲突"]
+      ];
+      return definitions.map(function (definition) {
+        var items = Array.isArray(groups[definition[0]]) ? groups[definition[0]] : [];
+        if (items.length === 0) return "";
+        var rows = items.map(function (item) {
+          var label = item.targetName || item.sourceName || item.name || item.message || item.kind || item.layerId || "未命名图层";
+          return "<li>" + escapeHtml(label) + "</li>";
+        }).join("");
+        return '<div class="psd-diff-group"><strong>' + escapeHtml(definition[1]) + "（" + items.length + '）</strong><ul class="psd-diff-list">' + rows + "</ul></div>";
+      }).join("");
+    }
+
+    function cancelPsdIncrementalUpdate() {
+      if (!activePsdIncrementalPreview) return;
+      var targetName = activePsdIncrementalPreview.target.name || "未命名目标";
+      activePsdIncrementalPreview = null;
+      psdIncrementalDialog.hidden = true;
+      psdImportBusy = false;
+      setAiPromptStatus("已取消 PSD 增量更新，Figma 未发生变化。");
+      appendLog("已取消 PSD 增量更新：" + targetName);
+      finishPsdImportTaskPromise(null, { status: "cancelled" });
+    }
+
+    async function confirmPsdIncrementalUpdate() {
+      var active = activePsdIncrementalPreview;
+      if (!active || confirmPsdIncrementalBtn.disabled) return;
+      confirmPsdIncrementalBtn.disabled = true;
+      cancelPsdIncrementalBtn.disabled = true;
+      try {
+        var resp = await fetchWithTimeout(relayEndpoint("/psd-to-figma/import/" + encodeURIComponent(active.taskId) + "/apply"), {
+          method: "POST",
+          headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ baselineFingerprint: active.baselineFingerprint })
+        }, 30000);
+        var data = await resp.json().catch(function () { return {}; });
+        if (!resp.ok || data.ok === false) {
+          throw new Error(data.error || ("HTTP " + resp.status));
+        }
+        psdIncrementalDialog.hidden = true;
+        psdImportBusy = true;
+        renderPsdImportTaskStatus(data.task);
+        pollPsdImportTaskStatus();
+      } catch (error) {
+        var message = error && error.message ? error.message : String(error);
+        psdIncrementalDialogSummary.textContent += "\n应用失败：" + message;
+        confirmPsdIncrementalBtn.disabled = false;
+        appendLog("PSD 增量应用失败：" + message, true);
+      } finally {
+        cancelPsdIncrementalBtn.disabled = false;
       }
     }
 
@@ -2882,7 +3061,7 @@
 
     // BEGIN_AI_PROMPT_TEMPLATES
     const AiPromptTemplates = {
-      "cleanup": "请使用 $figma-hierarchy-cleanup-mcp 整理 Figma 节点。\n\n目标 Figma：\n- {{selectionBlock}}\n\n目标：\n- 整理一下命名 Image 叫 _Image  按钮 叫 _Btn  之类的\n- 清理无意义的层级和命名，提升导入 Unity 前的结构可读性。\n- 保持视觉效果、尺寸、位置和图片内容不变。\n- 分组和 Z 顺序必须以当前真实 Figma 节点为依据，不要根据名称或经验猜测。\n\n读取与计划要求：\n- 禁止使用 Figma MCP 写入，只能通过当前本地 MCP Relay 操作当前 Figma 文件；如需安装根目录，必须从 `/health` 响应的 `gateway.pluginRoot` 获取，禁止猜测路径。\n- 先检查 MCP Relay health，再 query-selection 回显当前选中节点。\n- 对目标节点执行 analyze，必须 includeHidden，避免漏掉隐藏占位、遮罩或备份节点。\n- 计划前必须输出 before directChildren 顺序表，包含 index、name、type、visible、bounds，说明 Figma sibling 越靠后视觉越在上层。\n- 给出完整最终目标树和整理计划，列出会影响的节点名称、原父级、新父级、原 index、新 index。\n\n分组规则：\n- 只允许新增外层语义分组容器，并把原始节点移动进去；禁止删除、flatten、vectorize、detach instance 或重建原节点。\n- 保序分组优先：进入同一新分组的原始节点必须保持原 sibling 相对顺序。\n- 保视觉栈优先：新增顶层分组的 sibling 顺序必须按视觉遮挡关系排列，背景类组在下层，按钮/Tab/弹窗/前景装饰在上层。\n- 不允许把视觉上不相邻、功能不明确、bounds 区域跨度异常的节点硬塞进同一组。\n- 如果单个分组吞掉 70% 以上直接子节点，或 [ListRoot] / [TabBar] / [ProgressSection] 这类语义组仍可继续拆分却未展开，视为异常计划，必须停下报告，不要 apply。\n- 遇到不确定的分组归属、遮罩归属、九宫归属、隐藏节点用途时，先报错问我，不要猜。\n\nZ 顺序规则：\n- Figma sibling 越靠后视觉越在上层；整理计划必须同时表达语义树和最终视觉栈顺序。\n- 分组后必须保持每个原始节点的相对视觉堆叠关系，不能因为新建 wrapper 导致 [Bg]、[TabBar]、[ListRoot]、[ProgressSection] 等顶层组遮挡错误。\n- 只有同一父节点下 sibling 顺序错误时，才使用 FIGMA_HIERARCHY_REORDER_CHILDREN 修复。\n- reorder 计划必须覆盖该父节点当前全部直接子节点，不要只给局部节点，避免漏节点、重复节点或集合变化。\n- 禁止为了修 Z 顺序重新导入 PSD、重建整棵树、复制节点或移动到错误父级。\n\n执行规则：\n- 等我确认后再执行 apply。\n- 如果需要备份节点，优先通过当前 MCP Relay 选区或 apply 计划设置 `createBackup: true` 自动备份，不要在提示词里暴露节点 id。\n- apply 后必须立即重新 analyze，不要把验证推到最后。\n- apply 后必须输出 after directChildren 顺序表，并和 before/plan 对比。\n- 如果发现只是 sibling 顺序错误，优先生成全量 reorder 计划修复，不要重新整理或重新导入。\n\n验收要求：\n- verify 必须确认节点集合守恒：原始节点全部且仅一次进入计划分组，没有遗漏、重复或新增替代节点。\n- absolute bounds 漂移必须为 0 或不超过工具允许容差；root 尺寸不变。\n- hidden 节点、mask、Instance、__slice_ / jiugong / nine-slice 结构不能丢失或被拆散。\n- root 顶层 directChildren 顺序必须符合计划中的视觉栈顺序。\n- 使用 FIGMA_HIERARCHY_REORDER_CHILDREN 时，必须验证 childSetPreserved、orderMatchesPlan、boundsPreserved、rootSizeUnchanged 全部通过。\n- 如果验证发现遮挡关系异常，必须报告具体节点和 index 差异，先问我确认修复方案。\n- 遇到无法判断的节点请报错说明，不要猜测修改。",
+      "cleanup": "请使用 $figma-hierarchy-cleanup-mcp 整理 Figma 节点。\n\n目标 Figma：\n- {{selectionBlock}}\n\n目标：\n- 整理一下命名 Image 叫 _Image  按钮 叫 _Btn  之类的\n- 清理无意义的层级和命名，提升导入 Unity 前的结构可读性。\n- 保持视觉效果、尺寸、位置和图片内容不变。\n- 分组和 Z 顺序必须以当前真实 Figma 节点为依据，不要根据名称或经验猜测。\n\n读取与计划要求：\n- 禁止使用 Figma MCP 写入，只能通过 `<relay-root>` 下的本地 MCP Relay 操作当前 Figma 文件。\n- 先检查 MCP Relay health，再 query-selection 回显当前选中节点。\n- 对目标节点执行 analyze，必须 includeHidden，避免漏掉隐藏占位、遮罩或备份节点。\n- 计划前必须输出 before directChildren 顺序表，包含 index、name、type、visible、bounds，说明 Figma sibling 越靠后视觉越在上层。\n- 给出完整最终目标树和整理计划，列出会影响的节点名称、原父级、新父级、原 index、新 index。\n\n分组规则：\n- 只允许新增外层语义分组容器，并把原始节点移动进去；禁止删除、flatten、vectorize、detach instance 或重建原节点。\n- 保序分组优先：进入同一新分组的原始节点必须保持原 sibling 相对顺序。\n- 保视觉栈优先：新增顶层分组的 sibling 顺序必须按视觉遮挡关系排列，背景类组在下层，按钮/Tab/弹窗/前景装饰在上层。\n- 不允许把视觉上不相邻、功能不明确、bounds 区域跨度异常的节点硬塞进同一组。\n- 如果单个分组吞掉 70% 以上直接子节点，或 [ListRoot] / [TabBar] / [ProgressSection] 这类语义组仍可继续拆分却未展开，视为异常计划，必须停下报告，不要 apply。\n- 遇到不确定的分组归属、遮罩归属、九宫归属、隐藏节点用途时，先报错问我，不要猜。\n\nZ 顺序规则：\n- Figma sibling 越靠后视觉越在上层；整理计划必须同时表达语义树和最终视觉栈顺序。\n- 分组后必须保持每个原始节点的相对视觉堆叠关系，不能因为新建 wrapper 导致 [Bg]、[TabBar]、[ListRoot]、[ProgressSection] 等顶层组遮挡错误。\n- 只有同一父节点下 sibling 顺序错误时，才使用 FIGMA_HIERARCHY_REORDER_CHILDREN 修复。\n- reorder 计划必须覆盖该父节点当前全部直接子节点，不要只给局部节点，避免漏节点、重复节点或集合变化。\n- 禁止为了修 Z 顺序重新导入 PSD、重建整棵树、复制节点或移动到错误父级。\n\n执行规则：\n- 等我确认后再执行 apply。\n- 如果需要备份节点，优先通过当前 MCP Relay 选区或 apply 计划设置 `createBackup: true` 自动备份，不要在提示词里暴露节点 id。\n- apply 后必须立即重新 analyze，不要把验证推到最后。\n- apply 后必须输出 after directChildren 顺序表，并和 before/plan 对比。\n- 如果发现只是 sibling 顺序错误，优先生成全量 reorder 计划修复，不要重新整理或重新导入。\n\n验收要求：\n- verify 必须确认节点集合守恒：原始节点全部且仅一次进入计划分组，没有遗漏、重复或新增替代节点。\n- absolute bounds 漂移必须为 0 或不超过工具允许容差；root 尺寸不变。\n- hidden 节点、mask、Instance、__slice_ / jiugong / nine-slice 结构不能丢失或被拆散。\n- root 顶层 directChildren 顺序必须符合计划中的视觉栈顺序。\n- 使用 FIGMA_HIERARCHY_REORDER_CHILDREN 时，必须验证 childSetPreserved、orderMatchesPlan、boundsPreserved、rootSizeUnchanged 全部通过。\n- 如果验证发现遮挡关系异常，必须报告具体节点和 index 差异，先问我确认修复方案。\n- 遇到无法判断的节点请报错说明，不要猜测修改。",
       "componentVariants": "请使用 $figma-hierarchy-cleanup-mcp，根据我当前选中的多个 Figma 节点，规划 ComponentSet 变体。\n\n{{selectionBlock}}\n\n重要前提：\n- 当前选中的节点可以是多个模板节点。\n- 这些节点不一定是根节点，也不一定同父级。\n- 不要假设它们都是同级列表项或同级 Tab 项。\n\n目标：\n- 先 query-selection，回显当前选中节点的 name/type/count/nodePath。\n- 再分析相关父级结构，判断这些选中节点应该作为手动 ComponentSet 的多个变体来源，还是跨父级节点组 ComponentSet 的一组或多组来源。\n- 如果适合手动选择 ComponentSet 流程，请规划 component-set --from-selection；该流程默认只创建 ComponentSet，不删除、不移动、不替换源节点。\n- 如果目标是替换原有重复项，必须先 analyze 相关父级或目标容器，明确哪些同类节点要被替换，再规划 component-set-from-node-groups 或其它合适流程。\n- 如果适合跨父级节点组流程，请规划 component-set-from-node-groups，并显式列出每组节点的名称、类型和 nodePath；实际写入以 MCP Relay 当前选区和分析结果为准。\n- 如果变体值、分组关系或替换范围无法从节点名和结构可靠推断，必须先问我，不要猜。\n\n执行规则：\n- 只先给计划，不要直接执行。\n- 等我确认后再调用 MCP Relay 写入。\n- 只有计划明确要替换原有重复项时，才设置 replaceOriginalsWithInstances=true。\n- 发生替换时默认 createBackup=true，源节点必须备份到隐藏备份 Frame。\n- 禁止删除原节点。\n- 禁止 flatten、detach instance、拆散 __slice_ / jiugong / nine-slice 节点。\n\n验收要求：\n- 执行后验证 ComponentSet 创建成功。\n- 如果计划包含替换，验证原节点已备份、实例替换成功、bounds 不漂移。\n- 如果计划只是 component-set --from-selection，验证源选中节点仍保留且未被移动。\n- 验证九宫切片在变体内被保留。\n- 重新 analyze 目标结构，确认替换后的节点数量、顺序和 Instance 状态符合计划。",
       "unity": "请将当前 Figma 节点快速直接导入 Unity。\n\n这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。\n\nfigma 路径:\n- {{selectionBlock}}\n\n目标 Unity 工程：{{unityProjectPath}}\n\n执行边界：\n- 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。\n- 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 MCP 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。\n- 默认新建且不覆盖：`{{unityImageTargetFolder}}/FigmaImports/<规范化根节点名>/<规范化根节点名>.prefab`，图片写入同目录的 `Images/`。不得搜索或猜测业务 Prefab 路径。\n- 不整理 Figma 层级、不写回 Figma；直接导出当前节点。不要因为层级不完美而开启 cleanup 流程。\n- 不修改 C#、场景、Addressables、既有 Prefab、既有资源或既有 `.meta`。\n\n固定流水线（必须执行，不要自行拆解或增加检查）：\n1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。\n2. 立即执行唯一的导入命令：`python \"ai/skills/figma-to-prefab/scripts/run_full_import.py\" --unity-project \"{{unityProjectPath}}\" --figma-url \"https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>\" --file-key <fileKey> --infer-formal-names --formal-output-dir \"{{unityImageTargetFolder}}/FigmaImports\" --target-prefab \"Assets/FigmaImports/Pending.prefab\" --target-image-dir \"Assets/FigmaImports/Images\" --yes --wall-clock-report \".tmp/figma_to_prefab_wall_clock.json\"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。\n3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。\n\n禁止项：\n- 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。\n- 不要调用 `Skill`、`ToolSearch`、`Glob`、`Grep`、`Read`，不要手工拆开 MCP、图片处理、uLoop 或验证命令。\n- 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。\n- 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。\n\n完成时只报告：生成的 Prefab/图片路径、导入验证结果、冲突或 blockingErrors（如有）。"
     };
@@ -5287,6 +5466,8 @@
     document.addEventListener("dragover", handleAiPromptPsdWindowDragOver);
     document.addEventListener("dragleave", handleAiPromptPsdWindowDragLeave);
     document.addEventListener("drop", handleAiPromptPsdWindowDrop);
+    cancelPsdIncrementalBtn.addEventListener("click", cancelPsdIncrementalUpdate);
+    confirmPsdIncrementalBtn.addEventListener("click", confirmPsdIncrementalUpdate);
     window.addEventListener("pagehide", stopAiCleanupOnPanelClose);
     window.addEventListener("beforeunload", stopAiCleanupOnPanelClose);
     tabButtons.forEach(function (button) {
