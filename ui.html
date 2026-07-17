@@ -732,7 +732,7 @@
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
   <div class="app-title-row">
     <h1>LKS Figma MCP Relay</h1>
-    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.38<!-- END_RELEASE_VERSION --></span>
+    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.39<!-- END_RELEASE_VERSION --></span>
     <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
   </div>
 
@@ -1039,6 +1039,7 @@
       <h2>AI 执行</h2>
       <div class="folder-box ai-execution-meta" id="aiExecutionMeta">当前任务：未启动</div>
       <div class="status-box" id="ai-execution-status">选择模板和节点并点击对应的 AI 操作后，任务会在这里执行。</div>
+      <div class="status-box" id="aiCleanupPlanPreview" style="display:none"></div>
       <div class="status-box" id="aiImageHealth" style="display:none">图片体检：等待导出结果</div>
       <div class="log ai-execution-log" id="aiExecutionLog">等待 AI 任务...</div>
       <div class="field">
@@ -1145,6 +1146,7 @@
     const aiRunnerStatusEl = document.getElementById("ai-runner-status");
     const aiExecutionMetaEl = document.getElementById("aiExecutionMeta");
     const aiExecutionStatusEl = document.getElementById("ai-execution-status");
+    const aiCleanupPlanPreviewEl = document.getElementById("aiCleanupPlanPreview");
     const aiImageHealthEl = document.getElementById("aiImageHealth");
     const aiExecutionLogEl = document.getElementById("aiExecutionLog");
     const aiExecutionFollowupInput = document.getElementById("aiExecutionFollowupInput");
@@ -1359,6 +1361,7 @@
     let generatingAiPrompt = false;
     let aiPromptTimeoutTimer = null;
     let pendingAiPromptRequestId = "";
+    let pendingCleanupSnapshotRequestId = "";
     let pendingAutoAiTemplate = "";
     let aiCleanupBusy = false;
     let aiCleanupPollTimer = null;
@@ -1432,6 +1435,37 @@
       return "等待任务";
     }
 
+    function aiRunPhaseText(phase) {
+      if (phase === "capturing") return "采集层级快照";
+      if (phase === "planning") return "生成结构化计划";
+      if (phase === "validating") return "校验计划";
+      if (phase === "awaiting-approval") return "等待确认";
+      if (phase === "applying") return "应用层级整理";
+      if (phase === "verifying") return "验证整理结果";
+      return "";
+    }
+
+    function renderCleanupPlanPreview(run) {
+      var planSummary = run && run.planSummary;
+      if (!run || run.template !== "cleanup" || !planSummary) {
+        aiCleanupPlanPreviewEl.style.display = "none";
+        aiCleanupPlanPreviewEl.textContent = "";
+        return;
+      }
+      var lines = ["结构化整理计划", "分组：" + Number(planSummary.groupCount || 0)];
+      (planSummary.groups || []).forEach(function (group) {
+        lines.push("- " + (group.name || "未命名") + "（" + Number(group.sourceNodeCount || 0) + " 个节点）");
+      });
+      lines.push("组件候选：" + Number(planSummary.componentCandidateCount || 0));
+      (planSummary.componentCandidates || []).forEach(function (candidate) {
+        lines.push("- " + (candidate.name || "未命名") + "（" + Number(candidate.sourceNodeCount || 0) + " 个节点）");
+      });
+      lines.push("警告：" + Number(planSummary.warningCount || 0));
+      (planSummary.warnings || []).forEach(function (warning) { lines.push("- " + warning); });
+      aiCleanupPlanPreviewEl.textContent = lines.join("\n");
+      aiCleanupPlanPreviewEl.style.display = "";
+    }
+
     function aiTemplateActionLabel(template) {
       if (template === "unity") return "导入到 Unity";
       if (template === "componentVariants") return "AI 创建组件变体";
@@ -1447,13 +1481,19 @@
     function refreshAiExecutionControls() {
       var run = activeAiCleanupRun;
       var running = !!run && (run.status === "starting" || run.status === "running");
-      var resumable = !!run && (run.status === "completed" || run.status === "failed") && run.sessionAvailable === true;
+      var cleanupApprovalReady = !!run && run.template === "cleanup" && run.status === "completed"
+        && run.planReady === true && run.sessionAvailable === true && run.phase === "awaiting-approval";
+      var resumable = !!run && run.template !== "cleanup" && (run.status === "completed" || run.status === "failed") && run.sessionAvailable === true;
       aiExecutionFollowupInput.disabled = !resumable;
-      aiExecutionContinueBtn.disabled = !resumable || !aiExecutionFollowupInput.value.trim();
+      aiExecutionContinueBtn.disabled = run && run.template === "cleanup"
+        ? !cleanupApprovalReady
+        : !resumable || !aiExecutionFollowupInput.value.trim();
+      aiExecutionContinueBtn.textContent = run && run.template === "cleanup" ? "确认并执行整理" : "继续执行";
       aiExecutionStopBtn.disabled = !running;
       if (!run) {
         aiExecutionMetaEl.textContent = "当前任务：未启动";
         aiExecutionStatusEl.textContent = "选择模板和节点并点击对应的 AI 操作后，任务会在这里执行。";
+        renderCleanupPlanPreview(null);
         return;
       }
       aiExecutionMetaEl.textContent = "操作：" + aiTemplateTaskLabel(run.template) + "\n执行器：" + (run.runner === "claude" ? "Claude Code" : "Codex CLI") + "\n任务：" + run.runId;
@@ -1462,8 +1502,10 @@
       var elapsedText = formatAiExecutionDuration(elapsedMs);
       var idleMs = run.lastOutputAt ? Math.max(0, Date.now() - new Date(run.lastOutputAt).getTime()) : 0;
       var idleText = run.lastOutputAt ? "；最近输出 " + formatAiExecutionDuration(idleMs) + " 前" : "；等待首条输出";
-      aiExecutionStatusEl.textContent = aiRunStatusText(run.status) + "；已运行 " + elapsedText + idleText
+      var phaseText = aiRunPhaseText(run.phase);
+      aiExecutionStatusEl.textContent = (phaseText ? phaseText + "；" : "") + aiRunStatusText(run.status) + "；已运行 " + elapsedText + idleText
         + ((run.status === "completed" || run.status === "failed") && !run.sessionAvailable ? "；当前 CLI 未返回可继续的会话 ID。" : "");
+      renderCleanupPlanPreview(run);
     }
 
     function formatAiExecutionDuration(milliseconds) {
@@ -2890,13 +2932,13 @@
       var taskLabel = aiTemplateTaskLabel(template);
       var endpoint = isCleanup ? "/ai-runner/run-cleanup" : "/ai-runner/run-prompt";
       var payload = isCleanup
-        ? { selection: selection, sessionId: relaySessionId }
+        ? { snapshot: selection, sessionId: relaySessionId }
         : { template: template, prompt: aiPromptPreviewEl.value, sessionId: relaySessionId, unityProject: selectedUnityProject };
       setAiPromptStatus("正在启动" + taskLabel + "任务...");
       fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }, 8000)
         .then(function (response) { return response.json().then(function (result) { if (!response.ok || !result.ok) throw new Error(result.error || "启动失败"); return result; }); })
         .then(function (result) {
-          activeAiCleanupRun = { runId: result.runId, capabilityToken: result.capabilityToken, runner: result.runner || aiRunnerSelect.value, template: template, status: "starting", sessionAvailable: false, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "" };
+          activeAiCleanupRun = { runId: result.runId, capabilityToken: result.capabilityToken, runner: result.runner || aiRunnerSelect.value, template: template, status: "starting", phase: isCleanup ? "planning" : "", planReady: false, planSummary: null, sessionAvailable: false, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "" };
           aiCleanupUnloadStopSent = false;
           aiExecutionLogEl.textContent = "";
           aiImageHealthEl.textContent = "图片体检：等待导出结果";
@@ -2939,6 +2981,9 @@
           currentRun.runner = result.runner || currentRun.runner;
           currentRun.startedAt = result.startedAt || currentRun.startedAt;
           currentRun.sessionAvailable = result.cliSessionId === "available";
+          currentRun.phase = result.phase || currentRun.phase;
+          currentRun.planReady = result.planReady === true;
+          currentRun.planSummary = result.planSummary || currentRun.planSummary;
           appendAiExecutionOutput(result.output);
           refreshAiExecutionControls();
           if (result.status === "running" || result.status === "starting") {
@@ -2974,18 +3019,22 @@
     async function continueAiCleanup() {
       var run = activeAiCleanupRun;
       var text = aiExecutionFollowupInput.value.trim();
-      if (!run || run.status !== "completed" || !run.sessionAvailable || !text) return;
+      var isCleanupApproval = !!run && run.template === "cleanup";
+      if (!run || run.status !== "completed" || !run.sessionAvailable) return;
+      if (isCleanupApproval && run.planReady !== true) return;
+      if (!isCleanupApproval && !text) return;
       try {
         aiExecutionContinueBtn.disabled = true;
         var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/followup", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-          body: JSON.stringify({ text: text })
+          body: isCleanupApproval ? JSON.stringify({ approval: true }) : JSON.stringify({ text: text })
         }, 8000);
         var result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "继续执行失败");
         aiExecutionFollowupInput.value = "";
         run.status = result.status || "starting";
+        run.phase = result.phase || (isCleanupApproval ? "applying" : run.phase);
         run.sessionAvailable = false;
         run.pollFailures = 0;
         aiCleanupBusy = true;
@@ -3041,10 +3090,53 @@
         return;
       }
       aiCleanupBusy = true;
-      pendingAutoAiTemplate = aiPromptTemplateSelect.value;
+      var requestedTemplate = aiPromptTemplateSelect.value;
       refreshAiPromptControls();
+      if (requestedTemplate === "cleanup") {
+        requestCleanupSnapshot();
+        return;
+      }
+      pendingAutoAiTemplate = requestedTemplate;
       setAiPromptStatus("正在读取 Figma 当前选区...");
       generateAiPromptFromSelection();
+    }
+
+    function requestCleanupSnapshot() {
+      clearAiPromptTimeout();
+      pendingCleanupSnapshotRequestId = "cleanup-snapshot-" + Date.now();
+      var requestId = pendingCleanupSnapshotRequestId;
+      setAiPromptStatus("正在采集层级快照...");
+      if (activeAiCleanupRun) activeAiCleanupRun.phase = "capturing";
+      aiPromptTimeoutTimer = setTimeout(function () {
+        if (pendingCleanupSnapshotRequestId !== requestId) return;
+        pendingCleanupSnapshotRequestId = "";
+        aiCleanupBusy = false;
+        refreshAiPromptControls();
+        setAiPromptStatus("层级快照采集超时，请确认插件已加载最新构建。");
+      }, 8000);
+      parent.postMessage({
+        pluginMessage: {
+          type: "QUERY_CLEANUP_SNAPSHOT",
+          requestId: pendingCleanupSnapshotRequestId
+        }
+      }, "*");
+    }
+
+    function handleCleanupSnapshotResult(message) {
+      if (!pendingCleanupSnapshotRequestId || message.requestId !== pendingCleanupSnapshotRequestId) return;
+      clearAiPromptTimeout();
+      pendingCleanupSnapshotRequestId = "";
+      var result = message.result || {};
+      if (result.status !== "completed" || !result.snapshot) {
+        aiCleanupBusy = false;
+        refreshAiPromptControls();
+        var error = (result.errors && result.errors[0]) || "层级快照采集失败";
+        setAiPromptStatus(error);
+        appendLog("层级快照采集失败：" + error, true);
+        return;
+      }
+      setAiPromptStatus("层级快照已采集，正在生成结构化计划...");
+      startAiRun("cleanup", result.snapshot);
     }
 
     // 校验 PSD 导入提示词目标：无选区使用当前页面，单选 FRAME 使用当前选区目标。
@@ -5228,6 +5320,11 @@
 
       if (message.type === "EXPORT_HIERARCHY_TO_UNITY_RESULT") {
         handleHierarchyExportResult(message);
+        return;
+      }
+
+      if (message.type === "QUERY_CLEANUP_SNAPSHOT_RESULT") {
+        handleCleanupSnapshotResult(message);
         return;
       }
 

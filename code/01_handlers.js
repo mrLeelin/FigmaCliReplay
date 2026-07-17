@@ -170,6 +170,11 @@ await handleFigmaHierarchyCleanupAnalyze(message);
     return;
   }
 
+  if (message.type === "QUERY_CLEANUP_SNAPSHOT") {
+    await handleQueryCleanupSnapshot(message);
+    return;
+  }
+
   if (message.type === "QUERY_AI_PROMPT_SELECTION") {
     await handleQueryAiPromptSelection(message);
     return;
@@ -245,6 +250,35 @@ async function handleCollectComponents(message) {
   } catch (error) {
     figma.ui.postMessage({
       type: "COLLECT_COMPONENTS_RESULT",
+      requestId: message.requestId,
+      result: {
+        status: "error",
+        errors: [error instanceof Error ? error.message : String(error)]
+      }
+    });
+  }
+}
+
+/** 一次性读取当前选中根节点的紧凑层级快照；此命令严格只读。 */
+async function handleQueryCleanupSnapshot(message) {
+  try {
+    const selection = figma.currentPage.selection || [];
+    if (selection.length !== 1) {
+      throw new Error("AI 层级整理需要且只能选择 1 个根节点。");
+    }
+    const supportedTypes = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"];
+    if (supportedTypes.indexOf(selection[0].type) < 0) {
+      throw new Error(`AI 层级整理不支持 ${selection[0].type || "未知"} 类型。`);
+    }
+    const snapshot = buildCleanupSnapshot(selection[0]);
+    figma.ui.postMessage({
+      type: "QUERY_CLEANUP_SNAPSHOT_RESULT",
+      requestId: message.requestId,
+      result: { status: "completed", snapshot }
+    });
+  } catch (error) {
+    figma.ui.postMessage({
+      type: "QUERY_CLEANUP_SNAPSHOT_RESULT",
       requestId: message.requestId,
       result: {
         status: "error",

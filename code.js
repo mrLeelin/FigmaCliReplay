@@ -1,4 +1,4 @@
-// Figma MCP Relay build #146
+// Figma MCP Relay build #149
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -47,15 +47,15 @@ function applyImageValidationErrors(exports, errors) {
     if (item) item.health = createImageHealth("blocked", error.code || "invalidImagePayload", { sourceExportId: error.sourceExportId || "" });
   }
 }
-// Figma MCP Relay build #146
+// Figma MCP Relay build #149
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (146 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 146)", { timeout: 1000 });
-console.log("[FigmaMcpRelay] 插件初始化完成, build=146, time=" + Date.now());
+// DIAG: 插件启动标记 (149 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 149)", { timeout: 1000 });
+console.log("[FigmaMcpRelay] 插件初始化完成, build=149, time=" + Date.now());
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -246,7 +246,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "146",
+        build: "149",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -310,6 +310,11 @@ await handleFigmaHierarchyCleanupAnalyze(message);
 
   if (message.type === "EXPORT_HIERARCHY_TO_UNITY") {
     await handleExportHierarchyToUnity(message);
+    return;
+  }
+
+  if (message.type === "QUERY_CLEANUP_SNAPSHOT") {
+    await handleQueryCleanupSnapshot(message);
     return;
   }
 
@@ -388,6 +393,35 @@ async function handleCollectComponents(message) {
   } catch (error) {
     figma.ui.postMessage({
       type: "COLLECT_COMPONENTS_RESULT",
+      requestId: message.requestId,
+      result: {
+        status: "error",
+        errors: [error instanceof Error ? error.message : String(error)]
+      }
+    });
+  }
+}
+
+/** 一次性读取当前选中根节点的紧凑层级快照；此命令严格只读。 */
+async function handleQueryCleanupSnapshot(message) {
+  try {
+    const selection = figma.currentPage.selection || [];
+    if (selection.length !== 1) {
+      throw new Error("AI 层级整理需要且只能选择 1 个根节点。");
+    }
+    const supportedTypes = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"];
+    if (supportedTypes.indexOf(selection[0].type) < 0) {
+      throw new Error(`AI 层级整理不支持 ${selection[0].type || "未知"} 类型。`);
+    }
+    const snapshot = buildCleanupSnapshot(selection[0]);
+    figma.ui.postMessage({
+      type: "QUERY_CLEANUP_SNAPSHOT_RESULT",
+      requestId: message.requestId,
+      result: { status: "completed", snapshot }
+    });
+  } catch (error) {
+    figma.ui.postMessage({
+      type: "QUERY_CLEANUP_SNAPSHOT_RESULT",
       requestId: message.requestId,
       result: {
         status: "error",
@@ -13728,4 +13762,156 @@ function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
       conflicts: conflicts.length,
     },
   };
+}
+const CleanupMetadataNamespace = "psd_layer_to_figma_bridge";
+
+const CleanupPsdMetadataKeys = Object.freeze([
+  "psdLayerId",
+  "psdOwnership",
+  "psdContentHash",
+  "rawPsdLayerName",
+  "psdSourceFileName",
+  "psdSourceKey",
+  "psdLayerSetFingerprint",
+]);
+
+const CleanupSnapshotLimits = Object.freeze({
+  maxNodes: 500,
+  maxDepth: 12,
+  maxTextCharacters: 256,
+  maxBytes: 256 * 1024,
+});
+
+function buildCleanupSnapshot(root, requestedLimits = CleanupSnapshotLimits) {
+  if (!root || !root.id) throw new Error("cleanup snapshot requires one root node");
+  const limits = normalizeCleanupSnapshotLimits(requestedLimits);
+  const nodes = [];
+  collectCleanupSnapshotNodes(root, 0, nodes, limits);
+  const snapshot = {
+    schemaVersion: 1,
+    rootNodeId: String(root.id),
+    capturedAt: typeof requestedLimits.now === "function"
+      ? String(requestedLimits.now())
+      : new Date().toISOString(),
+    limits: {
+      maxNodes: limits.maxNodes,
+      maxDepth: limits.maxDepth,
+      maxTextCharacters: limits.maxTextCharacters,
+      maxBytes: limits.maxBytes,
+    },
+    nodes,
+  };
+  const byteLength = cleanupUtf8ByteLength(JSON.stringify(snapshot));
+  if (byteLength > limits.maxBytes) {
+    throw new Error(`cleanup snapshot exceeds ${limits.maxBytes} bytes`);
+  }
+  return snapshot;
+}
+
+function normalizeCleanupSnapshotLimits(value) {
+  return {
+    maxNodes: positiveCleanupLimit(value && value.maxNodes, CleanupSnapshotLimits.maxNodes),
+    maxDepth: nonNegativeCleanupLimit(value && value.maxDepth, CleanupSnapshotLimits.maxDepth),
+    maxTextCharacters: nonNegativeCleanupLimit(value && value.maxTextCharacters, CleanupSnapshotLimits.maxTextCharacters),
+    maxBytes: positiveCleanupLimit(value && value.maxBytes, CleanupSnapshotLimits.maxBytes),
+  };
+}
+
+function positiveCleanupLimit(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
+
+function nonNegativeCleanupLimit(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.floor(number) : fallback;
+}
+
+function collectCleanupSnapshotNodes(node, depth, output, limits) {
+  if (depth > limits.maxDepth) {
+    throw new Error(`cleanup snapshot exceeds depth ${limits.maxDepth}`);
+  }
+  if (output.length >= limits.maxNodes) {
+    throw new Error(`cleanup snapshot exceeds ${limits.maxNodes} nodes`);
+  }
+  output.push(buildCleanupSnapshotNode(node, depth, limits.maxTextCharacters));
+  const children = Array.isArray(node.children) ? node.children : [];
+  for (const child of children) {
+    collectCleanupSnapshotNodes(child, depth + 1, output, limits);
+  }
+}
+
+function buildCleanupSnapshotNode(node, depth, maxTextCharacters) {
+  const psd = readCleanupPsdMetadata(node);
+  const children = Array.isArray(node.children) ? node.children : [];
+  const record = {
+    id: String(node.id || ""),
+    parentId: node.parent && node.parent.id ? String(node.parent.id) : "",
+    type: String(node.type || ""),
+    name: String(node.name || ""),
+    siblingIndex: cleanupSiblingIndex(node),
+    depth,
+    x: finiteCleanupNumber(node.x),
+    y: finiteCleanupNumber(node.y),
+    w: finiteCleanupNumber(node.width),
+    h: finiteCleanupNumber(node.height),
+    visible: node.visible !== false,
+    opacity: Number.isFinite(Number(node.opacity)) ? Number(node.opacity) : 1,
+    childCount: children.length,
+    roles: {
+      image: cleanupHasImagePaint(node),
+      nineSlice: cleanupIsNineSlice(node),
+      component: node.type === "COMPONENT" || node.type === "COMPONENT_SET" || node.type === "INSTANCE",
+      psdSource: Object.keys(psd).length > 0,
+    },
+  };
+  if (node.type === "TEXT") {
+    record.characters = String(node.characters || "").slice(0, maxTextCharacters);
+  }
+  if (Object.keys(psd).length > 0) record.psd = psd;
+  return record;
+}
+
+function cleanupSiblingIndex(node) {
+  const siblings = node.parent && Array.isArray(node.parent.children) ? node.parent.children : [];
+  const index = siblings.indexOf(node);
+  return index >= 0 ? index : 0;
+}
+
+function finiteCleanupNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function cleanupHasImagePaint(node) {
+  return Array.isArray(node.fills) && node.fills.some((paint) => paint && paint.type === "IMAGE");
+}
+
+function cleanupIsNineSlice(node) {
+  const name = String(node.name || "").toLowerCase();
+  return /(?:nine.?slice|jiugong|__slice_|slice[_-]?\d)/.test(name)
+    || cleanupSharedPluginData(node, "spriteBorder") !== ""
+    || cleanupSharedPluginData(node, "border") !== "";
+}
+
+function readCleanupPsdMetadata(node) {
+  const result = {};
+  for (const key of CleanupPsdMetadataKeys) {
+    const value = cleanupSharedPluginData(node, key);
+    if (value !== "") result[key] = value;
+  }
+  return result;
+}
+
+function cleanupSharedPluginData(node, key) {
+  if (!node || typeof node.getSharedPluginData !== "function") return "";
+  try {
+    return String(node.getSharedPluginData(CleanupMetadataNamespace, key) || "");
+  } catch (_) {
+    return "";
+  }
+}
+
+function cleanupUtf8ByteLength(value) {
+  return encodeURIComponent(String(value)).replace(/%[0-9A-F]{2}|./gi, "x").length;
 }

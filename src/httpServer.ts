@@ -391,7 +391,7 @@ async function handlePost(
     if (runAction) {
       try {
         const token = String(request.headers["x-ai-run-capability"] || "");
-        const result = runAction[2] === "followup" ? followupAiRun(runAction[1], token, isRecord(payload) ? payload.text : undefined) : stopAiRun(runAction[1], token);
+        const result = runAction[2] === "followup" ? followupAiRun(runAction[1], token, payload) : stopAiRun(runAction[1], token);
         jsonResponse(response, 200, result);
       } catch (error) {
         jsonResponse(response, 403, { ok: false, error: error instanceof Error ? error.message : String(error) });
