@@ -84,6 +84,8 @@ test("Figma runtime exposes preview/apply without overwriting organized node ide
   assert.match(source, /verifyPsdProtectedSnapshot/);
   assert.match(source, /replacePsdOwnedImageHash/);
   assert.match(source, /liveContentSignature/);
+  assert.match(source, /text\.textAutoResize = "NONE"/);
+  assert.match(source, /verifyPsdAddedNodes/);
   assert.doesNotMatch(source, /targetNode\.name\s*=/);
   assert.doesNotMatch(source, /targetNode\.x\s*=/);
 });
@@ -105,4 +107,7 @@ test("document identity uses Photoshop layer overlap instead of filename alone",
     [{ layerId: "10" }, { layerId: "20" }, { layerId: "40" }],
   ), { currentCount: 3, incomingCount: 3, matchedCount: 2, overlap: 2 / 3 });
   assert.equal(measurePsdLayerIdentity([{ layerId: "10" }], [{ layerId: "99" }]).overlap, 0);
+  assert.equal(measurePsdLayerIdentity([{ layerId: "10" }], [
+    { layerId: "10" }, { layerId: "20" }, { layerId: "30" }, { layerId: "40" },
+  ]).overlap, 0.25);
 });

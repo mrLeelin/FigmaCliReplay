@@ -32,12 +32,12 @@ export function measurePsdLayerIdentity(currentNodes, incomingLayers) {
   for (var layerId of current) {
     if (incoming.has(layerId)) matched += 1;
   }
-  var smallerSetSize = Math.min(current.size, incoming.size);
+  var comparisonSize = Math.max(current.size, incoming.size);
   return {
     currentCount: current.size,
     incomingCount: incoming.size,
     matchedCount: matched,
-    overlap: smallerSetSize > 0 ? matched / smallerSetSize : 0,
+    overlap: comparisonSize > 0 ? matched / comparisonSize : 0,
   };
 }
 

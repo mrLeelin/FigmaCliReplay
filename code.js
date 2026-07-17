@@ -1,4 +1,4 @@
-// Figma MCP Relay build #142
+// Figma MCP Relay build #143
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -47,15 +47,15 @@ function applyImageValidationErrors(exports, errors) {
     if (item) item.health = createImageHealth("blocked", error.code || "invalidImagePayload", { sourceExportId: error.sourceExportId || "" });
   }
 }
-// Figma MCP Relay build #142
+// Figma MCP Relay build #143
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (142 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 142)", { timeout: 1000 });
-console.log("[FigmaMcpRelay] 插件初始化完成, build=142, time=" + Date.now());
+// DIAG: 插件启动标记 (143 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 143)", { timeout: 1000 });
+console.log("[FigmaMcpRelay] 插件初始化完成, build=143, time=" + Date.now());
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -246,7 +246,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "142",
+        build: "143",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -10048,7 +10048,8 @@ async function applyPsdIncrementalUpdate(job, assets) {
     }
 
     const verificationErrors = verifyPsdProtectedSnapshot(protectedSnapshot)
-      .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints));
+      .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints))
+      .concat(verifyPsdAddedNodes(createdNodes, prepared.diff.added, stagingFrame));
     if (verificationErrors.length > 0) {
       throw new Error(`增量更新改变了 Figma 所有的结构或布局：${verificationErrors.slice(0, 5).join("；")}`);
     }
@@ -10069,6 +10070,7 @@ async function applyPsdIncrementalUpdate(job, assets) {
     } catch (metadataError) {
       rollbackErrors.push(metadataError instanceof Error ? metadataError.message : String(metadataError));
     }
+    rollbackErrors.push(...verifyPsdProtectedSnapshot(protectedSnapshot).map((item) => `回滚后仍有漂移：${item}`));
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(rollbackErrors.length > 0 ? `${message}；回滚异常：${rollbackErrors.join("；")}` : message);
   }
@@ -10391,6 +10393,29 @@ function replacePsdOwnedImageHash(fills, decodedPaint) {
     throw new Error(`图片节点需要且只能包含一个 IMAGE fill，当前为 ${replaced}`);
   }
   return updated;
+}
+
+function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame) {
+  const errors = [];
+  if (createdNodes.length !== addedItems.length) {
+    errors.push(`新增节点数量不一致：${createdNodes.length}/${addedItems.length}`);
+  }
+  for (const item of addedItems) {
+    const layerId = normalizePsdLayerId(item.source.layerId);
+    const node = createdNodes.find((candidate) => readSharedPluginData(candidate, "psdLayerId") === layerId);
+    if (!node) {
+      errors.push(`新增 Layer ID ${layerId} 未创建`);
+      continue;
+    }
+    if (node.parent !== stagingFrame) errors.push(`新增 Layer ID ${layerId} 不在待整理容器`);
+    if (readSharedPluginData(node, "psdContentHash") !== String(item.source.contentHash || "")) {
+      errors.push(`新增 Layer ID ${layerId} 内容哈希不一致`);
+    }
+    if (item.source.mode === "text" && node.type === "TEXT" && node.characters !== String(item.source.chars || "")) {
+      errors.push(`新增 Layer ID ${layerId} 文本内容不一致`);
+    }
+  }
+  return errors;
 }
 
 function capturePsdContentRollback(node) {
@@ -10772,6 +10797,8 @@ async function createTextLayer(root, layer, context) {
   }
 
   centerNodeOnLayer(text, layer);
+  // 首次导入后冻结当前几何；后续增量只改 characters，不让自动尺寸扰动整理后的布局。
+  text.textAutoResize = "NONE";
   applyLayerCommonState(text, layer);
   writeLayerMetadata(text, layer, {
     fontFamily: fontName.family,
@@ -13565,12 +13592,12 @@ function measurePsdLayerIdentity(currentNodes, incomingLayers) {
   for (var layerId of current) {
     if (incoming.has(layerId)) matched += 1;
   }
-  var smallerSetSize = Math.min(current.size, incoming.size);
+  var comparisonSize = Math.max(current.size, incoming.size);
   return {
     currentCount: current.size,
     incomingCount: incoming.size,
     matchedCount: matched,
-    overlap: smallerSetSize > 0 ? matched / smallerSetSize : 0,
+    overlap: comparisonSize > 0 ? matched / comparisonSize : 0,
   };
 }
 

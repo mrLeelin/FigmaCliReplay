@@ -3708,7 +3708,8 @@ async function applyPsdIncrementalUpdate(job, assets) {
     }
 
     const verificationErrors = verifyPsdProtectedSnapshot(protectedSnapshot)
-      .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints));
+      .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints))
+      .concat(verifyPsdAddedNodes(createdNodes, prepared.diff.added, stagingFrame));
     if (verificationErrors.length > 0) {
       throw new Error(`增量更新改变了 Figma 所有的结构或布局：${verificationErrors.slice(0, 5).join("；")}`);
     }
@@ -3729,6 +3730,7 @@ async function applyPsdIncrementalUpdate(job, assets) {
     } catch (metadataError) {
       rollbackErrors.push(metadataError instanceof Error ? metadataError.message : String(metadataError));
     }
+    rollbackErrors.push(...verifyPsdProtectedSnapshot(protectedSnapshot).map((item) => `回滚后仍有漂移：${item}`));
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(rollbackErrors.length > 0 ? `${message}；回滚异常：${rollbackErrors.join("；")}` : message);
   }
@@ -4051,6 +4053,29 @@ function replacePsdOwnedImageHash(fills, decodedPaint) {
     throw new Error(`图片节点需要且只能包含一个 IMAGE fill，当前为 ${replaced}`);
   }
   return updated;
+}
+
+function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame) {
+  const errors = [];
+  if (createdNodes.length !== addedItems.length) {
+    errors.push(`新增节点数量不一致：${createdNodes.length}/${addedItems.length}`);
+  }
+  for (const item of addedItems) {
+    const layerId = normalizePsdLayerId(item.source.layerId);
+    const node = createdNodes.find((candidate) => readSharedPluginData(candidate, "psdLayerId") === layerId);
+    if (!node) {
+      errors.push(`新增 Layer ID ${layerId} 未创建`);
+      continue;
+    }
+    if (node.parent !== stagingFrame) errors.push(`新增 Layer ID ${layerId} 不在待整理容器`);
+    if (readSharedPluginData(node, "psdContentHash") !== String(item.source.contentHash || "")) {
+      errors.push(`新增 Layer ID ${layerId} 内容哈希不一致`);
+    }
+    if (item.source.mode === "text" && node.type === "TEXT" && node.characters !== String(item.source.chars || "")) {
+      errors.push(`新增 Layer ID ${layerId} 文本内容不一致`);
+    }
+  }
+  return errors;
 }
 
 function capturePsdContentRollback(node) {
@@ -4432,6 +4457,8 @@ async function createTextLayer(root, layer, context) {
   }
 
   centerNodeOnLayer(text, layer);
+  // 首次导入后冻结当前几何；后续增量只改 characters，不让自动尺寸扰动整理后的布局。
+  text.textAutoResize = "NONE";
   applyLayerCommonState(text, layer);
   writeLayerMetadata(text, layer, {
     fontFamily: fontName.family,
