@@ -3,6 +3,7 @@ dist/
 .logs/
 .local/
 .tmp/
+.worktrees/
 output/
 __pycache__/
 client/__pycache__/
