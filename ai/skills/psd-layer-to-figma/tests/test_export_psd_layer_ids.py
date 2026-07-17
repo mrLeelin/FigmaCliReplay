@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import struct
 import unittest
 from pathlib import Path
@@ -58,6 +59,11 @@ class PsdLayerIdTests(unittest.TestCase):
         )
 
         self.assertEqual(duplicates, [10])
+
+    def test_text_content_hash_tracks_characters_only(self):
+        expected = hashlib.sha256("Hello\nWorld".encode("utf-8")).hexdigest()
+
+        self.assertEqual(MODULE._text_content_hash("Hello\r\nWorld"), expected)
 
 
 if __name__ == "__main__":

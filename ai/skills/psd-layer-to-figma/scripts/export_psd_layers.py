@@ -939,6 +939,14 @@ def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]
     }
 
 
+def _normalize_text_characters(value: object) -> str:
+    return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _text_content_hash(value: object) -> str:
+    return hashlib.sha256(_normalize_text_characters(value).encode("utf-8")).hexdigest()
+
+
 def _parse_nine_slice_border(name: str) -> Dict[str, float]:
     """从图层名中解析九宫边框，支持 l/r/t/b 和 left/right/top/bottom 写法。"""
     border = {"left": 0.0, "bottom": 0.0, "right": 0.0, "top": 0.0}
@@ -2291,6 +2299,10 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
             mode = "nine-slice"
         elif text_info:
             mode = "text"
+
+        if mode == "text" and text_info:
+            text_info["characters"] = _normalize_text_characters(text_info.get("characters", ""))
+            content_hash = _text_content_hash(text_info["characters"])
 
         semantic_info = _normalize_layer_semantics(str(layer["name"]), mode)
         layer_warnings.extend(str(warning) for warning in semantic_info["normalizationWarnings"])

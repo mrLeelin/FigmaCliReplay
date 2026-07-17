@@ -2599,6 +2599,7 @@
     function showPsdIncrementalPreview(preview, capturedTarget) {
       preview = preview || {};
       var summary = preview.summary || {};
+      var warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
       activePsdIncrementalPreview = {
         taskId: String(capturedTarget && capturedTarget.taskId || psdImportTaskId || ""),
         baselineFingerprint: String(preview.baselineFingerprint || ""),
@@ -2608,7 +2609,7 @@
           type: String(capturedTarget && capturedTarget.targetType || "")
         }
       };
-      psdIncrementalDialogSummary.textContent = [
+      var summaryLines = [
         "PSD：" + activePsdIncrementalPreview.target.fileName,
         "目标：" + (activePsdIncrementalPreview.target.name || "未命名") + "（" + (activePsdIncrementalPreview.target.type || "FRAME/COMPONENT") + "）",
         "替换 " + Number(summary.changed || 0)
@@ -2616,8 +2617,16 @@
           + " · 保留缺失 " + Number(summary.missing || 0)
           + " · 未变化 " + Number(summary.unchanged || 0)
           + " · 冲突 " + Number(summary.conflicts || 0)
-      ].join("\n");
-      psdIncrementalDialogDetails.innerHTML = renderPsdIncrementalGroups(preview.groups || {});
+      ];
+      warnings.forEach(function (warning) {
+        if (warning && warning.kind === "source-file-renamed") {
+          summaryLines.push("⚠ PSD 文件名已变化：" + warning.expected + " → " + warning.actual
+            + "（Layer ID 重合 " + Math.round(Number(warning.overlap || 0) * 100) + "%）");
+        }
+      });
+      psdIncrementalDialogSummary.textContent = summaryLines.join("\n");
+      psdIncrementalDialogDetails.innerHTML = renderPsdIncrementalWarnings(warnings)
+        + renderPsdIncrementalGroups(preview.groups || {});
       confirmPsdIncrementalBtn.disabled = Number(summary.conflicts || 0) > 0 || !activePsdIncrementalPreview.baselineFingerprint;
       psdIncrementalDialog.hidden = false;
       cancelPsdIncrementalBtn.focus();
@@ -2640,6 +2649,15 @@
           return "<li>" + escapeHtml(label) + "</li>";
         }).join("");
         return '<div class="psd-diff-group"><strong>' + escapeHtml(definition[1]) + "（" + items.length + '）</strong><ul class="psd-diff-list">' + rows + "</ul></div>";
+      }).join("");
+    }
+
+    function renderPsdIncrementalWarnings(warnings) {
+      return warnings.map(function (warning) {
+        if (!warning || warning.kind !== "source-file-renamed") return "";
+        var text = "PSD 文件名已从 " + warning.expected + " 改为 " + warning.actual
+          + "，Layer ID 重合 " + Math.round(Number(warning.overlap || 0) * 100) + "%";
+        return '<div class="psd-diff-group"><strong>来源提示</strong><div>' + escapeHtml(text) + "</div></div>";
       }).join("");
     }
 

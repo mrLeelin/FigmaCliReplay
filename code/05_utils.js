@@ -3761,6 +3761,7 @@ async function preparePsdIncrementalUpdate(job, assets) {
   const currentNodes = collectPsdBoundNodes(target);
   const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
   appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
+  appendPsdIncrementalAssetConflicts(diff, context);
   if (diff.identityWarning) {
     context.warnings.push(diff.identityWarning);
   }
@@ -3800,7 +3801,8 @@ function collectPsdBoundNodes(root) {
         name: String(node.name || ""),
         nodeType: node.type,
         contentHash: readSharedPluginData(node, "psdContentHash"),
-        ownership: readSharedPluginData(node, "psdOwnership")
+        ownership: readSharedPluginData(node, "psdOwnership"),
+        liveContentSignature: buildPsdLiveContentSignature(node, readSharedPluginData(node, "psdOwnership"))
       });
     }
     if ("children" in node) {
@@ -3831,7 +3833,12 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
   const incomingFileName = normalizedPsdSourceFileName(job);
   if (storedFileName && incomingFileName && storedFileName !== incomingFileName) {
     if (identity.overlap >= 0.8) {
-      diff.identityWarning = { kind: "source-file-renamed", expected: storedFileName, actual: incomingFileName };
+      diff.identityWarning = {
+        kind: "source-file-renamed",
+        expected: storedFileName,
+        actual: incomingFileName,
+        overlap: identity.overlap
+      };
     } else {
       diff.conflicts.push({ kind: "source-file-and-identity-mismatch", expected: storedFileName, actual: incomingFileName });
     }
@@ -3861,9 +3868,30 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
   diff.canApply = diff.conflicts.length === 0;
 }
 
+function appendPsdIncrementalAssetConflicts(diff, context) {
+  const sources = diff.changed
+    .map((item) => item.source)
+    .filter((layer) => psdOwnershipForMode(layer.mode) !== "protected")
+    .concat(diff.added.map((item) => item.source))
+    .filter((layer) => layer.mode !== "text");
+  for (const layer of sources) {
+    const bytes = context.assetBytes.get(String(layer.assetId));
+    if (!bytes || bytes.length < 8) {
+      diff.conflicts.push({ kind: "missing-raster-bytes", layerId: layer.layerId, name: layer.name });
+      continue;
+    }
+    const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (!pngSignature.every((value, index) => bytes[index] === value)) {
+      diff.conflicts.push({ kind: "invalid-raster-bytes", layerId: layer.layerId, name: layer.name });
+    }
+  }
+  diff.summary.conflicts = diff.conflicts.length;
+  diff.canApply = diff.conflicts.length === 0;
+}
+
 function buildPsdIncrementalFingerprint(target, currentNodes, incomingLayers) {
   const current = currentNodes
-    .map((item) => `${item.layerId}:${item.nodeId}:${item.contentHash}`)
+    .map((item) => `${item.layerId}:${item.nodeId}:${item.contentHash}:${item.ownership}:${item.nodeType}:${item.liveContentSignature}`)
     .sort()
     .join("|");
   const incoming = incomingLayers
@@ -3871,6 +3899,19 @@ function buildPsdIncrementalFingerprint(target, currentNodes, incomingLayers) {
     .sort()
     .join("|");
   return `${target.id}::${current}::${incoming}`;
+}
+
+function buildPsdLiveContentSignature(node, ownership) {
+  if (ownership === "text-content" && node.type === "TEXT") {
+    return `text:${hashPsdString(node.characters)}`;
+  }
+  if (ownership === "image-content" && node.type === "RECTANGLE" && Array.isArray(node.fills)) {
+    const imageHashes = node.fills
+      .filter((paint) => paint && paint.type === "IMAGE")
+      .map((paint) => String(paint.imageHash || ""));
+    return `image:${imageHashes.join(",")}`;
+  }
+  return "protected";
 }
 
 function buildPsdIncrementalResult(prepared, status) {
@@ -4245,6 +4286,11 @@ function hashPsdLayerIds(layers) {
     .filter(Boolean)
     .sort()
     .join(",");
+  return hashPsdString(text);
+}
+
+function hashPsdString(value) {
+  const text = String(value || "");
   let hash = 2166136261;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);

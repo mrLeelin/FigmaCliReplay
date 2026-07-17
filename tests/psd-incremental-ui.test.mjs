@@ -17,6 +17,8 @@ test("incremental apply is gated by an explicit modal confirmation", () => {
   assert.match(ui, /function confirmPsdIncrementalUpdate/);
   assert.match(ui, /\/apply/);
   assert.match(ui, /取消/);
+  assert.match(ui, /source-file-renamed/);
+  assert.match(ui, /Layer ID 重合/);
 });
 
 test("updated plugin UI script remains syntactically valid", () => {
