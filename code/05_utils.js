@@ -3709,7 +3709,7 @@ async function applyPsdIncrementalUpdate(job, assets) {
 
     const verificationErrors = verifyPsdProtectedSnapshot(protectedSnapshot)
       .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints))
-      .concat(verifyPsdAddedNodes(createdNodes, prepared.diff.added, stagingFrame));
+      .concat(verifyPsdAddedNodes(createdNodes, prepared.diff.added, stagingFrame, prepared.context));
     if (verificationErrors.length > 0) {
       throw new Error(`增量更新改变了 Figma 所有的结构或布局：${verificationErrors.slice(0, 5).join("；")}`);
     }
@@ -3826,14 +3826,15 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
     diff.conflicts.push({ kind: "source-canvas-mismatch", expected: `${storedWidth}x${storedHeight}`, actual: `${manifest.canvas.width}x${manifest.canvas.height}` });
   }
   const identity = measurePsdLayerIdentity(currentNodes, manifest.layers);
-  if (identity.currentCount === 0 && identity.incomingCount > 0) {
-    diff.conflicts.push({ kind: "no-bound-target-layers", message: "目标中没有可匹配的 PSD Layer ID。" });
-  } else if (identity.currentCount > 0 && identity.overlap < 0.5) {
-    diff.conflicts.push({ kind: "source-layer-identity-mismatch", message: `PSD Layer ID 重合率仅 ${Math.round(identity.overlap * 100)}%。` });
-  }
   const storedFileName = readSharedPluginData(target, "psdSourceFileName");
   const incomingFileName = normalizedPsdSourceFileName(job);
-  if (storedFileName && incomingFileName && storedFileName !== incomingFileName) {
+  const fileNameChanged = !!(storedFileName && incomingFileName && storedFileName !== incomingFileName);
+  if (identity.currentCount === 0 && identity.incomingCount > 0) {
+    diff.conflicts.push({ kind: "no-bound-target-layers", message: "目标中没有可匹配的 PSD Layer ID。" });
+  } else if (!fileNameChanged && identity.currentCount > 0 && identity.currentCoverage < 0.5 && identity.incomingCoverage < 0.5) {
+    diff.conflicts.push({ kind: "source-layer-identity-mismatch", message: `PSD Layer ID 重合率仅 ${Math.round(identity.overlap * 100)}%。` });
+  }
+  if (fileNameChanged) {
     if (identity.overlap >= 0.8) {
       diff.identityWarning = {
         kind: "source-file-renamed",
@@ -4055,7 +4056,7 @@ function replacePsdOwnedImageHash(fills, decodedPaint) {
   return updated;
 }
 
-function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame) {
+function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame, context) {
   const errors = [];
   if (createdNodes.length !== addedItems.length) {
     errors.push(`新增节点数量不一致：${createdNodes.length}/${addedItems.length}`);
@@ -4070,6 +4071,26 @@ function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame) {
     if (node.parent !== stagingFrame) errors.push(`新增 Layer ID ${layerId} 不在待整理容器`);
     if (readSharedPluginData(node, "psdContentHash") !== String(item.source.contentHash || "")) {
       errors.push(`新增 Layer ID ${layerId} 内容哈希不一致`);
+    }
+    const expectedOwnership = psdOwnershipForMode(item.source.mode);
+    if (readSharedPluginData(node, "psdOwnership") !== expectedOwnership) {
+      errors.push(`Added Layer ID ${layerId} has invalid PSD ownership`);
+    }
+    if (item.source.mode === "image") {
+      const imagePaints = node.type === "RECTANGLE" && Array.isArray(node.fills)
+        ? node.fills.filter((paint) => paint && paint.type === "IMAGE")
+        : [];
+      const expectedImageHash = context && context.imageHashes
+        ? context.imageHashes.get(String(item.source.assetId))
+        : "";
+      if (imagePaints.length !== 1 || !expectedImageHash || imagePaints[0].imageHash !== expectedImageHash) {
+        errors.push(`Added Layer ID ${layerId} has invalid image content`);
+      }
+    }
+    if (item.source.mode === "nine-slice") {
+      if (node.type !== "FRAME" || validateSliceFrame(node) !== 0 || !hasNineSliceSourceFill(node)) {
+        errors.push(`Added Layer ID ${layerId} has invalid slice structure`);
+      }
     }
     if (item.source.mode === "text" && node.type === "TEXT" && node.characters !== String(item.source.chars || "")) {
       errors.push(`新增 Layer ID ${layerId} 文本内容不一致`);

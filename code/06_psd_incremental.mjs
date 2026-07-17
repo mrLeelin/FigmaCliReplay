@@ -37,6 +37,8 @@ export function measurePsdLayerIdentity(currentNodes, incomingLayers) {
     currentCount: current.size,
     incomingCount: incoming.size,
     matchedCount: matched,
+    currentCoverage: current.size > 0 ? matched / current.size : 0,
+    incomingCoverage: incoming.size > 0 ? matched / incoming.size : 0,
     overlap: comparisonSize > 0 ? matched / comparisonSize : 0,
   };
 }

@@ -105,9 +105,19 @@ test("document identity uses Photoshop layer overlap instead of filename alone",
   assert.deepEqual(measurePsdLayerIdentity(
     [{ layerId: "10" }, { layerId: "20" }, { layerId: "30" }],
     [{ layerId: "10" }, { layerId: "20" }, { layerId: "40" }],
-  ), { currentCount: 3, incomingCount: 3, matchedCount: 2, overlap: 2 / 3 });
+  ), {
+    currentCount: 3,
+    incomingCount: 3,
+    matchedCount: 2,
+    currentCoverage: 2 / 3,
+    incomingCoverage: 2 / 3,
+    overlap: 2 / 3,
+  });
   assert.equal(measurePsdLayerIdentity([{ layerId: "10" }], [{ layerId: "99" }]).overlap, 0);
-  assert.equal(measurePsdLayerIdentity([{ layerId: "10" }], [
+  const additiveUpdate = measurePsdLayerIdentity([{ layerId: "10" }], [
     { layerId: "10" }, { layerId: "20" }, { layerId: "30" }, { layerId: "40" },
-  ]).overlap, 0.25);
+  ]);
+  assert.equal(additiveUpdate.overlap, 0.25);
+  assert.equal(additiveUpdate.currentCoverage, 1);
+  assert.equal(additiveUpdate.incomingCoverage, 0.25);
 });
