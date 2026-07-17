@@ -4,7 +4,10 @@ import test from "node:test";
 
 import {
   buildPsdIncrementalDiff,
+  measurePsdLayerIdentity,
   normalizePsdLayerId,
+  psdOwnershipForMode,
+  validatePsdOwnedTarget,
 } from "../code/06_psd_incremental.mjs";
 
 
@@ -76,6 +79,28 @@ test("Figma runtime exposes preview/apply without overwriting organized node ide
   assert.match(source, /async function applyPsdIncrementalUpdate\(/);
   assert.match(source, /psdLayerId/);
   assert.match(source, /psdContentHash/);
+  assert.match(source, /layoutPositioning = "ABSOLUTE"/);
+  assert.match(source, /rollbackPsdIncrementalMutation/);
+  assert.match(source, /verifyPsdProtectedSnapshot/);
   assert.doesNotMatch(source, /targetNode\.name\s*=/);
   assert.doesNotMatch(source, /targetNode\.x\s*=/);
+});
+
+test("ownership is an executable write boundary", () => {
+  assert.equal(psdOwnershipForMode("image"), "image-content");
+  assert.equal(psdOwnershipForMode("text"), "text-content");
+  assert.equal(psdOwnershipForMode("nine-slice"), "protected");
+  assert.equal(validatePsdOwnedTarget("image-content", "image", "RECTANGLE", ""), "");
+  assert.equal(validatePsdOwnedTarget("text-content", "text", "TEXT", "NONE"), "");
+  assert.equal(validatePsdOwnedTarget("image-content", "text", "TEXT", "NONE"), "ownership-mismatch");
+  assert.equal(validatePsdOwnedTarget("text-content", "text", "TEXT", "WIDTH_AND_HEIGHT"), "unsafe-text-auto-resize");
+  assert.equal(validatePsdOwnedTarget("protected", "nine-slice", "FRAME", ""), "protected-source-mode");
+});
+
+test("document identity uses Photoshop layer overlap instead of filename alone", () => {
+  assert.deepEqual(measurePsdLayerIdentity(
+    [{ layerId: "10" }, { layerId: "20" }, { layerId: "30" }],
+    [{ layerId: "10" }, { layerId: "20" }, { layerId: "40" }],
+  ), { currentCount: 3, incomingCount: 3, matchedCount: 2, overlap: 2 / 3 });
+  assert.equal(measurePsdLayerIdentity([{ layerId: "10" }], [{ layerId: "99" }]).overlap, 0);
 });

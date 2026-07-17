@@ -3,6 +3,44 @@ export function normalizePsdLayerId(value) {
   return /^\d+$/.test(text) && text !== "0" ? text : "";
 }
 
+export function psdOwnershipForMode(mode) {
+  if (mode === "text") return "text-content";
+  if (mode === "image") return "image-content";
+  return "protected";
+}
+
+export function validatePsdOwnedTarget(ownership, sourceMode, nodeType, textAutoResize) {
+  var expected = psdOwnershipForMode(sourceMode);
+  if (expected === "protected") return "protected-source-mode";
+  if (ownership !== expected) return "ownership-mismatch";
+  if (expected === "text-content") {
+    if (nodeType !== "TEXT") return "unsupported-text-target";
+    if (textAutoResize && textAutoResize !== "NONE") return "unsafe-text-auto-resize";
+    return "";
+  }
+  return nodeType === "RECTANGLE" ? "" : "unsupported-image-target";
+}
+
+export function measurePsdLayerIdentity(currentNodes, incomingLayers) {
+  var current = new Set((currentNodes || []).map(function (item) {
+    return normalizePsdLayerId(item && item.layerId);
+  }).filter(Boolean));
+  var incoming = new Set((incomingLayers || []).map(function (item) {
+    return normalizePsdLayerId(item && item.layerId);
+  }).filter(Boolean));
+  var matched = 0;
+  for (var layerId of current) {
+    if (incoming.has(layerId)) matched += 1;
+  }
+  var smallerSetSize = Math.min(current.size, incoming.size);
+  return {
+    currentCount: current.size,
+    incomingCount: incoming.size,
+    matchedCount: matched,
+    overlap: smallerSetSize > 0 ? matched / smallerSetSize : 0,
+  };
+}
+
 
 export function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
   var currentById = new Map();

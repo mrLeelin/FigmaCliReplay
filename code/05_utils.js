@@ -3669,30 +3669,68 @@ async function applyPsdIncrementalUpdate(job, assets) {
     }
   }
 
-  for (const pair of prepared.diff.changed) {
-    const node = pair.target.node;
-    if (pair.source.mode === "text") {
-      node.characters = String(pair.source.chars || "");
-    } else {
-      node.fills = [imagePaints.get(pair.source.layerId)];
-    }
-    writeLayerMetadata(node, pair.source, {});
-  }
-
   let stagingFrame = null;
-  if (prepared.diff.added.length > 0) {
-    stagingFrame = findPsdIncrementalStagingFrame(prepared.target) || createPsdIncrementalStagingFrame(prepared.target);
-    for (const item of prepared.diff.added) {
-      const node = await createLayerNode(stagingFrame, item.source, prepared.context);
-      if (node) {
-        prepared.context.nodeByLayerIdx.set(String(item.source.idx), node.id);
+  let createdStagingFrame = false;
+  let stagingExistingChildIds = new Set();
+  const createdNodes = [];
+  const rollbackRecords = [];
+  const rootMetadataBefore = capturePsdRootMetadata(prepared.target);
+  const protectedSnapshot = capturePsdProtectedSnapshot(prepared.target);
+  try {
+    if (prepared.diff.added.length > 0) {
+      stagingFrame = findPsdIncrementalStagingFrame(prepared.target);
+      if (!stagingFrame) {
+        stagingFrame = createPsdIncrementalStagingFrame(prepared.target);
+        createdStagingFrame = true;
+      } else {
+        stagingExistingChildIds = new Set(stagingFrame.children.map((child) => child.id));
+      }
+      for (const item of prepared.diff.added) {
+        const node = await createLayerNode(stagingFrame, item.source, prepared.context);
+        if (node) {
+          createdNodes.push(node);
+          prepared.context.nodeByLayerIdx.set(String(item.source.idx), node.id);
+        }
       }
     }
-  }
 
-  writePsdRootMetadata(prepared.target, job, prepared.manifest);
-  if (typeof figma.commitUndo === "function") {
-    figma.commitUndo();
+    for (const pair of prepared.diff.changed) {
+      const node = pair.target.node;
+      rollbackRecords.push(capturePsdContentRollback(node));
+      if (pair.target.ownership === "text-content") {
+        node.characters = String(pair.source.chars || "");
+      } else if (pair.target.ownership === "image-content") {
+        node.fills = [imagePaints.get(pair.source.layerId)];
+      } else {
+        throw new Error(`PSD ownership 不允许写入节点 ${node.id}`);
+      }
+      writeLayerMetadata(node, pair.source, {});
+    }
+
+    const verificationErrors = verifyPsdProtectedSnapshot(protectedSnapshot)
+      .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints));
+    if (verificationErrors.length > 0) {
+      throw new Error(`增量更新改变了 Figma 所有的结构或布局：${verificationErrors.slice(0, 5).join("；")}`);
+    }
+    writePsdRootMetadata(prepared.target, job, prepared.manifest);
+    if (typeof figma.commitUndo === "function") {
+      figma.commitUndo();
+    }
+  } catch (error) {
+    const rollbackErrors = rollbackPsdIncrementalMutation(
+      rollbackRecords,
+      createdNodes,
+      stagingFrame,
+      createdStagingFrame,
+      stagingExistingChildIds
+    );
+    try {
+      writePluginData(prepared.target, rootMetadataBefore);
+    } catch (metadataError) {
+      rollbackErrors.push(metadataError instanceof Error ? metadataError.message : String(metadataError));
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(rollbackErrors.length > 0 ? `${message}；回滚异常：${rollbackErrors.join("；")}` : message);
   }
 
   const result = buildPsdIncrementalResult(prepared, "applied");
@@ -3723,6 +3761,9 @@ async function preparePsdIncrementalUpdate(job, assets) {
   const currentNodes = collectPsdBoundNodes(target);
   const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
   appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
+  if (diff.identityWarning) {
+    context.warnings.push(diff.identityWarning);
+  }
   return {
     target,
     manifest,
@@ -3771,24 +3812,45 @@ function collectPsdBoundNodes(root) {
 }
 
 function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest) {
-  const schemaVersion = readSharedPluginData(target, "psdSchemaVersion");
+  const schemaVersion = readSharedPluginData(target, "psdImportSchemaVersion") || readSharedPluginData(target, "psdSchemaVersion");
   if (schemaVersion !== "2") {
     diff.conflicts.push({ kind: "missing-target-metadata", message: "目标不是带增量元数据的 PSD 导入结果。" });
   }
-  const storedSourceKey = readSharedPluginData(target, "psdSourceKey");
-  const incomingSourceKey = buildPsdSourceKey(job, manifest);
-  if (storedSourceKey && incomingSourceKey && storedSourceKey !== incomingSourceKey) {
-    diff.conflicts.push({ kind: "source-mismatch", expected: storedSourceKey, actual: incomingSourceKey });
+  const storedWidth = numericOr(readSharedPluginData(target, "psdCanvasWidth"), 0);
+  const storedHeight = numericOr(readSharedPluginData(target, "psdCanvasHeight"), 0);
+  if (storedWidth !== manifest.canvas.width || storedHeight !== manifest.canvas.height) {
+    diff.conflicts.push({ kind: "source-canvas-mismatch", expected: `${storedWidth}x${storedHeight}`, actual: `${manifest.canvas.width}x${manifest.canvas.height}` });
+  }
+  const identity = measurePsdLayerIdentity(currentNodes, manifest.layers);
+  if (identity.currentCount === 0 && identity.incomingCount > 0) {
+    diff.conflicts.push({ kind: "no-bound-target-layers", message: "目标中没有可匹配的 PSD Layer ID。" });
+  } else if (identity.currentCount > 0 && identity.overlap < 0.5) {
+    diff.conflicts.push({ kind: "source-layer-identity-mismatch", message: `PSD Layer ID 重合率仅 ${Math.round(identity.overlap * 100)}%。` });
+  }
+  const storedFileName = readSharedPluginData(target, "psdSourceFileName");
+  const incomingFileName = normalizedPsdSourceFileName(job);
+  if (storedFileName && incomingFileName && storedFileName !== incomingFileName) {
+    if (identity.overlap >= 0.8) {
+      diff.identityWarning = { kind: "source-file-renamed", expected: storedFileName, actual: incomingFileName };
+    } else {
+      diff.conflicts.push({ kind: "source-file-and-identity-mismatch", expected: storedFileName, actual: incomingFileName });
+    }
   }
   for (const pair of diff.changed) {
     const node = pair.target.node;
-    if (pair.source.mode === "text") {
-      const fontName = node && node.fontName;
-      if (!node || node.type !== "TEXT" || !fontName || typeof fontName !== "object") {
-        diff.conflicts.push({ kind: "unsupported-text-target", layerId: pair.source.layerId, nodeId: pair.target.nodeId });
-      }
-    } else if (!node || !("fills" in node)) {
-      diff.conflicts.push({ kind: "unsupported-image-target", layerId: pair.source.layerId, nodeId: pair.target.nodeId });
+    const conflictKind = validatePsdOwnedTarget(
+      pair.target.ownership,
+      pair.source.mode,
+      node && node.type,
+      node && node.type === "TEXT" ? node.textAutoResize : ""
+    );
+    const fontName = node && node.type === "TEXT" ? node.fontName : null;
+    if (conflictKind || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
+      diff.conflicts.push({
+        kind: conflictKind || "unsupported-text-font",
+        layerId: pair.source.layerId,
+        nodeId: pair.target.nodeId
+      });
     }
   }
   diff.summary.conflicts = diff.conflicts.length;
@@ -3853,8 +3915,142 @@ function createPsdIncrementalStagingFrame(target) {
   frame.fills = [];
   frame.strokes = [];
   frame.clipsContent = false;
+  if ("layoutMode" in frame) frame.layoutMode = "NONE";
   target.appendChild(frame);
+  if (target.layoutMode && target.layoutMode !== "NONE" && "layoutPositioning" in frame) {
+    frame.layoutPositioning = "ABSOLUTE";
+  }
+  frame.x = 0;
+  frame.y = 0;
   return frame;
+}
+
+function capturePsdProtectedSnapshot(root) {
+  const snapshots = [];
+  const visit = (node) => {
+    snapshots.push({
+      node,
+      id: node.id,
+      name: String(node.name || ""),
+      parentId: node.parent ? node.parent.id : "",
+      index: node.parent && "children" in node.parent ? node.parent.children.indexOf(node) : -1,
+      x: numericOr(node.x, 0),
+      y: numericOr(node.y, 0),
+      width: numericOr(node.width, 0),
+      height: numericOr(node.height, 0),
+      rotation: numericOr(node.rotation, 0),
+      layoutPositioning: "layoutPositioning" in node ? String(node.layoutPositioning || "") : ""
+    });
+    if ("children" in node) {
+      for (const child of node.children) visit(child);
+    }
+  };
+  visit(root);
+  return snapshots;
+}
+
+function verifyPsdProtectedSnapshot(snapshots) {
+  const errors = [];
+  for (const item of snapshots) {
+    const node = item.node;
+    if (!node || node.removed) {
+      errors.push(`${item.id} 已被删除`);
+      continue;
+    }
+    const parentId = node.parent ? node.parent.id : "";
+    const index = node.parent && "children" in node.parent ? node.parent.children.indexOf(node) : -1;
+    const changed = node.name !== item.name
+      || parentId !== item.parentId
+      || index !== item.index
+      || Math.abs(numericOr(node.x, 0) - item.x) > 0.01
+      || Math.abs(numericOr(node.y, 0) - item.y) > 0.01
+      || Math.abs(numericOr(node.width, 0) - item.width) > 0.01
+      || Math.abs(numericOr(node.height, 0) - item.height) > 0.01
+      || Math.abs(numericOr(node.rotation, 0) - item.rotation) > 0.01
+      || ("layoutPositioning" in node && String(node.layoutPositioning || "") !== item.layoutPositioning);
+    if (changed) errors.push(`${item.id}:${item.name}`);
+  }
+  return errors;
+}
+
+function verifyPsdAppliedContent(changedPairs, imagePaints) {
+  const errors = [];
+  for (const pair of changedPairs) {
+    const node = pair.target.node;
+    if (readSharedPluginData(node, "psdContentHash") !== String(pair.source.contentHash || "")) {
+      errors.push(`${node.id} 内容哈希未更新`);
+    }
+    if (pair.target.ownership === "text-content") {
+      if (node.characters !== String(pair.source.chars || "")) errors.push(`${node.id} 文本内容不一致`);
+    } else {
+      const expectedPaint = imagePaints.get(pair.source.layerId);
+      const actualPaint = Array.isArray(node.fills) ? node.fills[0] : null;
+      if (!actualPaint || actualPaint.type !== "IMAGE" || actualPaint.imageHash !== expectedPaint.imageHash) {
+        errors.push(`${node.id} 图片内容不一致`);
+      }
+    }
+  }
+  return errors;
+}
+
+function capturePsdContentRollback(node) {
+  return {
+    node,
+    fills: "fills" in node && Array.isArray(node.fills) ? node.fills.slice() : null,
+    characters: node.type === "TEXT" ? node.characters : null,
+    metadata: {
+      rawPsdLayerName: readSharedPluginData(node, "rawPsdLayerName"),
+      normalizedLayerName: readSharedPluginData(node, "normalizedLayerName"),
+      semanticMode: readSharedPluginData(node, "semanticMode"),
+      normalizationWarnings: readSharedPluginData(node, "normalizationWarnings"),
+      psdLayerIndex: readSharedPluginData(node, "psdLayerIndex"),
+      psdLayerId: readSharedPluginData(node, "psdLayerId"),
+      psdOriginalName: readSharedPluginData(node, "psdOriginalName"),
+      psdContentHash: readSharedPluginData(node, "psdContentHash"),
+      psdOwnership: readSharedPluginData(node, "psdOwnership")
+    }
+  };
+}
+
+function capturePsdRootMetadata(node) {
+  const keys = [
+    "importKind", "schemaVersion", "source", "psdSchemaVersion", "psdImportSchemaVersion",
+    "psdSourceFileName", "psdSourceKey", "psdLayerSetFingerprint", "psdCanvasWidth", "psdCanvasHeight"
+  ];
+  const values = {};
+  for (const key of keys) values[key] = readSharedPluginData(node, key);
+  return values;
+}
+
+function rollbackPsdIncrementalMutation(records, createdNodes, stagingFrame, createdStagingFrame, stagingExistingChildIds) {
+  const errors = [];
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    try {
+      if (record.characters !== null) record.node.characters = record.characters;
+      if (record.fills !== null) record.node.fills = record.fills;
+      writePluginData(record.node, record.metadata);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    if (createdStagingFrame && stagingFrame && !stagingFrame.removed) {
+      stagingFrame.remove();
+    } else if (stagingFrame && !stagingFrame.removed) {
+      for (const child of stagingFrame.children.slice().reverse()) {
+        if (!stagingExistingChildIds.has(child.id)) child.remove();
+      }
+    } else {
+      for (let index = createdNodes.length - 1; index >= 0; index -= 1) {
+        const node = createdNodes[index];
+        if (node && !node.removed) node.remove();
+      }
+    }
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  return errors;
 }
 
 // 规范化 manifest_summary 数据，兼容不同摘要脚本输出格式。
@@ -4003,19 +4199,39 @@ function writePsdRootMetadata(root, job, manifest) {
     schemaVersion: String(job.schemaVersion || 2),
     source: String(job.source || ""),
     psdSchemaVersion: "2",
+    psdImportSchemaVersion: "2",
+    psdSourceFileName: normalizedPsdSourceFileName(job),
     psdSourceKey: buildPsdSourceKey(job, manifest),
+    psdLayerSetFingerprint: hashPsdLayerIds(manifest.layers),
     psdCanvasWidth: String(manifest.canvas.width),
     psdCanvasHeight: String(manifest.canvas.height)
   });
 }
 
 function buildPsdSourceKey(job, manifest) {
-  const source = String(job && (job.sourceFileName || job.name) || "")
+  return `${normalizedPsdSourceFileName(job)}:${manifest.canvas.width}x${manifest.canvas.height}:${hashPsdLayerIds(manifest.layers)}`;
+}
+
+function normalizedPsdSourceFileName(job) {
+  return String(job && (job.sourceFileName || job.name) || "")
     .split(/[\\/]/)
     .pop()
     .trim()
     .toLowerCase();
-  return `${source}:${manifest.canvas.width}x${manifest.canvas.height}`;
+}
+
+function hashPsdLayerIds(layers) {
+  const text = (layers || [])
+    .map((layer) => normalizePsdLayerId(layer.layerId))
+    .filter(Boolean)
+    .sort()
+    .join(",");
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 // 解析目标父节点；目标不是容器时回退到当前页面。
@@ -4486,7 +4702,7 @@ function writeLayerMetadata(node, layer, extra) {
     psdLayerId: normalizePsdLayerId(layer.layerId),
     psdOriginalName: String(layer.rawPsdLayerName || layer.name || ""),
     psdContentHash: String(layer.contentHash || ""),
-    psdOwnership: layer.mode === "text" ? "text-content" : "image-content"
+    psdOwnership: psdOwnershipForMode(layer.mode)
   };
   Object.assign(metadata, extra || {});
   writePluginData(node, metadata);

@@ -592,6 +592,15 @@ def validate_fast_repeat_args(args: argparse.Namespace) -> None:
         raise RuntimeError("--fast-repeat cannot be combined with --output")
 
 
+def is_successful_import_status(status: str, import_mode: str) -> bool:
+    """Treat each import mode's valid terminal response as a successful submission."""
+    if import_mode == "incremental-preview":
+        return status in {"preview-ready", "preview-blocked"}
+    if import_mode == "incremental-apply":
+        return status == "applied"
+    return status == "completed"
+
+
 def format_gate_checks(validation: dict) -> list[str]:
     """格式化交付门禁检查结果。"""
     fields = [
@@ -820,7 +829,7 @@ def main() -> int:
         compact_summary["preflightSkipped"] = bool(args.fast_repeat or args.no_preflight)
         print(json.dumps(compact_summary, ensure_ascii=True, indent=2))
 
-    return 0 if status == "completed" else 1
+    return 0 if is_successful_import_status(status, args.import_mode) else 1
 
 
 if __name__ == "__main__":
