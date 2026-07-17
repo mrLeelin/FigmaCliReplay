@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -102,6 +103,28 @@ def _u32(data: bytes, offset: int) -> int:
 def _i32(data: bytes, offset: int) -> int:
     """读取 PSD 大端有符号 32 位整数。"""
     return struct.unpack(">i", data[offset:offset + 4])[0]
+
+
+def _read_psd_layer_id(tag_payloads: Dict[str, bytes]) -> Optional[int]:
+    """Read Photoshop's stable layer identifier from the ``lyid`` block."""
+    payload = tag_payloads.get("lyid")
+    if payload is None or len(payload) < 4:
+        return None
+    value = struct.unpack(">I", payload[:4])[0]
+    return value if value > 0 else None
+
+
+def _find_duplicate_layer_ids(layers: List[Dict[str, object]]) -> List[int]:
+    seen = set()
+    duplicates = set()
+    for layer in layers:
+        layer_id = layer.get("layerId")
+        if not isinstance(layer_id, int) or layer_id <= 0:
+            continue
+        if layer_id in seen:
+            duplicates.add(layer_id)
+        seen.add(layer_id)
+    return sorted(duplicates)
 
 
 def _safe_name(name: str, fallback: str) -> str:
@@ -2138,7 +2161,7 @@ def _parse_layer_records(data: bytes) -> Tuple[Dict[str, int], List[Dict[str, ob
             pos += 12
             payload = data[pos:pos + tag_len]
             tags.append(key)
-            if key in ("TySh", "lfx2", "lfx "):
+            if key in ("TySh", "lfx2", "lfx ", "lyid"):
                 tag_payloads[key] = payload
             if key == "luni" and len(payload) >= 4:
                 char_count = struct.unpack(">I", payload[:4])[0]
@@ -2156,6 +2179,7 @@ def _parse_layer_records(data: bytes) -> Tuple[Dict[str, int], List[Dict[str, ob
 
         layers.append({
             "index": index,
+            "layerId": _read_psd_layer_id(tag_payloads),
             "name": unicode_name or pascal_name,
             "type": layer_type,
             "x": left,
@@ -2234,6 +2258,7 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
         safe_name = _safe_name(str(layer["name"]), f"layer_{layer['index']}")
         png_path = out_dir / f"{int(layer['index']):02d}_{safe_name}.png"
         image.save(png_path, optimize=True)
+        content_hash = hashlib.sha256(png_path.read_bytes()).hexdigest()
         common_component_info = _build_common_component_info(str(layer["name"]))
         nine_slice_info = None if common_component_info else _build_nine_slice_info(
             str(layer["name"]),
@@ -2274,6 +2299,7 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
 
         layer_entry = {
             "index": layer["index"],
+            "layerId": layer.get("layerId"),
             "name": layer["name"],
             "rawPsdLayerName": semantic_info["rawPsdLayerName"],
             "normalizedLayerName": semantic_info["normalizedLayerName"],
@@ -2293,6 +2319,7 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
             "tags": layer["tags"],
             "path": png_path.as_posix(),
             "bytes": png_path.stat().st_size,
+            "contentHash": content_hash,
             "constraints": _infer_constraints(
                 float(layer["x"]),
                 float(layer["y"]),
@@ -2320,6 +2347,13 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
                 "hintOnly": True,
             }
         manifest_layers.append(layer_entry)
+
+    duplicate_layer_ids = _find_duplicate_layer_ids(manifest_layers)
+    if duplicate_layer_ids:
+        raise ValueError(
+            "PSD contains duplicate Layer IDs: "
+            + ", ".join(str(layer_id) for layer_id in duplicate_layer_ids)
+        )
 
     semantic_hints = {
         "psdPrefix": _build_psd_prefix_hints(manifest_layers, canvas),
@@ -2595,6 +2629,8 @@ def _generate_summary(
         mode = layer["mode"]
         entry: Dict[str, object] = {
             "idx": idx, "name": layer["name"], "mode": mode,
+            "layerId": layer.get("layerId"),
+            "contentHash": layer.get("contentHash", ""),
             "rawPsdLayerName": layer.get("rawPsdLayerName", layer["name"]),
             "normalizedLayerName": layer.get("normalizedLayerName", layer["name"]),
             "semanticMode": layer.get("semanticMode", mode),
