@@ -59,8 +59,8 @@
 
 ```mermaid
 flowchart LR
-    UI["Figma UI<br/>UiLogger"] --> Plugin["Figma 插件<br/>PluginLogger"]
-    Plugin --> Relay["Node Relay<br/>RelayLogger"]
+    Plugin["Figma 插件<br/>PluginLogger"] <--> UI["Figma UI<br/>UiLogger"]
+    UI <--> Relay["Node Relay<br/>RelayLogger"]
     Python["Python 任务<br/>PythonLogger"] --> Relay
     Unity["Unity Bridge<br/>BridgeLogger"] --> Relay
     Relay --> Store["LogStore<br/>JSONL 与内存索引"]
@@ -71,7 +71,7 @@ flowchart LR
 `operationId` 在首次进入 Figma UI、HTTP 或 MCP 时生成，并通过现有业务数据流继续传递：
 
 - UI 与插件之间的 `postMessage` 消息上下文。
-- 插件与 Relay 之间的 WebSocket Job/Result 信封。
+- UI 与 Relay 之间的 WebSocket Job/Result 信封；UI 负责把命令转发给插件并把插件结果回传给 Relay。
 - Relay 创建 Python 子进程时的环境变量或参数。
 - Relay 与 Unity Bridge 之间的 HTTP 请求头或请求体。
 
@@ -152,11 +152,11 @@ Node Relay 还负责：
 
 ### 7.2 Figma UI
 
-`UiLogger` 记录用户交互、请求发起、响应、取消和 UI 侧异常。日志先进入有限长度队列，再通过现有 `postMessage` 批量交给插件。队列满时优先保留 `warn`、`error` 和 `fatal`。
+`UiLogger` 记录用户交互、请求发起、响应、取消和 UI 侧异常。UI 同时接收 `PluginLogger` 通过 `figma.ui.postMessage` 发来的结构化日志事件，并通过现有 WebSocket 将两类日志批量提交给 Relay。队列满时优先保留 `warn`、`error` 和 `fatal`。
 
 ### 7.3 Figma 插件
 
-`PluginLogger` 记录插件生命周期、选择读取、命令执行、Figma 节点变更和结果发送。插件断开 Relay 时保留有限长度的关键日志，WebSocket 恢复后批量提交。
+`PluginLogger` 记录插件生命周期、选择读取、命令执行、Figma 节点变更和结果发送。插件通过 `figma.ui.postMessage` 将结构化日志事件交给 UI；UI WebSocket 断开 Relay 时负责保留有限长度的关键日志，并在重连后批量提交。
 
 ### 7.4 Python
 
@@ -265,4 +265,3 @@ Figma UI 日志查看器支持：
 - 日志系统失败不会导致业务失败。
 - 真实跨端验证能够以一个 `operationId` 还原完整操作时间线。
 - 工作区现有无关改动未被覆盖、回退或混入日志设计提交。
-
