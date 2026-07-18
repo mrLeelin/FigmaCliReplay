@@ -1,4 +1,4 @@
-// Figma MCP Relay build #162
+// Figma MCP Relay build #174
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -47,15 +47,142 @@ function applyImageValidationErrors(exports, errors) {
     if (item) item.health = createImageHealth("blocked", error.code || "invalidImagePayload", { sourceExportId: error.sourceExportId || "" });
   }
 }
-// Figma MCP Relay build #162
+class PluginOperationScope {
+  constructor(logger, name, context) {
+    this.logger = logger;
+    this.context = {
+      operationId: context.operationId || logger.idFactory(),
+      operationName: name,
+      module: context.module || logger.module
+    };
+    this.startedAt = logger.clock();
+    this.stepIndex = 0;
+    this.terminal = false;
+    logger.emit("info", "started", "operation.start", "插件操作开始", context.data || {}, this.context, 0);
+  }
+
+  step(step, message, data, level) {
+    if (this.terminal) return;
+    this.stepIndex += 1;
+    this.logger.emit(level || "info", "progress", step, message || step, data || {}, this.context, this.stepIndex, null, this.logger.clock() - this.startedAt);
+  }
+
+  succeed(message, data) {
+    this.finish("info", "succeeded", message || "插件操作成功", null, data || {});
+  }
+
+  fail(error, message, data) {
+    this.finish("error", "failed", message || "插件操作失败", error, data || {});
+  }
+
+  cancel(reason, data) {
+    this.finish("warn", "cancelled", reason || "插件操作已取消", null, data || {});
+  }
+
+  finish(level, status, message, error, data) {
+    if (this.terminal) {
+      this.stepIndex += 1;
+      this.logger.emit("warn", "progress", "operation.terminal.ignored", "忽略重复插件终态", {}, this.context, this.stepIndex);
+      return;
+    }
+    this.terminal = true;
+    this.stepIndex += 1;
+    this.logger.emit(level, status, "operation.complete", message, data, this.context, this.stepIndex, error, this.logger.clock() - this.startedAt);
+  }
+}
+
+class PluginLogger {
+  constructor(options) {
+    options = options || {};
+    this.module = options.module || "figma-plugin";
+    this.clock = options.clock || Date.now;
+    this.idFactory = options.idFactory || function () {
+      return "plugin-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    };
+    this.postEvent = options.postEvent || function () {};
+  }
+
+  startOperation(name, context) {
+    return new PluginOperationScope(this, name, context || {});
+  }
+
+  trace(message, data, context) { this.log("trace", message, data, context); }
+  debug(message, data, context) { this.log("debug", message, data, context); }
+  info(message, data, context) { this.log("info", message, data, context); }
+  warn(message, data, context) { this.log("warn", message, data, context); }
+  error(message, error, data, context) {
+    this.emit("error", "failed", "diagnostic", message, data || {}, context || {}, 0, error);
+  }
+
+  log(level, message, data, context) {
+    this.emit(level, "progress", "diagnostic", message, data || {}, context || {}, 0);
+  }
+
+  emit(level, status, step, message, data, context, stepIndex, error, durationMs) {
+    var event = {
+      timestamp: new Date(this.clock()).toISOString(),
+      level: level,
+      source: "plugin",
+      module: context.module || this.module,
+      operationId: context.operationId || this.idFactory(),
+      operationName: context.operationName || "diagnostic",
+      step: step,
+      stepIndex: stepIndex,
+      status: status,
+      message: String(message || ""),
+      data: redactPluginLogData(data || {})
+    };
+    if (durationMs !== undefined) event.durationMs = durationMs;
+    if (error) {
+      event.error = {
+        name: error && error.name ? String(error.name) : "Error",
+        message: error && error.message ? String(error.message) : String(error),
+        stack: error && error.stack ? String(error.stack).slice(0, 4096) : undefined
+      };
+    }
+    try {
+      this.postEvent(event);
+    } catch (postError) {
+      try { console.error("[PluginLogger emergency]", postError); } catch (_) {}
+    }
+  }
+}
+
+function redactPluginLogData(value) {
+  var sensitive = /password|token|authorization|cookie|api.?key|secret/i;
+  function visit(item, key, depth) {
+    if (sensitive.test(key || "")) return "[REDACTED]";
+    if (depth > 6) return "[Depth limited]";
+    if (typeof item === "string") {
+      if (item.length > 4096) return { kind: "large-payload", chars: item.length, truncated: true };
+      return item;
+    }
+    if (!item || typeof item !== "object") return item;
+    if (Array.isArray(item)) return item.slice(0, 200).map(function (child) { return visit(child, key, depth + 1); });
+    var result = {};
+    Object.keys(item).slice(0, 200).forEach(function (childKey) {
+      result[childKey] = visit(item[childKey], childKey, depth + 1);
+    });
+    return result;
+  }
+  return visit(value || {}, "", 0);
+}
+
+const pluginLogger = new PluginLogger({
+  module: "figma-plugin",
+  postEvent: function (event) {
+    figma.ui.postMessage({ type: "LOG_EVENT", event: event });
+  }
+});
+// Figma MCP Relay build #174
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (162 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 162)", { timeout: 1000 });
-console.log("[FigmaMcpRelay] 插件初始化完成, build=162, time=" + Date.now());
+// DIAG: 插件启动标记 (174 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 174)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "174" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -108,7 +235,7 @@ function sendSelectionUpdate() {
     });
   } catch (e) {
     // Figma 沙箱可能延迟加载后续文件，首次触发时 buildNodePathForPrompt 可能未就绪
-    console.warn("[FigmaMcpRelay] sendSelectionUpdate skipped:", e.message);
+    pluginLogger.warn("选区更新已跳过", { error: e.message });
   }
 }
 
@@ -116,12 +243,18 @@ figma.on("selectionchange", sendSelectionUpdate);
 setTimeout(sendSelectionUpdate, 100);
 
 // DIAG: 确认 handler 已注册
-console.log("[FigmaMcpRelay] figma.ui.onmessage 已注册, time=" + Date.now());
+pluginLogger.info("figma.ui.onmessage 已注册");
 
 figma.ui.onmessage = async (message) => {
   // DIAG: 记录收到的所有消息
   if (message && message.type) {
-    console.log("[FigmaMcpRelay] receive msg: " + message.type + ", requestId=" + (message.requestId || "-") + ", time=" + Date.now());
+    pluginLogger.debug("收到 UI 消息", {
+      type: message.type,
+      requestId: message.requestId || ""
+    }, {
+      operationId: message.operationId || message.requestId || undefined,
+      operationName: "plugin.message"
+    });
   }
   if (!message) return;
 
@@ -297,7 +430,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "162",
+        build: "174",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -485,11 +618,11 @@ async function handleQueryCleanupSnapshot(message) {
 /** 读取当前选区摘要，用于 UI 生成可复制的 AI 提示词，并提供根节点校验所需的父级信息。 */
 async function handleQueryAiPromptSelection(message) {
   // DIAG: 确认函数被调用
-  console.log("[FigmaMcpRelay] handleQueryAiPromptSelection 被调用, requestId=" + (message.requestId || "-") + ", time=" + Date.now());
+  pluginLogger.debug("开始读取 AI 提示词选区", { requestId: message.requestId || "" });
   try {
-    console.log("[FigmaMcpRelay] 读取 figma.currentPage.selection... time=" + Date.now());
+    pluginLogger.debug("读取 figma.currentPage.selection");
     const selection = figma.currentPage.selection || [];
-    console.log("[FigmaMcpRelay] selection.length=" + selection.length + ", time=" + Date.now());
+    pluginLogger.debug("Figma 选区读取完成", { selectionCount: selection.length });
     const nodes = selection.map(function (node, index) {
       return {
         index: index + 1,
@@ -504,7 +637,7 @@ async function handleQueryAiPromptSelection(message) {
         height: Math.round(Number(node.height || 0))
       };
     });
-    console.log("[FigmaMcpRelay] nodes.length=" + nodes.length + ", 准备 postMessage 回 UI, time=" + Date.now());
+    pluginLogger.debug("准备向 UI 返回 AI 提示词选区", { nodeCount: nodes.length });
     figma.ui.postMessage({
       type: "QUERY_AI_PROMPT_SELECTION_RESULT",
       requestId: message.requestId,
@@ -519,9 +652,9 @@ async function handleQueryAiPromptSelection(message) {
         nodes: nodes
       }
     });
-    console.log("[FigmaMcpRelay] QUERY_AI_PROMPT_SELECTION_RESULT 已发送, time=" + Date.now());
+    pluginLogger.info("AI 提示词选区结果已发送", { requestId: message.requestId || "" });
   } catch (error) {
-    console.error("[FigmaMcpRelay] handleQueryAiPromptSelection 异常:", error);
+    pluginLogger.error("读取 AI 提示词选区失败", error, { requestId: message.requestId || "" });
     figma.ui.postMessage({
       type: "QUERY_AI_PROMPT_SELECTION_RESULT",
       requestId: message.requestId,
@@ -3870,7 +4003,7 @@ async function postPrefabWriteResultDirectly(message, result) {
       body: JSON.stringify({ requestId, result })
     }), 5000, "Prefab result direct post timeout");
   } catch (error) {
-    console.warn("Prefab result direct post failed", error);
+    pluginLogger.warn("Prefab 结果直接回传失败", { error: error && error.message ? error.message : String(error) });
   }
 }
 
@@ -8780,12 +8913,15 @@ function preserveHierarchyChildAbsoluteBounds(child, groupNode, beforeBounds) {
   child.y = newY;
   // 坐标合理性检查：超过 ±5000 大概率是坐标系污染，记录日志
   if (Math.abs(newX) > 5000 || Math.abs(newY) > 5000) {
-    console.warn(
-      `[FigmaMcpRelay] preserve坐标异常 child=${child.name || "?"} ` +
-      `new=(${newX.toFixed(1)},${newY.toFixed(1)}) ` +
-      `before=(${numericOr(beforeBounds.x, 0).toFixed(1)},${numericOr(beforeBounds.y, 0).toFixed(1)}) ` +
-      `groupBounds=(${numericOr(groupBounds.x, 0).toFixed(1)},${numericOr(groupBounds.y, 0).toFixed(1)})`
-    );
+    pluginLogger.warn("层级 preserve 坐标异常", {
+      childName: child.name || "?",
+      newX: newX,
+      newY: newY,
+      beforeX: numericOr(beforeBounds.x, 0),
+      beforeY: numericOr(beforeBounds.y, 0),
+      groupX: numericOr(groupBounds.x, 0),
+      groupY: numericOr(groupBounds.y, 0)
+    });
   }
 }
 

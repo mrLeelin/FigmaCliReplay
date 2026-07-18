@@ -36,6 +36,7 @@ if BUILD_VERSION_FILE.exists():
 
 ORDER = [
     "03_image_health.mjs",
+    "00_logging.js",
     "00_init.js",
     "01_handlers.js",
     "02_prefab_to_figma.js",

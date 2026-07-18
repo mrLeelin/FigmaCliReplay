@@ -1,9 +1,24 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { IncomingMessage, type RequestOptions, request as httpRequest, ServerResponse } from "node:http";
 
+export const OPERATION_ID_HEADER = "x-operation-id";
+const OPERATION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
 export function makeRequestId(value: unknown): string {
   const text = typeof value === "string" ? value.trim() : "";
   return text || randomUUID();
+}
+
+export function requestOperationId(request: IncomingMessage): string {
+  const header = request.headers[OPERATION_ID_HEADER];
+  const candidate = Array.isArray(header) ? header[0] : header;
+  return typeof candidate === "string" && OPERATION_ID_PATTERN.test(candidate)
+    ? candidate
+    : randomUUID();
+}
+
+export function validOperationId(value: unknown): string | undefined {
+  return typeof value === "string" && OPERATION_ID_PATTERN.test(value) ? value : undefined;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -28,7 +43,7 @@ export function corsHeaders(headers: Record<string, string> = {}): Record<string
   return {
     ...headers,
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Figma-Mcp-Relay-Token, X-Figma-Mcp-Relay-Internal, X-AI-Run-Capability, Mcp-Session-Id, MCP-Protocol-Version",
+    "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Figma-Mcp-Relay-Token, X-Figma-Mcp-Relay-Internal, X-Operation-Id, X-AI-Run-Capability, Mcp-Session-Id, MCP-Protocol-Version",
     "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS"
   };
 }

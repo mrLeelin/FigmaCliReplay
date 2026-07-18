@@ -7,7 +7,10 @@ import { PLUGIN_ROOT, publicUrl } from "./config.js";
 import { getCleanupRuntime, type CleanupRuntime } from "./cleanup/cleanupRuntime.js";
 import { CleanupError } from "./cleanup/cleanupTypes.js";
 import type { CleanupSnapshotV1 } from "./cleanupPlan.js";
-import { logError, logInfo, logWarn } from "./logger.js";
+import { LogLevels, LogSources, LogStatuses, type LogQuery } from "./logging/logEvent.js";
+import { getLoggingRuntime, type LoggingRuntime } from "./logging/loggingRuntime.js";
+import { UnityLogCollector } from "./logging/unityLogCollector.js";
+import { logError, logInfo, logWarn, logger } from "./utils/logger.js";
 import { RelayMcpHttpEndpoint } from "./mcpServer.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 import { applyPsdImportTask, getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
@@ -27,22 +30,46 @@ import {
   localRequestSecurityState,
   isRecord,
   jsonResponse,
-  readJson
+  OPERATION_ID_HEADER,
+  readJson,
+  requestOperationId,
+  validOperationId
 } from "./utils.js";
 
 export function createRelayHttpServer(
   config: GatewayConfig,
   relay: RuntimeRelay,
   unityProjects = new UnityProjectRegistry(),
-  cleanupRuntime = getCleanupRuntime()
+  cleanupRuntime = getCleanupRuntime(),
+  logging = getLoggingRuntime()
 ) {
   const mcpEndpoint = new RelayMcpHttpEndpoint(relay);
+  const httpLogger = logging.logger("http-server");
+  const unityLogCollector = new UnityLogCollector(logging);
   const server = createServer(async (request, response) => {
-    const startedAt = Date.now();
     const method = request.method || "";
     const url = request.url || "/";
+    const operationId = requestOperationId(request);
+    response.setHeader(OPERATION_ID_HEADER, operationId);
+    const requestScope = httpLogger.startOperation("http.request", `${method || "UNKNOWN"} ${url}`, {
+      operationId,
+      data: { method, url }
+    });
     response.once("finish", () => {
-      logHttpRequest(method, url, response.statusCode, Date.now() - startedAt);
+      if (requestScope.completed) {
+        return;
+      }
+      const data = { method, url, status: response.statusCode };
+      if (response.statusCode < 400) {
+        requestScope.succeed("HTTP 请求完成", data);
+      } else {
+        requestScope.fail(new Error(`HTTP ${response.statusCode}`), "HTTP 请求失败", data);
+      }
+    });
+    response.once("close", () => {
+      if (!requestScope.completed) {
+        requestScope.cancel("HTTP 连接在响应完成前关闭", { method, url });
+      }
     });
     try {
       if (!isAllowedLocalRequest(request)) {
@@ -66,6 +93,34 @@ export function createRelayHttpServer(
         return;
       }
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+      if (request.method === "GET" && await handleLogGet(
+        logging,
+        unityLogCollector,
+        unityProjects,
+        operationId,
+        requestUrl,
+        response,
+      )) {
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/logs/events") {
+        if (!isFigmaPluginRequest(request) && !isInternalRelayRequest(request)) {
+          jsonResponse(response, 403, { error: "log ingestion requires a Figma or internal runtime request" });
+          return;
+        }
+        const payload = await readJson(request);
+        if (!isRecord(payload) || !Array.isArray(payload.events)) {
+          jsonResponse(response, 400, { error: "events must be an array" });
+          return;
+        }
+        try {
+          const accepted = logging.store.ingest(payload.events);
+          jsonResponse(response, 202, { accepted: accepted.length });
+        } catch (error) {
+          jsonResponse(response, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
       if (requestUrl.pathname === config.mcpPath && ["GET", "POST", "DELETE"].includes(request.method || "")) {
         await mcpEndpoint.handleRequest(request, response);
         return;
@@ -79,21 +134,138 @@ export function createRelayHttpServer(
           return;
         }
         const payload = await readJson(request);
+        if (isRecord(payload) && !validOperationId(payload.operationId)) {
+          payload.operationId = operationId;
+        }
         await handlePost(config, relay, unityProjects, cleanupRuntime, request, requestUrl, payload, response);
         return;
       }
       jsonResponse(response, 405, { error: "method not allowed" });
     } catch (error) {
+      requestScope.fail(error, "HTTP 请求处理异常", { method, url });
       logError("HTTP request failed", {
         method,
         url,
         error: error instanceof Error ? error.message : String(error)
       });
-      jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      if (!response.headersSent) {
+        jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      } else {
+        response.end();
+      }
     }
   });
   server.once("close", () => mcpEndpoint.dispose());
   return server;
+}
+
+async function handleLogGet(
+  logging: LoggingRuntime,
+  unityLogCollector: UnityLogCollector,
+  unityProjects: Pick<UnityProjectRegistry, "list">,
+  operationId: string,
+  requestUrl: URL,
+  response: ServerResponse,
+): Promise<boolean> {
+  const pathname = requestUrl.pathname;
+  if (pathname !== "/logs"
+    && pathname !== "/log"
+    && pathname !== "/logs/download"
+    && !pathname.startsWith("/logs/operations/")) {
+    return false;
+  }
+  let query: LogQuery;
+  try {
+    query = parseLogQuery(requestUrl.searchParams);
+    const operationMatch = pathname.match(/^\/logs\/operations\/([^/]+)$/);
+    if (operationMatch) {
+      query.operationId = decodeURIComponent(operationMatch[1]);
+    } else if (pathname.startsWith("/logs/operations/")) {
+      throw new Error("invalid operation log path");
+    }
+  } catch (error) {
+    jsonResponse(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
+  if (!query.source || query.source === "unity") {
+    await unityLogCollector.collect(unityProjects, operationId);
+  }
+  const result = await logging.store.query(query);
+  if (pathname === "/log") {
+    jsonResponse(response, 200, { logs: result.events });
+    return true;
+  }
+  if (pathname === "/logs/download") {
+    const jsonl = result.events.map((event) => JSON.stringify(event)).join("\n");
+    const suffix = new Date().toISOString().replace(/[:.]/g, "-");
+    response.writeHead(200, corsHeaders({
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "content-disposition": `attachment; filename="figma-mcp-relay-logs-${suffix}.jsonl"`,
+    }));
+    response.end(jsonl ? `${jsonl}\n` : "");
+    return true;
+  }
+  jsonResponse(response, 200, result);
+  return true;
+}
+
+function parseLogQuery(searchParams: URLSearchParams): LogQuery {
+  const query: LogQuery = {};
+  const level = optionalEnum(searchParams, "level", LogLevels);
+  const source = optionalEnum(searchParams, "source", LogSources);
+  const status = optionalEnum(searchParams, "status", LogStatuses);
+  if (level) query.level = level;
+  if (source) query.source = source;
+  if (status) query.status = status;
+  query.module = optionalText(searchParams, "module");
+  query.operationId = optionalText(searchParams, "operationId");
+  query.keyword = optionalText(searchParams, "keyword");
+  query.from = optionalDate(searchParams, "from");
+  query.to = optionalDate(searchParams, "to");
+  query.cursor = optionalInteger(searchParams, "cursor", 0, Number.MAX_SAFE_INTEGER);
+  query.limit = optionalInteger(searchParams, "limit", 1, 1_000);
+  return Object.fromEntries(Object.entries(query).filter(([, value]) => value !== undefined)) as LogQuery;
+}
+
+function optionalEnum<const T extends readonly string[]>(
+  searchParams: URLSearchParams,
+  name: string,
+  values: T,
+): T[number] | undefined {
+  const value = optionalText(searchParams, name);
+  if (value === undefined) return undefined;
+  if (!(values as readonly string[]).includes(value)) {
+    throw new Error(`invalid ${name}: ${value}`);
+  }
+  return value as T[number];
+}
+
+function optionalText(searchParams: URLSearchParams, name: string): string | undefined {
+  const value = searchParams.get(name);
+  return value === null || value.trim() === "" ? undefined : value.trim();
+}
+
+function optionalDate(searchParams: URLSearchParams, name: string): string | undefined {
+  const value = optionalText(searchParams, name);
+  if (value !== undefined && !Number.isFinite(Date.parse(value))) {
+    throw new Error(`invalid ${name}: ${value}`);
+  }
+  return value;
+}
+
+function optionalInteger(
+  searchParams: URLSearchParams,
+  name: string,
+  minimum: number,
+  maximum: number,
+): number | undefined {
+  const value = optionalText(searchParams, name);
+  if (value === undefined) return undefined;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw new Error(`invalid ${name}: ${value}`);
+  }
+  return number;
 }
 
 async function handleGet(
@@ -626,30 +798,6 @@ async function proxyLegacy(
       error: error instanceof Error ? error.message : String(error)
     });
   }
-}
-
-function logHttpRequest(method: string, url: string, status: number, elapsedMs: number): void {
-  let pathname = url;
-  try {
-    pathname = new URL(url, "http://localhost").pathname;
-  } catch {
-    // Keep the raw URL if parsing fails.
-  }
-  if (status >= 500) {
-    logError("HTTP request", { method, path: pathname, status, elapsedMs });
-    return;
-  }
-  if (status >= 400) {
-    logWarn("HTTP request", { method, path: pathname, status, elapsedMs });
-    return;
-  }
-  if (pathname === "/figma/pending" && status === 204) {
-    return;
-  }
-  if (pathname === "/health") {
-    return;
-  }
-  logInfo("HTTP request", { method, path: pathname, status, elapsedMs });
 }
 
 function fileResponse(response: ServerResponse, filePath: string): void {

@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 
 import type { PlanningProviderId } from "../ai/planningProvider.js";
 import type { CleanupPlanV2, CleanupSnapshotV1 } from "../cleanupPlan.js";
+import { getLoggingRuntime } from "../logging/loggingRuntime.js";
+import type { RelayLogger } from "../logging/relayLogger.js";
 import {
   CleanupError,
   isCleanupTerminalState,
@@ -43,11 +45,13 @@ export class CleanupRunStore {
   private readonly now: () => Date;
   private readonly randomToken: (bytes: number) => string;
   private readonly maxOutputEntries: number;
+  private readonly logger: RelayLogger;
 
   constructor(options: CleanupRunStoreOptions = {}) {
     this.now = options.now || (() => new Date());
     this.randomToken = options.randomToken || ((bytes) => randomBytes(bytes).toString("base64url"));
     this.maxOutputEntries = options.maxOutputEntries ?? 800;
+    this.logger = getLoggingRuntime().logger("cleanup-run-store");
   }
 
   create(options: {
@@ -84,6 +88,11 @@ export class CleanupRunStore {
     this.runs.set(runId, run);
     this.activeBySession.set(options.sessionId, runId);
     this.activeByRoot.set(rootLock, runId);
+    this.logger.info("Cleanup 运行记录已创建", {
+      state: "planning",
+      providerId: run.providerId,
+      rootNodeId: run.rootNodeId
+    }, { operationId: run.runId, operationName: "cleanup.run" });
     return run;
   }
 
@@ -111,7 +120,13 @@ export class CleanupRunStore {
   }
 
   finish(run: CleanupRunRecord, state: CleanupState): void {
+    const previousState = run.state;
     run.state = state;
+    this.logger.info("Cleanup 状态已更新", {
+      previousState,
+      state,
+      terminal: isCleanupTerminalState(state)
+    }, { operationId: run.runId, operationName: "cleanup.run" });
     if (isCleanupTerminalState(state)) {
       run.endedAt = this.now().toISOString();
       this.release(run);
@@ -128,4 +143,3 @@ export class CleanupRunStore {
     return [...this.runs.values()].filter((run) => run.sessionId === sessionId);
   }
 }
-

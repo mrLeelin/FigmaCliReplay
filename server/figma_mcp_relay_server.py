@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from crop_jiugong import crop_jiugong_images
+from python_logger import PythonLogger
 
 
 DEFAULT_BIND_HOST = "127.0.0.1"
@@ -49,6 +50,7 @@ MCP_CLIENT_LABELS = {
     "codex": "Codex App",
     "claude": "Claude Code",
 }
+LOGGER = PythonLogger("legacy-relay-server")
 
 
 @dataclass
@@ -882,16 +884,38 @@ class FigmaMcpRelayHandler(BaseHTTPRequestHandler):
 
     server: "FigmaMcpRelayServer"
 
+    def _run_logged_request(self, action: Any) -> None:
+        operation_id = str(self.headers.get("X-Operation-Id") or "").strip() or f"py-http-{uuid.uuid4().hex}"
+        operation = LOGGER.start_operation(
+            "python.http-request",
+            operation_id=operation_id,
+            data={"method": self.command, "path": urlparse(self.path).path},
+        )
+        try:
+            operation.step("route", "Dispatch Python HTTP route")
+            action()
+            operation.succeed("Python HTTP request completed")
+        except BaseException as exc:
+            operation.fail(exc, "Python HTTP request failed")
+            raise
+
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         """默认减少访问日志噪声。"""
         if self.server.verbose:
-            super().log_message(format, *args)
+            LOGGER.debug(
+                format % args,
+                data={"client": self.client_address[0] if self.client_address else ""},
+                operation_name="python.http-access",
+            )
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         """处理浏览器预检请求。"""
-        empty_response(self, 204)
+        self._run_logged_request(lambda: empty_response(self, 204))
 
     def do_GET(self) -> None:  # noqa: N802
+        self._run_logged_request(self._do_GET)
+
+    def _do_GET(self) -> None:
         """处理 health、worker pending、资源下载和结果查询。"""
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1002,6 +1026,9 @@ class FigmaMcpRelayHandler(BaseHTTPRequestHandler):
         json_response(self, 404, {"error": f"unknown endpoint: {path}"})
 
     def do_POST(self) -> None:  # noqa: N802
+        self._run_logged_request(self._do_POST)
+
+    def _do_POST(self) -> None:
         """处理 client 提交任务和 Figma worker 回传结果。"""
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1937,29 +1964,38 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """启动 MCP Relay 并阻塞等待请求。"""
     args = parse_args()
-    servers = create_servers(args)
-    primary = servers[0]
-    print(json.dumps({
-        "status": "listening",
-        "url": primary.public_url,
-        "bind": [str(server.server_address) for server in servers],
-        "message": "Figma MCP Relay 已启动，请保持窗口打开。",
-    }, ensure_ascii=False, indent=2))
-    threads: List[threading.Thread] = []
-    for index, server in enumerate(servers[1:], start=1):
-        thread = threading.Thread(target=server.serve_forever, name=f"figma-mcp-relay-{index}", daemon=True)
-        thread.start()
-        threads.append(thread)
+    operation = LOGGER.start_operation("python.legacy-relay.main", data={"port": args.port})
+    servers: List[FigmaMcpRelayServer] = []
     try:
-        primary.serve_forever()
-    except KeyboardInterrupt:
-        print(json.dumps({"status": "stopped"}, ensure_ascii=False))
-        return 130
+        servers = create_servers(args)
+        primary = servers[0]
+        operation.step("listen", "Legacy Relay listening", {"bindCount": len(servers)})
+        print(json.dumps({
+            "status": "listening",
+            "url": primary.public_url,
+            "bind": [str(server.server_address) for server in servers],
+            "message": "Figma MCP Relay 已启动，请保持窗口打开。",
+        }, ensure_ascii=False, indent=2))
+        threads: List[threading.Thread] = []
+        for index, server in enumerate(servers[1:], start=1):
+            thread = threading.Thread(target=server.serve_forever, name=f"figma-mcp-relay-{index}", daemon=True)
+            thread.start()
+            threads.append(thread)
+        try:
+            primary.serve_forever()
+        except KeyboardInterrupt:
+            print(json.dumps({"status": "stopped"}, ensure_ascii=False))
+            operation.cancel("Legacy Relay interrupted")
+            return 130
+        operation.succeed("Legacy Relay stopped")
+        return 0
+    except BaseException as exc:
+        operation.fail(exc, "Legacy Relay failed")
+        raise
     finally:
         for server in servers:
             server.shutdown()
             server.server_close()
-    return 0
 
 
 if __name__ == "__main__":

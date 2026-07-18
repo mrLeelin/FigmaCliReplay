@@ -2,6 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { RelayLogger } from "./logging/relayLogger.js";
+
 export const SERVER_NAME = "figmaMcpRelay";
 export const SERVER_VERSION = "0.1.0";
 export const DEFAULT_HOST = "127.0.0.1";
@@ -27,6 +29,7 @@ export interface GatewayConfig {
 }
 
 const __filename = fileURLToPath(import.meta.url);
+const protocolLogger = new RelayLogger({ module: "config", emit: () => undefined });
 export const DIST_DIR = path.dirname(__filename);
 export const PLUGIN_ROOT = path.resolve(DIST_DIR, "..");
 export const SERVER_DIR = path.join(PLUGIN_ROOT, "server");
@@ -105,7 +108,7 @@ export function publicUrl(config: GatewayConfig): string {
 }
 
 function printHelp(): void {
-  console.log(`Figma MCP Relay Gateway
+  protocolLogger.writeProtocolOutput(`Figma MCP Relay Gateway
 
 Options:
   --host <host>              Bind host. Default: ${DEFAULT_HOST}

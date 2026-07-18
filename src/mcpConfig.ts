@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { getLoggingRuntime } from "./logging/loggingRuntime.js";
+
+const logger = getLoggingRuntime().logger("mcp-config");
+
 const SERVER_NAME = "figmaMcpRelay";
 const CLIENT_LABELS: Record<string, string> = {
   codex: "Codex App",
@@ -42,28 +46,42 @@ export function desiredMcpUrl(publicUrl: string, mcpPath: string): string {
 }
 
 export function mcpConfigStatusForClient(client: string, mcpUrl: string, mcpMounted: boolean) {
-  if (client === "claude") {
-    return claudeStatus(mcpUrl, mcpMounted);
-  }
-  return codexStatus(mcpUrl, mcpMounted);
+  return runConfigOperation("read", client, () => client === "claude"
+    ? claudeStatus(mcpUrl, mcpMounted)
+    : codexStatus(mcpUrl, mcpMounted));
 }
 
 export function writeMcpConfigForClient(client: string, mcpUrl: string, mcpMounted: boolean) {
-  if (client === "claude") {
-    return writeClaudeConfig(mcpUrl, mcpMounted);
-  }
-  return writeCodexConfig(mcpUrl, mcpMounted);
+  return runConfigOperation("write", client, () => client === "claude"
+    ? writeClaudeConfig(mcpUrl, mcpMounted)
+    : writeCodexConfig(mcpUrl, mcpMounted));
 }
 
 export function deleteMcpConfigForClient(client: string, mcpUrl: string, mcpMounted: boolean) {
-  if (client === "claude") {
-    return deleteClaudeConfig(mcpUrl, mcpMounted);
-  }
-  return deleteCodexConfig(mcpUrl, mcpMounted);
+  return runConfigOperation("delete", client, () => client === "claude"
+    ? deleteClaudeConfig(mcpUrl, mcpMounted)
+    : deleteCodexConfig(mcpUrl, mcpMounted));
 }
 
 export function openMcpConfigForClient(client: string) {
-  return client === "claude" ? openClaudeConfigLocation() : openCodexConfigFile();
+  return runConfigOperation("open", client, () => client === "claude"
+    ? openClaudeConfigLocation()
+    : openCodexConfigFile());
+}
+
+function runConfigOperation<T>(step: "read" | "write" | "delete" | "open", client: string, action: () => T): T {
+  const operation = logger.startOperation(`mcp-config.${step}`, `开始执行 MCP 配置 ${step}`, {
+    data: { client }
+  });
+  operation.step(step, `正在执行 MCP 配置 ${step}`, { client });
+  try {
+    const result = action();
+    operation.succeed(`MCP 配置 ${step} 完成`, { client });
+    return result;
+  } catch (error) {
+    operation.fail(error, `MCP 配置 ${step} 失败`, { client });
+    throw error;
+  }
 }
 
 function addClientFields<T extends Record<string, unknown>>(status: T, client: string): T & { client: string; clientLabel: string } {

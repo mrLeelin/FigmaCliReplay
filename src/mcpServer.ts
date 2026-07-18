@@ -9,12 +9,17 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { SERVER_NAME, SERVER_VERSION } from "./config.js";
-import { logInfo, logWarn } from "./logger.js";
+import { getLoggingRuntime, type LoggingRuntime } from "./logging/loggingRuntime.js";
+import { logInfo, logWarn } from "./utils/logger.js";
 import { redactLargeRelayPayload, type RuntimeRelay } from "./runtimeRelay.js";
 import type { JsonObject, JsonRpcRequest, JsonRpcResponse } from "./types.js";
-import { isRecord, readJson } from "./utils.js";
+import { isRecord, readJson, validOperationId } from "./utils.js";
 
-type ToolHandler = (args: JsonObject) => Promise<JsonObject>;
+interface ToolContext {
+  operationId: string;
+}
+
+type ToolHandler = (args: JsonObject, context: ToolContext) => Promise<JsonObject>;
 
 interface RelayToolDefinition {
   name: string;
@@ -37,7 +42,10 @@ export class RelayMcpHttpEndpoint {
   private readonly sessions = new Map<string, McpSessionEntry>();
   private readonly cleanupTimer: NodeJS.Timeout;
 
-  constructor(private readonly relay: RuntimeRelay) {
+  constructor(
+    private readonly relay: RuntimeRelay,
+    private readonly logging: LoggingRuntime = getLoggingRuntime(),
+  ) {
     this.cleanupTimer = setInterval(() => void this.cleanupSessions(), 60_000);
   }
 
@@ -116,7 +124,7 @@ export class RelayMcpHttpEndpoint {
         }
       }
     });
-    const server = createSdkServer(this.relay);
+    const server = createSdkServer(this.relay, this.logging);
     const entry: McpSessionEntry = {
       server,
       transport,
@@ -187,7 +195,10 @@ function isInitializeRequest(body: unknown): boolean {
 }
 
 export class RelayMcpServer {
-  constructor(private readonly relay: RuntimeRelay) {}
+  constructor(
+    private readonly relay: RuntimeRelay,
+    private readonly logging: LoggingRuntime = getLoggingRuntime(),
+  ) {}
 
   async handle(payload: unknown): Promise<JsonRpcResponse | JsonRpcResponse[] | undefined> {
     if (Array.isArray(payload)) {
@@ -232,7 +243,13 @@ export class RelayMcpServer {
       if (method === "tools/call") {
         const name = String(params.name ?? "");
         const args = isRecord(params.arguments) ? params.arguments : {};
-        return this.response(id, await callRelayTool(this.relay, name, args));
+        return this.response(id, await callRelayTool(
+          this.relay,
+          name,
+          args,
+          this.logging,
+          resolveMcpOperationId(params._meta, "mcp", id),
+        ));
       }
       if (method === "resources/list") {
         return this.response(id, { resources: [] });
@@ -268,7 +285,7 @@ export function toolText(payload: unknown, isError = false): JsonObject {
   };
 }
 
-function createSdkServer(relay: RuntimeRelay): McpServer {
+function createSdkServer(relay: RuntimeRelay, logging: LoggingRuntime): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
@@ -284,7 +301,13 @@ function createSdkServer(relay: RuntimeRelay): McpServer {
         inputSchema: tool.inputSchema,
         annotations: tool.annotations
       },
-      async (args) => toCallToolResult(await tool.handler(args as JsonObject))
+      async (args, extra) => toCallToolResult(await callRelayTool(
+        relay,
+        tool.name,
+        args as JsonObject,
+        logging,
+        resolveMcpOperationId(extra._meta, extra.sessionId, extra.requestId),
+      ))
     );
   }
   return server;
@@ -306,7 +329,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
       description: "Ask the connected Figma plugin for the current file, page, and selected nodes.",
       inputSchema: targetSchema.extend({ timeout: z.number().default(15).optional() }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "QUERY_SELECTION", args, Number(args.timeout ?? 15))
+      handler: async (args, context) => submitEndpointJob(relay, "QUERY_SELECTION", args, Number(args.timeout ?? 15), context.operationId)
     },
     {
       name: "figma_query_plugin_status",
@@ -314,7 +337,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
       description: "Ask the connected Figma plugin for build, file key, and current page status.",
       inputSchema: targetSchema.extend({ timeout: z.number().default(8).optional() }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "QUERY_PLUGIN_STATUS", args, Number(args.timeout ?? 8))
+      handler: async (args, context) => submitEndpointJob(relay, "QUERY_PLUGIN_STATUS", args, Number(args.timeout ?? 8), context.operationId)
     },
     {
       name: "figma_query_node_children",
@@ -325,7 +348,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
         timeout: z.number().default(15).optional()
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "QUERY_NODE_CHILDREN", args, Number(args.timeout ?? 15))
+      handler: async (args, context) => submitEndpointJob(relay, "QUERY_NODE_CHILDREN", args, Number(args.timeout ?? 15), context.operationId)
     },
     {
       name: "figma_query_components",
@@ -336,10 +359,10 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
         timeout: z.number().default(20).optional()
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "COLLECT_COMPONENTS", {
+      handler: async (args, context) => submitEndpointJob(relay, "COLLECT_COMPONENTS", {
         ...args,
         libraryNodeIds: Array.isArray(args.libraryNodeIds) && args.libraryNodeIds.length > 0 ? args.libraryNodeIds : ["62:115", "2896:32"]
-      }, Number(args.timeout ?? 20))
+      }, Number(args.timeout ?? 20), context.operationId)
     },
     {
       name: "figma_analyze_repeat_clusters",
@@ -355,7 +378,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
         timeout: z.number().default(20).optional()
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "FIGMA_HIERARCHY_REPEAT_CLUSTER_ANALYZE", {
+      handler: async (args, context) => submitEndpointJob(relay, "FIGMA_HIERARCHY_REPEAT_CLUSTER_ANALYZE", {
         ...args,
         target: { nodeId: String(args.nodeId || "") },
         options: {
@@ -365,7 +388,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
           expectedXCount: Number(args.expectedXCount ?? 7),
           expectedYCount: Number(args.expectedYCount ?? 5)
         }
-      }, Number(args.timeout ?? 20))
+      }, Number(args.timeout ?? 20), context.operationId)
     },
     {
       name: "figma_query_pages",
@@ -373,7 +396,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
       description: "Read page ids and names from the connected Figma file.",
       inputSchema: targetSchema.extend({ timeout: z.number().default(10).optional() }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "QUERY_FIGMA_PAGES", args, Number(args.timeout ?? 10))
+      handler: async (args, context) => submitEndpointJob(relay, "QUERY_FIGMA_PAGES", args, Number(args.timeout ?? 10), context.operationId)
     },
     {
       name: "figma_set_context",
@@ -387,7 +410,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
         timeout: z.number().default(15).optional()
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "SET_CONTEXT", args, Number(args.timeout ?? 15))
+      handler: async (args, context) => submitEndpointJob(relay, "SET_CONTEXT", args, Number(args.timeout ?? 15), context.operationId)
     },
     {
       name: "figma_resize_node",
@@ -400,7 +423,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
         timeout: z.number().default(15).optional()
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "RESIZE_NODE", args, Number(args.timeout ?? 15))
+      handler: async (args, context) => submitEndpointJob(relay, "RESIZE_NODE", args, Number(args.timeout ?? 15), context.operationId)
     },
     {
       name: "figma_delete_node",
@@ -411,7 +434,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
         timeout: z.number().default(15).optional()
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-      handler: async (args) => submitEndpointJob(relay, "DELETE_NODE_BY_ID", args, Number(args.timeout ?? 15))
+      handler: async (args, context) => submitEndpointJob(relay, "DELETE_NODE_BY_ID", args, Number(args.timeout ?? 15), context.operationId)
     },
     {
       name: "figma_submit_job",
@@ -427,7 +450,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
         timeout: z.number().default(60).optional()
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      handler: async (args) => {
+      handler: async (args, context) => {
         const job = args.job;
         if (!isRecord(job)) {
           throw new Error("figma_submit_job requires object argument: job");
@@ -436,6 +459,7 @@ function createRelayTools(relay: RuntimeRelay): RelayToolDefinition[] {
           job,
           assetPaths: isRecord(args.assetPaths) ? args.assetPaths : {},
           requestId: typeof args.requestId === "string" ? args.requestId : "",
+          operationId: context.operationId,
           target: targetFromArgs(args)
         });
         if (args.wait) {
@@ -519,28 +543,33 @@ const targetSchema = z.object({
   fileKey: z.string().optional()
 });
 
-async function callRelayTool(relay: RuntimeRelay, name: string, args: JsonObject): Promise<JsonObject> {
+async function callRelayTool(
+  relay: RuntimeRelay,
+  name: string,
+  args: JsonObject,
+  logging: LoggingRuntime,
+  operationId: string,
+): Promise<JsonObject> {
+  const operation = logging.logger("mcp-server").startOperation("mcp.tool", `开始执行 MCP 工具 ${name}`, {
+    operationId,
+    data: { tool: name }
+  });
   const tool = createRelayTools(relay).find((item) => item.name === name);
   if (!tool) {
+    operation.fail(new Error(`unknown tool: ${name}`), "MCP 工具不存在", { tool: name });
     logWarn("MCP unknown tool", { tool: name });
     return toolText({ error: `unknown tool: ${name}` }, true);
   }
-  const startedAt = Date.now();
-  logInfo("MCP tool call started", { tool: name });
   try {
-    const result = await tool.handler(args);
-    logInfo("MCP tool call completed", {
-      tool: name,
-      elapsedMs: Date.now() - startedAt,
-      isError: result.isError === true
-    });
+    const result = await tool.handler(args, { operationId });
+    if (result.isError === true) {
+      operation.fail(new Error("MCP tool returned an error result"), "MCP 工具执行失败", { tool: name });
+    } else {
+      operation.succeed("MCP 工具执行完成", { tool: name });
+    }
     return result;
   } catch (error) {
-    logWarn("MCP tool call failed", {
-      tool: name,
-      elapsedMs: Date.now() - startedAt,
-      error: errorMessage(error)
-    });
+    operation.fail(error, "MCP 工具执行异常", { tool: name });
     return toolText({ error: errorMessage(error), tool: name }, true);
   }
 }
@@ -549,15 +578,29 @@ async function submitEndpointJob(
   relay: RuntimeRelay,
   type: string,
   args: JsonObject,
-  timeout: number
+  timeout: number,
+  operationId: string,
 ): Promise<JsonObject> {
   const cleanJob = withoutRelayArgs(args);
   const submitted = relay.submitJob({
     job: { type, ...cleanJob },
+    operationId,
     target: targetFromArgs(args)
   });
   const result = await relay.waitResult(String(submitted.requestId), timeout, 0.5);
   return toolText(result);
+}
+
+function resolveMcpOperationId(meta: unknown, sessionId: unknown, requestId: unknown): string {
+  const metadata = isRecord(meta) ? meta : {};
+  const provided = validOperationId(metadata.operationId)
+    ?? validOperationId(metadata["x-operation-id"]);
+  if (provided) {
+    return provided;
+  }
+  const prefix = validOperationId(sessionId) ?? "mcp";
+  const suffix = String(requestId ?? randomUUID()).replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 96) || randomUUID();
+  return `${prefix}:${suffix}`.slice(0, 128);
 }
 
 function targetFromArgs(args: JsonObject): JsonObject {

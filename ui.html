@@ -458,6 +458,30 @@
       white-space: pre-wrap;
       min-height: 3em;
     }
+    .log-filter-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .log-filter-grid input,
+    .log-filter-grid select {
+      min-width: 0;
+      font-size: 11px;
+    }
+    .log-viewer-meta {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .log-event-row {
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      word-break: break-word;
+    }
+    .log-event-row:last-child { border-bottom: 0; }
+    .log-event-error { color: var(--danger); }
+    .log-event-meta { color: var(--muted); }
     .ai-execution-log {
       max-height: 320px;
       min-height: 180px;
@@ -732,7 +756,7 @@
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
   <div class="app-title-row">
     <h1>LKS Figma MCP Relay</h1>
-    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.44<!-- END_RELEASE_VERSION --></span>
+    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.45<!-- END_RELEASE_VERSION --></span>
     <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
   </div>
 
@@ -1070,13 +1094,46 @@
 
   <!-- ========== 底部日志面板 ========== -->
   <div class="section" id="log-section">
-    <h2>日志</h2>
+    <h2>日志查询</h2>
+    <div class="log-filter-grid">
+      <select id="logSourceFilter" aria-label="日志来源">
+        <option value="">全部来源</option>
+        <option value="relay">Relay</option>
+        <option value="ui">Figma UI</option>
+        <option value="plugin">Figma Plugin</option>
+        <option value="python">Python</option>
+        <option value="unity">Unity</option>
+      </select>
+      <select id="logLevelFilter" aria-label="日志级别">
+        <option value="">全部级别</option>
+        <option value="trace">Trace</option>
+        <option value="debug">Debug</option>
+        <option value="info">Info</option>
+        <option value="warn">Warn</option>
+        <option value="error">Error</option>
+        <option value="fatal">Fatal</option>
+      </select>
+      <input id="logOperationFilter" type="text" placeholder="operationId" aria-label="操作 ID" />
+      <input id="logKeywordFilter" type="search" placeholder="关键词" aria-label="日志关键词" />
+    </div>
+    <div class="button-row">
+      <button id="refreshLogsBtn" class="secondary" type="button">刷新日志</button>
+      <button id="downloadLogsBtn" class="secondary" type="button">下载 JSONL</button>
+    </div>
+    <div class="log-viewer-meta" id="logViewerMeta">实时日志（查询默认最多 1000 条）</div>
     <div class="log" id="log">等待操作...</div>
   </div>
 
   <div class="modal-backdrop" id="psdIncrementalDialog" hidden>
     <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="psdIncrementalDialogTitle">
       <h2 id="psdIncrementalDialogTitle">确认 PSD 增量更新</h2>
+    const logSourceFilter = document.getElementById("logSourceFilter");
+    const logLevelFilter = document.getElementById("logLevelFilter");
+    const logOperationFilter = document.getElementById("logOperationFilter");
+    const logKeywordFilter = document.getElementById("logKeywordFilter");
+    const refreshLogsBtn = document.getElementById("refreshLogsBtn");
+    const downloadLogsBtn = document.getElementById("downloadLogsBtn");
+    const logViewerMeta = document.getElementById("logViewerMeta");
       <div id="psdIncrementalDialogSummary" class="status-box"></div>
       <details>
         <summary>查看受影响图层</summary>
@@ -1186,8 +1243,10 @@
     const closeCleanupRunBtn = document.getElementById("closeCleanupRunBtn");
     const aiPromptPsdFileBox = document.getElementById("aiPromptPsdFileBox");
     const generateAiPromptBtn = document.getElementById("generateAiPromptBtn");
+    let relayLogFlushTimer = null;
     const copyAiPromptBtn = document.getElementById("copyAiPromptBtn");
     const runAiCleanupBtn = document.getElementById("runAiCleanupBtn");
+    let relayOperations = {};
     const aiRunnerSelect = document.getElementById("aiRunnerSelect");
     const aiRunnerStatusEl = document.getElementById("ai-runner-status");
     const cleanupProviderField = document.getElementById("cleanupProviderField");
@@ -1447,15 +1506,127 @@
     let prefabImportTargetPercent = 0;
     let prefabImportStageCapPercent = 99;
 
-    // ─── 通用 ───
-    function appendLog(message, isError) {
+    // BEGIN_UI_LOGGER
+    class UiOperationScope {
+      constructor(logger, name, context) {
+        this.logger = logger;
+        this.context = {
+          operationId: context.operationId || logger.idFactory(),
+          operationName: name,
+          module: context.module || logger.module
+        };
+        this.startedAt = logger.clock();
+        this.stepIndex = 0;
+        this.terminal = false;
+        logger.emit("info", "started", "operation.start", "UI 操作开始", context.data || {}, this.context, 0);
+      }
+      step(step, message, data, level) {
+        if (this.terminal) return;
+        this.stepIndex += 1;
+        this.logger.emit(level || "info", "progress", step, message || step, data || {}, this.context, this.stepIndex, null, this.logger.clock() - this.startedAt);
+      }
+      succeed(message, data) { this.finish("info", "succeeded", message || "UI 操作成功", null, data || {}); }
+      fail(error, message, data) { this.finish("error", "failed", message || "UI 操作失败", error, data || {}); }
+      cancel(message, data) { this.finish("warn", "cancelled", message || "UI 操作已取消", null, data || {}); }
+      finish(level, status, message, error, data) {
+        if (this.terminal) {
+          this.stepIndex += 1;
+          this.logger.emit("warn", "progress", "operation.terminal.ignored", "忽略重复 UI 终态", {}, this.context, this.stepIndex);
+          return;
+        }
+        this.terminal = true;
+        this.stepIndex += 1;
+        this.logger.emit(level, status, "operation.complete", message, data, this.context, this.stepIndex, error, this.logger.clock() - this.startedAt);
+      }
+    }
+
+    class UiLogger {
+      constructor(options) {
+        options = options || {};
+        this.module = options.module || "figma-ui";
+        this.clock = options.clock || Date.now;
+        this.idFactory = options.idFactory || function () { return "ui-" + Date.now() + "-" + Math.random().toString(16).slice(2); };
+        this.render = options.render || function () {};
+        this.maxQueue = options.maxQueue || 500;
+        this.pendingEvents = [];
+      }
+      startOperation(name, context) { return new UiOperationScope(this, name, context || {}); }
+      trace(message, data, context) { this.log("trace", message, data, context); }
+      debug(message, data, context) { this.log("debug", message, data, context); }
+      info(message, data, context) { this.log("info", message, data, context); }
+      warn(message, data, context) { this.log("warn", message, data, context); }
+      error(message, error, data, context) { this.emit("error", "failed", "diagnostic", message, data || {}, context || {}, 0, error); }
+      log(level, message, data, context) { this.emit(level, "progress", "diagnostic", message, data || {}, context || {}, 0); }
+      ingest(event) {
+        if (!event || typeof event !== "object") return;
+        this.enqueue(event);
+      }
+      emit(level, status, step, message, data, context, stepIndex, error, durationMs) {
+        var event = {
+          timestamp: new Date(this.clock()).toISOString(),
+          level: level,
+          source: "ui",
+          module: context.module || this.module,
+          operationId: context.operationId || this.idFactory(),
+          operationName: context.operationName || "diagnostic",
+          step: step,
+          stepIndex: stepIndex,
+          status: status,
+          message: String(message || ""),
+          data: redactUiLogData(data || {})
+        };
+        if (durationMs !== undefined) event.durationMs = durationMs;
+        if (error) event.error = {
+          name: error && error.name ? String(error.name) : "Error",
+          message: error && error.message ? String(error.message) : String(error),
+          stack: error && error.stack ? String(error.stack).slice(0, 4096) : undefined
+        };
+        this.enqueue(event);
+      }
+      enqueue(event) {
+        if (this.pendingEvents.length >= this.maxQueue) {
+          var removable = this.pendingEvents.findIndex(function (item) { return item.level !== "error" && item.level !== "fatal"; });
+          this.pendingEvents.splice(removable >= 0 ? removable : 0, 1);
+        }
+        this.pendingEvents.push(event);
+        this.render(event);
+      }
+      drain(maxCount) { return this.pendingEvents.splice(0, Math.max(1, maxCount || 50)); }
+      restore(events) { this.pendingEvents = (events || []).concat(this.pendingEvents).slice(-this.maxQueue); }
+    }
+
+    function redactUiLogData(value) {
+      var result = {};
+      var sensitive = /password|token|authorization|cookie|api.?key|secret/i;
+      Object.keys(value || {}).forEach(function (key) {
+        var item = value[key];
+        result[key] = sensitive.test(key)
+          ? "[REDACTED]"
+          : typeof item === "string" && item.length > 4096
+            ? { kind: "large-payload", chars: item.length, truncated: true }
+            : item;
+      });
+      return result;
+    }
+    // END_UI_LOGGER
+
+    function renderUiLogEvent(event) {
       const time = new Date().toLocaleTimeString();
-      const line = (isError ? "⚠ " : "") + "[" + time + "] " + message;
+      const isError = event.level === "error" || event.level === "fatal";
+      const line = (isError ? "⚠ " : "") + "[" + time + "] " + event.message;
       const existing = logEl.textContent;
       logEl.textContent = line + "\n" + (existing === "等待操作..." ? "" : existing);
       if (logEl.textContent.length > 12000) {
         logEl.textContent = logEl.textContent.slice(0, 12000);
       }
+    }
+
+    const uiLogger = new UiLogger({ module: "figma-ui", render: renderUiLogEvent, maxQueue: 500 });
+
+    // ─── 通用 ───
+    function appendLog(message, isError) {
+      if (isError) uiLogger.error(message, new Error(String(message || "")));
+      else uiLogger.info(message);
     }
 
     function setAiStatus(message) { aiStatusEl.textContent = message; }
@@ -1709,6 +1880,88 @@
         renderCleanupPlanPreview(null);
         return;
       }
+    function buildLogQuery() {
+      const query = new URLSearchParams();
+      if (logSourceFilter.value) query.set("source", logSourceFilter.value);
+      if (logLevelFilter.value) query.set("level", logLevelFilter.value);
+      if (logOperationFilter.value.trim()) query.set("operationId", logOperationFilter.value.trim());
+      if (logKeywordFilter.value.trim()) query.set("keyword", logKeywordFilter.value.trim());
+      query.set("limit", "1000");
+      return query;
+    }
+
+    function renderStructuredLogs(events) {
+      logEl.textContent = "";
+      const fragment = document.createDocumentFragment();
+      (events || []).slice().reverse().forEach(function (event) {
+        const row = document.createElement("div");
+        const isError = event.level === "error" || event.level === "fatal";
+        row.className = "log-event-row" + (isError ? " log-event-error" : "");
+        const meta = document.createElement("span");
+        meta.className = "log-event-meta";
+        meta.textContent = "[" + String(event.timestamp || "-") + "] [" + String(event.level || "info") + "] ["
+          + String(event.source || "-") + "] [" + String(event.operationId || "-") + "] ";
+        row.appendChild(meta);
+        row.appendChild(document.createTextNode(String(event.message || event.step || "")));
+        fragment.appendChild(row);
+      });
+      if (!events || events.length === 0) logEl.textContent = "没有匹配的日志。";
+      else logEl.appendChild(fragment);
+    }
+
+    async function refreshLogViewer() {
+      const operation = uiLogger.startOperation("ui.log-query");
+      refreshLogsBtn.disabled = true;
+      try {
+        const query = buildLogQuery();
+        operation.step("request", "查询 Relay 日志", { query: query.toString() });
+        const response = await fetchWithTimeout(relayEndpoint("/logs?" + query.toString()), {
+          method: "GET",
+          headers: relayRuntimeHeaders()
+        }, 8000);
+        const payload = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(payload.error || ("HTTP " + response.status));
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        renderStructuredLogs(events);
+        logViewerMeta.textContent = "显示 " + events.length + " / 匹配 " + Number(payload.totalMatched || events.length) + " 条";
+        operation.succeed("日志查询完成", { returned: events.length, totalMatched: payload.totalMatched || events.length });
+      } catch (error) {
+        logViewerMeta.textContent = "日志查询失败：" + (error.message || error);
+        operation.fail(error, "日志查询失败");
+      } finally {
+        refreshLogsBtn.disabled = false;
+      }
+    }
+
+    async function downloadFilteredLogs() {
+      const operation = uiLogger.startOperation("ui.log-download");
+      downloadLogsBtn.disabled = true;
+      try {
+        const query = buildLogQuery();
+        operation.step("request", "下载 Relay 日志", { query: query.toString() });
+        const response = await fetchWithTimeout(relayEndpoint("/logs/download?" + query.toString()), {
+          method: "GET",
+          headers: relayRuntimeHeaders()
+        }, 15000);
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "figma-mcp-relay-logs-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jsonl";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        operation.succeed("日志下载完成", { bytes: blob.size });
+      } catch (error) {
+        logViewerMeta.textContent = "日志下载失败：" + (error.message || error);
+        operation.fail(error, "日志下载失败");
+      } finally {
+        downloadLogsBtn.disabled = false;
+      }
+    }
+
       if (isCleanup && !cleanupRunDialog.hidden) renderCleanupRunDialog(run);
       var providerLabel = run.providerId === "claude-code" || run.runner === "claude" ? "Claude Code" : "Codex";
       aiExecutionMetaEl.textContent = "操作：" + aiTemplateTaskLabel(run.template) + "\nAI：" + providerLabel + "\n任务：" + run.runId;
@@ -1996,27 +2249,15 @@
         unityProjectStatus.textContent = "请输入 Unity 工程根目录。";
         return;
       }
-      unityProjectStatus.textContent = "正在添加 Unity 工程：\n" + projectPath;
-      addUnityProjectBtn.disabled = true;
-      try {
-        var response = await fetchWithTimeout(relayEndpoint("/unity-projects/add"), {
-          method: "POST",
-          headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ path: projectPath, sessionId: relaySessionId })
-        }, 8000);
-        var result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || "添加 Unity 工程失败");
-        unityProjectPathInput.value = "";
-        renderUnityProjects(result);
-      } catch (error) {
-        var message = error && error.message ? error.message : String(error);
-        if (message === "Failed to fetch" || /fetch|network|timeout/i.test(message)) {
-          throw new Error("本地 MCP Companion 未连接，无法添加 Unity 工程。请先在设置中连接 Companion。");
-        }
-        throw error;
-      } finally {
-        addUnityProjectBtn.disabled = false;
-      }
+      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/add"), {
+        method: "POST",
+        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ path: projectPath, sessionId: relaySessionId })
+      }, 8000);
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "添加 Unity 工程失败");
+      unityProjectPathInput.value = "";
+      renderUnityProjects(result);
     }
 
     async function selectUnityProject() {
@@ -3669,6 +3910,10 @@
         if (copied) {
           setAiPromptStatus("提示词已复制。");
           appendLog("AI 提示词已复制。");
+      if (relayLogFlushTimer) {
+        clearInterval(relayLogFlushTimer);
+        relayLogFlushTimer = null;
+      }
         } else {
           setAiPromptStatus("已选中提示词内容，请按 Ctrl+C 复制。");
           appendLog("自动复制不可用，已选中 AI 提示词，请手动 Ctrl+C。", true);
@@ -3693,6 +3938,16 @@
       }
       if (document.queryCommandSupported && !document.queryCommandSupported("copy")) {
         return false;
+    function flushRelayLogEvents() {
+      if (!relaySocket || relaySocket.readyState !== WebSocket.OPEN || !uiLogger.pendingEvents.length) return;
+      var events = uiLogger.drain(50);
+      try {
+        relaySocket.send(JSON.stringify({ type: "log.events", events: events }));
+      } catch (_) {
+        uiLogger.restore(events);
+      }
+    }
+
       }
       try {
         return document.execCommand("copy");
@@ -3707,6 +3962,9 @@
       try {
         const requestOptions = Object.assign({}, options || {});
         requestOptions.signal = controller.signal;
+        if (relayLogFlushTimer) clearInterval(relayLogFlushTimer);
+        relayLogFlushTimer = setInterval(flushRelayLogEvents, 250);
+        flushRelayLogEvents();
         return await fetch(url, requestOptions);
       } finally {
         clearTimeout(timer);
@@ -3725,6 +3983,10 @@
 
     async function showManualStartHint(error) {
       const copied = await tryCopyStartPath();
+        if (relayLogFlushTimer) {
+          clearInterval(relayLogFlushTimer);
+          relayLogFlushTimer = null;
+        }
       const mcpStartBatPath = relayRuntimePaths.mcpStartBatPath || "请打开 Relay 安装目录并双击 启动MCP.bat；连接成功后将自动记住经过验证的路径。";
       const hint = [
         "本地 MCP Companion 未连接",
@@ -3757,6 +4019,8 @@
       if (!isCurrent()) return { stale: true };
       if (!response.ok || result.ok === false) throw new Error(result.error || "HTTP " + response.status);
       return { stale: false, payload: payload, result: result };
+          operation.fail(error, "UI 分发 Relay 任务失败");
+          delete relayOperations[payload.requestId];
     }
 
     async function runRelayRequestWithStaleFailureGuard(context, operation, isCurrent, showFailure, ignoreStale) {
@@ -3777,6 +4041,18 @@
       var requestContext = captureRelayRequestContext();
       appendLog("检查本地 MCP Companion：" + requestContext.relayUrl);
       var guarded = await runRelayRequestWithStaleFailureGuard(
+    function finishUiRelayOperation(requestId, result) {
+      var operation = relayOperations[requestId || ""];
+      if (!operation) return;
+      var status = result && result.status ? String(result.status).toLowerCase() : "";
+      if (result && (result.ok === false || status === "error" || status === "failed" || status === "blocked")) {
+        operation.fail(new Error(String(result.error || status || "plugin operation failed")), "UI 收到插件失败结果", { status: status });
+      } else {
+        operation.succeed("UI 收到插件执行结果", { status: status || "completed" });
+      }
+      delete relayOperations[requestId || ""];
+    }
+
         requestContext,
         function () { return runRelayOpenFolderRequest(
           requestContext,
@@ -3844,6 +4120,12 @@
       payload.sessionId = relaySessionId;
       return JSON.stringify(payload);
     }
+        payload.operationId = payload.operationId || payload.requestId || "";
+        relayOperations[payload.requestId || ""] = uiLogger.startOperation("ui.command", "UI 开始处理轮询任务", {
+          operationId: payload.operationId,
+          data: { requestId: payload.requestId || "", jobType: (payload.job && payload.job.type) || "IMPORT_PSD_JOB" }
+        });
+        relayOperations[payload.requestId || ""].step("received", "UI 已接收轮询任务");
 
     function formatMcpClientSummary(clientsPayload) {
       var clients = clientsPayload && Array.isArray(clientsPayload.clients) ? clientsPayload.clients : [];
@@ -4017,7 +4299,7 @@
       const msgType = job.type || (job.task === "figma-to-prefab-export" ? "FIGMA_TO_PREFAB_EXPORT" : "") || "IMPORT_PSD_JOB";
       appendLog("已下载 " + assets.length + " 个资源，执行 " + msgType);
       parent.postMessage({
-        pluginMessage: { type: msgType, requestId: payload.requestId, job: job, assets: assets }
+        pluginMessage: { type: msgType, requestId: payload.requestId, operationId: payload.operationId || payload.requestId, job: job, assets: assets }
       }, "*", assets.map(function (a) { return a.bytes; }).filter(Boolean));
     }
 
@@ -4090,7 +4372,7 @@
         if (!message || message.type !== "command.request") return;
         var receivedId = message.requestId || message.id || "";
         if (receivedId && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-          relaySocket.send(JSON.stringify({ type: "command.received", id: receivedId, requestId: receivedId }));
+          relaySocket.send(JSON.stringify({ type: "command.received", id: receivedId, requestId: receivedId, operationId: message.operationId || receivedId }));
         }
         relaySocketJobQueue.push(message);
         processRelaySocketQueue();
@@ -4109,7 +4391,13 @@
     function processRelaySocketQueue() {
       if (isExecuting || !relaySocketJobQueue.length) return;
       var message = relaySocketJobQueue.shift();
-      var payload = { requestId: message.requestId || message.id || "", job: message.job || {} };
+      var payload = { requestId: message.requestId || message.id || "", operationId: message.operationId || message.requestId || message.id || "", job: message.job || {} };
+      var operation = uiLogger.startOperation("ui.command", "UI 开始处理 Relay 任务", {
+        operationId: payload.operationId,
+        data: { requestId: payload.requestId, jobType: payload.job.type || "IMPORT_PSD_JOB" }
+      });
+      relayOperations[payload.requestId] = operation;
+      operation.step("received", "UI 已接收 Relay 任务");
       isExecuting = true;
       appendLog("WebSocket 收到任务 " + (payload.requestId || "") + " (" + ((payload.job && payload.job.type) || "IMPORT_PSD_JOB") + ")");
       setAiStatus("执行中：" + (payload.requestId || ""));
@@ -4119,7 +4407,7 @@
           clearExecutionWatchdog();
           isExecuting = false;
           if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-            relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, accepted: true }));
+            relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, operationId: payload.operationId, accepted: true }));
           }
           scheduleNextPoll(500);
           setTimeout(processRelaySocketQueue, 0);
@@ -4131,7 +4419,7 @@
           lastResultPayload = { requestId: payload.requestId, result: result };
           postResult(payload.requestId, result).catch(function () {});
           if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-            relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, error: error.message || String(error) }));
+            relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, operationId: payload.operationId, error: error.message || String(error) }));
           }
           scheduleNextPoll(500);
           setTimeout(processRelaySocketQueue, 0);
@@ -5306,6 +5594,11 @@
             canvasByPrefabPath[path] = "auto";
           }
         });
+      if (message.type === "LOG_EVENT") {
+        uiLogger.ingest(message.event);
+        return;
+      }
+
 
         prefabImportBusy = true;
         startPrefabImportProgressAnimation(2);
@@ -5330,6 +5623,7 @@
         }
         prefabImportTaskId = data.taskId || "";
         appendLog("Prefab 导入任务已创建：" + prefabImportTaskId + "，Prefab 数=" + (data.prefabCount || prefabPaths.length));
+        finishUiRelayOperation(message.requestId, hierarchyRelayResult);
         pollPrefabImportTask();
       } catch (error) {
         finishPrefabImport(false);
@@ -5383,6 +5677,7 @@
       }
       setPrefabImportStatus(lines.join("\n"));
     }
+        finishUiRelayOperation(message.requestId, result);
 
     function setPrefabImportProgress(percent) {
       var value = Math.max(0, Math.min(100, Number(percent || 0)));
@@ -5559,6 +5854,11 @@
               + ",top:" + img.borderTop
               + "} sliceKind=" + (img.sliceKind || "<empty>");
           })).join("\n"));
+    refreshLogsBtn.addEventListener("click", refreshLogViewer);
+    downloadLogsBtn.addEventListener("click", downloadFilteredLogs);
+    logKeywordFilter.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") refreshLogViewer();
+    });
           appendLog("发送 " + nineSliceList.length + " 张九宫图到 MCP Relay 切图：" + (selectedUnityReplaceAssetPath || targetDir));
           var cropResp = await fetchWithTimeout(relayEndpoint("/crop-jiugong"), {
             method: "POST",

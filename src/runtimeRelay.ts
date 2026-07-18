@@ -4,7 +4,10 @@ import path from "node:path";
 
 import type { GatewayConfig } from "./config.js";
 import { LOCAL_DIR, PLUGIN_ROOT, publicUrl } from "./config.js";
-import { logInfo, logWarn } from "./logger.js";
+import { getLoggingRuntime, type LoggingRuntime } from "./logging/loggingRuntime.js";
+import type { OperationScope } from "./logging/operationScope.js";
+import type { RelayLogger } from "./logging/relayLogger.js";
+import { logInfo, logWarn } from "./utils/logger.js";
 import {
   deleteMcpConfigForClient,
   desiredMcpUrl,
@@ -15,7 +18,7 @@ import {
 } from "./mcpConfig.js";
 import type { LegacyRelay } from "./pythonWorker.js";
 import type { JsonObject, LegacyRelayStatus, RelayJob } from "./types.js";
-import { isRecord, makeRequestId, sleep } from "./utils.js";
+import { isRecord, makeRequestId, sleep, validOperationId } from "./utils.js";
 import type { WebSocketGateway } from "./websocketGateway.js";
 
 const DONE_JOB_TTL_MS = 10 * 60 * 1000;
@@ -43,13 +46,17 @@ export class RuntimeRelay {
   private readonly queue: string[] = [];
   private readonly startedAt = Date.now();
   private readonly cleanupTimer: NodeJS.Timeout;
+  private readonly operations = new Map<string, OperationScope>();
+  private readonly operationLogger: RelayLogger;
 
   constructor(
     private readonly config: GatewayConfig,
     private readonly gateway: WebSocketGateway,
-    private readonly legacyRelay: LegacyRelay
+    private readonly legacyRelay: LegacyRelay,
+    logging: LoggingRuntime = getLoggingRuntime()
   ) {
-    this.gateway.onReceived((requestId) => this.markWebSocketReceived(requestId));
+    this.operationLogger = logging.logger("runtime-relay");
+    this.gateway.onReceived((requestId, operationId) => this.markWebSocketReceived(requestId, operationId));
     this.gateway.onUndelivered((requestId, reason) => this.markWebSocketUndelivered(requestId, reason));
     this.cleanupTimer = setInterval(() => this.cleanupJobs(), CLEANUP_INTERVAL_MS);
   }
@@ -63,6 +70,7 @@ export class RuntimeRelay {
       throw new Error("json body must be object");
     }
     const requestId = makeRequestId(payload.requestId);
+    const operationId = validOperationId(payload.operationId) ?? requestId;
     const jobPayload = payload.job;
     if (!isRecord(jobPayload)) {
       throw new Error("missing job object");
@@ -73,61 +81,68 @@ export class RuntimeRelay {
       throw new Error(`duplicate in-flight requestId: ${requestId}`);
     }
 
-    const assetPaths = parseAssetPaths(payload.assetPaths, this.config.assetRoots);
-    const target = parseTarget(payload, jobPayload);
-    const job: RelayJob = {
-      requestId,
-      job: rewriteAssetUrls({ ...jobPayload }, requestId, this.publicUrl),
-      assetPaths,
-      targetSessionId: target.sessionId,
-      targetFileKey: target.fileKey,
-      delivered: false,
-      inFlight: false,
-      dispatchAttempts: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-
-    this.jobs.set(requestId, job);
-    let pushed = false;
+    const operation = this.operationLogger.startOperation("relay.job", "开始提交 Relay 任务", {
+      operationId,
+      data: { requestId, jobType: String(jobPayload.type || "") }
+    });
+    this.operations.set(requestId, operation);
     try {
-      pushed = this.tryPush(job);
-    } catch (error) {
-      this.jobs.delete(requestId);
-      throw error;
-    }
-    if (!pushed && this.gateway.requiresExplicitTarget({
-      sessionId: job.targetSessionId,
-      fileKey: job.targetFileKey
-    })) {
-      this.jobs.delete(requestId);
-      throw new Error("Multiple online Figma plugin sessions require target.sessionId or target.fileKey.");
-    }
-    if (!pushed) {
-      this.queue.push(requestId);
-      logInfo("Relay job queued for polling", {
+      const assetPaths = parseAssetPaths(payload.assetPaths, this.config.assetRoots);
+      const target = parseTarget(payload, jobPayload);
+      const job: RelayJob = {
         requestId,
-        jobType: String(job.job.type || ""),
-        queueLength: this.queue.length
-      });
-    } else {
-      logInfo("Relay job dispatched by websocket", {
-        requestId,
-        jobType: String(job.job.type || ""),
-        attempts: job.dispatchAttempts
-      });
-    }
+        operationId,
+        job: rewriteAssetUrls({ ...jobPayload }, requestId, this.publicUrl),
+        assetPaths,
+        targetSessionId: target.sessionId,
+        targetFileKey: target.fileKey,
+        delivered: false,
+        inFlight: false,
+        dispatchAttempts: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
 
-    return {
-      ok: true,
-      requestId,
-      statusUrl: `${this.publicUrl}/jobs/${encodeURIComponent(requestId)}/result`,
-      transport: pushed ? "websocket" : "polling",
-      target: {
+      this.jobs.set(requestId, job);
+      const pushed = this.tryPush(job);
+      if (!pushed && this.gateway.requiresExplicitTarget({
         sessionId: job.targetSessionId,
         fileKey: job.targetFileKey
+      })) {
+        throw new Error("Multiple online Figma plugin sessions require target.sessionId or target.fileKey.");
       }
-    };
+      if (!pushed) {
+        this.queue.push(requestId);
+        operation.step("queued", "Relay 任务已进入轮询队列", {
+          requestId,
+          jobType: String(job.job.type || ""),
+          queueLength: this.queue.length
+        });
+      } else {
+        operation.step("websocket-dispatched", "Relay 任务已通过 WebSocket 下发", {
+          requestId,
+          jobType: String(job.job.type || ""),
+          attempts: job.dispatchAttempts
+        });
+      }
+
+      return {
+        ok: true,
+        requestId,
+        operationId,
+        statusUrl: `${this.publicUrl}/jobs/${encodeURIComponent(requestId)}/result`,
+        transport: pushed ? "websocket" : "polling",
+        target: {
+          sessionId: job.targetSessionId,
+          fileKey: job.targetFileKey
+        }
+      };
+    } catch (error) {
+      this.jobs.delete(requestId);
+      this.operations.delete(requestId);
+      operation.fail(error, "Relay 任务提交失败", { requestId });
+      throw error;
+    }
   }
 
   tryPush(job: RelayJob): boolean {
@@ -180,6 +195,10 @@ export class RuntimeRelay {
           jobType: String(job.job.type || ""),
           attempts: job.dispatchAttempts
         });
+        this.operations.get(requestId)?.step("polling-leased", "Relay 任务已由轮询客户端领取", {
+          requestId,
+          attempts: job.dispatchAttempts
+        });
         return job;
       }
       if (job && !job.result && !job.inFlight) {
@@ -202,6 +221,20 @@ export class RuntimeRelay {
     job.inFlight = false;
     job.leaseExpiresAt = undefined;
     job.updatedAt = Date.now();
+    const operation = this.operations.get(requestId);
+    operation?.step("result-received", "Relay 已收到插件结果", {
+      requestId,
+      deliveredBy: job.deliveredBy || "",
+      status: String(result.status || result.ok || "")
+    });
+    if (isFailedJobResult(result)) {
+      operation?.fail(new Error(String(result.error || result.status || "plugin command failed")), "Relay 任务执行失败", {
+        requestId
+      });
+    } else {
+      operation?.succeed("Relay 任务执行成功", { requestId });
+    }
+    this.operations.delete(requestId);
     logInfo("Relay job result received", {
       requestId,
       jobType: String(job.job.type || ""),
@@ -316,9 +349,13 @@ export class RuntimeRelay {
 
   dispose(): void {
     clearInterval(this.cleanupTimer);
+    for (const [requestId, operation] of this.operations) {
+      operation.cancel("Relay 关闭，未完成任务已取消", { requestId });
+    }
+    this.operations.clear();
   }
 
-  private markWebSocketReceived(requestId: string): void {
+  private markWebSocketReceived(requestId: string, receivedOperationId?: string): void {
     const job = this.jobs.get(requestId);
     if (!job || job.result) {
       return;
@@ -329,6 +366,10 @@ export class RuntimeRelay {
     job.inFlight = true;
     job.leaseExpiresAt = Date.now() + JOB_LEASE_MS;
     job.updatedAt = Date.now();
+    this.operations.get(requestId)?.step("plugin-acknowledged", "Figma 插件已确认接收任务", {
+      requestId,
+      receivedOperationId: receivedOperationId || ""
+    });
     logInfo("Relay job acknowledged by websocket", {
       requestId,
       jobType: String(job.job.type || "")
@@ -357,6 +398,8 @@ export class RuntimeRelay {
         error: reason,
         requestId
       };
+      this.operations.get(requestId)?.fail(new Error(reason), "Relay WebSocket 任务投递失败", { requestId });
+      this.operations.delete(requestId);
       return;
     }
     this.enqueueIfNeeded(requestId);
@@ -379,6 +422,9 @@ export class RuntimeRelay {
           jobType: String(job.job.type || ""),
           done: Boolean(job.result)
         });
+        this.operations.get(requestId)?.step("expired", "Relay 任务已过期", { requestId });
+        this.operations.get(requestId)?.cancel("Relay 任务已过期", { requestId });
+        this.operations.delete(requestId);
         this.jobs.delete(requestId);
         continue;
       }
@@ -393,6 +439,9 @@ export class RuntimeRelay {
           requestId,
           jobType: String(job.job.type || "")
         });
+        this.operations.get(requestId)?.step("lease-expired", "Relay 任务租约超时，准备重试", {
+          requestId
+        }, "warn");
         this.enqueueIfNeeded(requestId);
       }
     }
@@ -683,6 +732,14 @@ function parseTarget(payload: JsonObject, jobPayload: JsonObject): { sessionId?:
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isFailedJobResult(result: JsonObject): boolean {
+  if (result.ok === false) {
+    return true;
+  }
+  const status = String(result.status || "").toLowerCase();
+  return ["failed", "error", "cancelled", "blocked"].includes(status);
 }
 
 function jobMatchesTarget(job: RelayJob, target: { sessionId?: string; fileKey?: string }): boolean {

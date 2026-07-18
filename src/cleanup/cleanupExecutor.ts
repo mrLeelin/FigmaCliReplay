@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { PLUGIN_ROOT } from "../config.js";
 import { toFigmaCleanupTransactionPlan } from "../cleanupPlan.js";
+import { getLoggingRuntime } from "../logging/loggingRuntime.js";
+import type { OperationScope } from "../logging/operationScope.js";
 import { isRecord } from "../utils.js";
 import type {
   CleanupExecutionResult,
@@ -82,21 +84,51 @@ export class CleanupExecutor implements CleanupExecutorPort {
   }
 
   async execute(request: CleanupExecutorRequest): Promise<CleanupExecutionResult> {
+    const operation = getLoggingRuntime().logger("cleanup-executor").startOperation(
+      "cleanup.execution",
+      "开始执行 Cleanup 事务",
+      { operationId: request.runId, data: { sessionId: request.sessionId } },
+    );
     const runDir = path.join(this.runsRoot, request.runId);
     const planPath = path.join(runDir, "cleanup-transaction-plan.json");
     const outputPath = path.join(runDir, "cleanup-apply-report.json");
-    fs.mkdirSync(runDir, { recursive: true });
-    const transactionPlan = toFigmaCleanupTransactionPlan(request.plan, request.snapshot);
-    fs.writeFileSync(planPath, `${JSON.stringify(transactionPlan, null, 2)}\n`, "utf8");
-    const processSpec = buildCleanupApplyProcess({
-      pluginRoot: this.pluginRoot,
-      sessionId: request.sessionId,
-      planPath,
-      outputPath,
-      timeoutSeconds: Math.ceil(this.timeoutMs / 1000),
-    });
-    processSpec.command = this.pythonCommand;
-    return await runCleanupProcess(processSpec, this.workspace, outputPath, request.signal, request.onProgress, this.timeoutMs);
+    try {
+      fs.mkdirSync(runDir, { recursive: true });
+      const transactionPlan = toFigmaCleanupTransactionPlan(request.plan, request.snapshot);
+      fs.writeFileSync(planPath, `${JSON.stringify(transactionPlan, null, 2)}\n`, "utf8");
+      operation.step("execution", "Cleanup 事务计划已写入", {
+        operationCount: request.plan.operations.length
+      });
+      const processSpec = buildCleanupApplyProcess({
+        pluginRoot: this.pluginRoot,
+        sessionId: request.sessionId,
+        planPath,
+        outputPath,
+        timeoutSeconds: Math.ceil(this.timeoutMs / 1000),
+      });
+      processSpec.command = this.pythonCommand;
+      const result = await runCleanupProcess(
+        processSpec,
+        this.workspace,
+        outputPath,
+        request.signal,
+        request.onProgress,
+        this.timeoutMs,
+        request.runId,
+        operation,
+      );
+      if (result.state === "succeeded") {
+        operation.step("verification", "Cleanup 事务报告验证通过");
+        operation.succeed("Cleanup 事务执行成功");
+      } else {
+        operation.step("rollback", "Cleanup 事务已回滚或需要恢复", { state: result.state }, "warn");
+        operation.fail(new Error(`cleanup transaction ended as ${result.state}`), "Cleanup 事务执行失败");
+      }
+      return result;
+    } catch (error) {
+      if (!operation.completed) operation.fail(error, "Cleanup 事务执行异常");
+      throw error;
+    }
   }
 }
 
@@ -107,19 +139,35 @@ async function runCleanupProcess(
   signal: AbortSignal,
   onProgress: (progress: CleanupProgress) => void,
   timeoutMs: number,
+  operationId: string,
+  operation: OperationScope,
 ): Promise<CleanupExecutionResult> {
   return await new Promise((resolve, reject) => {
     const child = spawn(processSpec.command, processSpec.args, {
       cwd: workspace,
-      env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+      env: {
+        ...process.env,
+        PYTHONUTF8: "1",
+        PYTHONIOENCODING: "utf-8",
+        FIGMA_RELAY_OPERATION_ID: operationId,
+        FIGMA_RELAY_OPERATION_NAME: "cleanup.execution",
+      },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    operation.step("cli-spawn", "Cleanup Python 执行进程已启动", {
+      command: path.basename(processSpec.command),
+      argumentCount: processSpec.args.length
+    });
     const timeout = setTimeout(() => {
+      operation.step("timeout", "Cleanup Python 执行超时", { timeoutMs }, "warn");
       terminateProcessTree(child);
       reject(new Error(`cleanup apply exceeded ${Math.round(timeoutMs / 1000)} seconds`));
     }, timeoutMs);
-    const abort = () => terminateProcessTree(child);
+    const abort = () => {
+      operation.step("cancel", "Cleanup Python 执行收到取消信号", undefined, "warn");
+      terminateProcessTree(child);
+    };
     signal.addEventListener("abort", abort, { once: true });
     wireProgress(child.stdout, onProgress, "stdout");
     wireProgress(child.stderr, onProgress, "stderr");
@@ -128,9 +176,10 @@ async function runCleanupProcess(
       signal.removeEventListener("abort", abort);
       reject(error);
     });
-    child.once("close", () => {
+    child.once("close", (code) => {
       clearTimeout(timeout);
       signal.removeEventListener("abort", abort);
+      operation.step("cli-exit", "Cleanup Python 执行进程已退出", { exitCode: code });
       try {
         if (!fs.existsSync(outputPath)) throw new Error("cleanup transaction report is missing");
         resolve(validateCleanupExecutionReport(JSON.parse(fs.readFileSync(outputPath, "utf8"))));

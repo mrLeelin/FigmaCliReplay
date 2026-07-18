@@ -290,7 +290,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             sb.AppendFormat("\"width\":{0},", sourceImage.width);
             sb.AppendFormat("\"height\":{0},", sourceImage.height);
             sb.AppendFormat("\"spriteGuid\":{0},", JsonString(sourceImage.spriteGuid ?? ""));
-            sb.AppendFormat("\"assetPath\":{0}", JsonString(StripUnityPrefix(sourceImage.assetPath ?? "")));
+            sb.AppendFormat("\"assetPath\":{0}", JsonString(NormalizeAssetPath(sourceImage.assetPath ?? "")));
             sb.Append("}");
         }
 

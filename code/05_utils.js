@@ -2355,12 +2355,15 @@ function preserveHierarchyChildAbsoluteBounds(child, groupNode, beforeBounds) {
   child.y = newY;
   // 坐标合理性检查：超过 ±5000 大概率是坐标系污染，记录日志
   if (Math.abs(newX) > 5000 || Math.abs(newY) > 5000) {
-    console.warn(
-      `[FigmaMcpRelay] preserve坐标异常 child=${child.name || "?"} ` +
-      `new=(${newX.toFixed(1)},${newY.toFixed(1)}) ` +
-      `before=(${numericOr(beforeBounds.x, 0).toFixed(1)},${numericOr(beforeBounds.y, 0).toFixed(1)}) ` +
-      `groupBounds=(${numericOr(groupBounds.x, 0).toFixed(1)},${numericOr(groupBounds.y, 0).toFixed(1)})`
-    );
+    pluginLogger.warn("层级 preserve 坐标异常", {
+      childName: child.name || "?",
+      newX: newX,
+      newY: newY,
+      beforeX: numericOr(beforeBounds.x, 0),
+      beforeY: numericOr(beforeBounds.y, 0),
+      groupX: numericOr(groupBounds.x, 0),
+      groupY: numericOr(groupBounds.y, 0)
+    });
   }
 }
 

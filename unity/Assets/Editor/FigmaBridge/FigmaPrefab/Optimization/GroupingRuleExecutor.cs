@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
-using ZLog = UnityEngine.Debug;
+using ZLog = MagicWarrior.Editor.FigmaBridge.BridgeLogger;
 
 namespace MagicWarrior.Editor.FigmaPrefab.Optimization
 {

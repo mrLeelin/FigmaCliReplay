@@ -1961,7 +1961,7 @@ async function postPrefabWriteResultDirectly(message, result) {
       body: JSON.stringify({ requestId, result })
     }), 5000, "Prefab result direct post timeout");
   } catch (error) {
-    console.warn("Prefab result direct post failed", error);
+    pluginLogger.warn("Prefab 结果直接回传失败", { error: error && error.message ? error.message : String(error) });
   }
 }
 

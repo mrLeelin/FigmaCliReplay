@@ -6,7 +6,6 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
-using ZLog = UnityEngine.Debug;
 
 namespace MagicWarrior.Editor.FigmaBridge
 {
@@ -34,14 +33,11 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         /// <summary>服务器版本号</summary>
         // BEGIN_RELEASE_VERSION
-        private const string Version = "0.1.44";
+        private const string Version = "0.1.45";
         // END_RELEASE_VERSION
 
         /// <summary>临时输出目录前缀（相对于仓库根目录）</summary>
         private const string TmpOutputPrefix = ".tmp/prefab-to-figma/";
-
-        /// <summary>日志最大条数</summary>
-        internal const int MaxLogCount = 20;
 
         private const string ImageImportTargetModeFolder = "folder";
         private const string ImageImportTargetModeReplace = "replaceImage";
@@ -88,12 +84,6 @@ namespace MagicWarrior.Editor.FigmaBridge
             set => EditorPrefs.SetInt(PrefsPortKey, SanitizePort(value));
         }
 
-        /// <summary>日志列表，供 FigmaBridgeWindow 读取</summary>
-        internal static readonly List<string> Logs = new List<string>();
-
-        /// <summary>日志变更回调，供 Window 刷新 UI</summary>
-        internal static event Action OnLogChanged;
-
         // ─────────────────────── 生命周期 ───────────────────────
 
         /// <summary>
@@ -122,7 +112,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             }
 
             AddLog($"[FigmaBridge] 启动失败：端口 {preferredPort}-{MaxPort} 均不可用。最后错误：{lastError}");
-            ZLog.LogError($"[FigmaBridge] 启动失败：端口 {preferredPort}-{MaxPort} 均不可用。最后错误：{lastError}");
+            BridgeLogger.Error($"[FigmaBridge] 启动失败：端口 {preferredPort}-{MaxPort} 均不可用。最后错误：{lastError}");
         }
 
         /// <summary>
@@ -194,7 +184,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             }
             catch (Exception ex)
             {
-                ZLog.LogWarning($"[FigmaBridge] 停止时出错：{ex.Message}");
+                BridgeLogger.Warn($"[FigmaBridge] 停止时出错：{ex.Message}");
             }
 
             _listener = null;
@@ -236,7 +226,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             try { Start(); }
             catch (Exception ex)
             {
-                ZLog.LogWarning($"[FigmaBridge] 自动启动失败：{ex.Message}");
+                BridgeLogger.Warn($"[FigmaBridge] 自动启动失败：{ex.Message}");
             }
         }
 
@@ -256,7 +246,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             catch (ObjectDisposedException) { /* 服务器已关闭 */ }
             catch (Exception ex)
             {
-                ZLog.LogWarning($"[FigmaBridge] BeginGetContext 失败：{ex.Message}");
+                BridgeLogger.Warn($"[FigmaBridge] BeginGetContext 失败：{ex.Message}");
             }
         }
 
@@ -276,7 +266,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             catch (HttpListenerException) { return; }
             catch (Exception ex)
             {
-                ZLog.LogWarning($"[FigmaBridge] EndGetContext 失败：{ex.Message}");
+                BridgeLogger.Warn($"[FigmaBridge] EndGetContext 失败：{ex.Message}");
             }
 
             if (ctx != null)
@@ -285,7 +275,20 @@ namespace MagicWarrior.Editor.FigmaBridge
                 if (path == "/ping")
                 {
                     // /ping 直接在后台线程响应，不进入主线程队列，避免 Unity 抢夺焦点
-                    RespondJson(ctx.Response, 200, "{\"connected\":true}");
+                    var pingOperation = BridgeLogger.StartOperation(
+                        "unity.http-request",
+                        ctx.Request.Headers["X-Operation-Id"]);
+                    try
+                    {
+                        pingOperation.Step("route", "处理 Unity /ping 请求");
+                        RespondJson(ctx.Response, 200, "{\"connected\":true}");
+                        pingOperation.Succeed("Unity /ping 请求完成");
+                    }
+                    catch (Exception ex)
+                    {
+                        pingOperation.Fail(ex, "Unity /ping 请求失败");
+                        throw;
+                    }
                 }
                 else
                 {
@@ -324,7 +327,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                 }
                 catch (Exception ex)
                 {
-                    ZLog.LogError($"[FigmaBridge] 处理请求异常：{ex}");
+                    BridgeLogger.Error($"[FigmaBridge] 处理请求异常：{ex.Message}", ex);
                     TryRespondError(ctx, 500, ex.Message);
                 }
 
@@ -336,6 +339,25 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// 根据请求路径和方法分发到对应的处理函数。
         /// </summary>
         private static void DispatchRequest(HttpListenerContext ctx)
+        {
+            var operation = BridgeLogger.StartOperation(
+                "unity.http-request",
+                ctx.Request.Headers["X-Operation-Id"]);
+            ctx.Response.Headers.Set("X-Operation-Id", operation.OperationId);
+            try
+            {
+                operation.Step("route", $"分发 Unity HTTP 请求：{ctx.Request.HttpMethod} {ctx.Request.Url.AbsolutePath}");
+                DispatchRequestCore(ctx);
+                operation.Succeed("Unity HTTP 请求完成");
+            }
+            catch (Exception ex)
+            {
+                operation.Fail(ex, "Unity HTTP 请求失败");
+                throw;
+            }
+        }
+
+        private static void DispatchRequestCore(HttpListenerContext ctx)
         {
             var req = ctx.Request;
             var resp = ctx.Response;
@@ -383,6 +405,9 @@ namespace MagicWarrior.Editor.FigmaBridge
                 case "/prefab-import-canvas":
                     HandlePrefabImportCanvas(ctx);
                     break;
+                case "/logs":
+                    HandleLogs(ctx);
+                    break;
                 default:
                     RespondJson(resp, 404, "{\"error\":\"未知端点\"}");
                     break;
@@ -390,6 +415,11 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         // ─────────────────────── API 端点 ───────────────────────
+
+        private static void HandleLogs(HttpListenerContext ctx)
+        {
+            RespondJson(ctx.Response, 200, BridgeLogger.QueryJson(ctx.Request.QueryString));
+        }
 
         /// <summary>
         /// GET /health → 返回连接状态和项目信息。
@@ -1472,7 +1502,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
             if (!success)
             {
-                ZLog.LogWarning($"[FigmaBridge] C# 导出器失败：{error}");
+                BridgeLogger.Warn($"[FigmaBridge] C# 导出器失败：{error}");
                 return false;
             }
 
@@ -1736,7 +1766,8 @@ namespace MagicWarrior.Editor.FigmaBridge
         {
             resp.Headers.Set("Access-Control-Allow-Origin", "*");
             resp.Headers.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            resp.Headers.Set("Access-Control-Allow-Headers", "Content-Type");
+            resp.Headers.Set("Access-Control-Allow-Headers", "Content-Type, X-Operation-Id");
+            resp.Headers.Set("Access-Control-Expose-Headers", "X-Operation-Id");
         }
 
         /// <summary>
@@ -1755,7 +1786,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             }
             catch (Exception ex)
             {
-                ZLog.LogWarning($"[FigmaBridge] 发送响应失败：{ex.Message}");
+                BridgeLogger.Warn($"[FigmaBridge] 发送响应失败：{ex.Message}");
             }
         }
 
@@ -1999,19 +2030,11 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// 添加日志条目，保持最多 MaxLogCount 条。
+        /// 通过独立 BridgeLogger 写入结构化日志。
         /// </summary>
         internal static void AddLog(string message)
         {
-            string timestamped = $"[{DateTime.Now:HH:mm:ss}] {message}";
-            Logs.Add(timestamped);
-
-            // 超出上限时移除最早的条目
-            while (Logs.Count > MaxLogCount)
-                Logs.RemoveAt(0);
-
-            ZLog.Log(message);
-            OnLogChanged?.Invoke();
+            BridgeLogger.Info(message);
         }
     }
 }

@@ -6,7 +6,7 @@ figma.showUI(__html__, {
 });
 // DIAG: 插件启动标记 (__BUILD_NUMBER__ 由 build.py 替换)
 figma.notify("Figma MCP Relay 插件已加载 (build __BUILD_NUMBER__)", { timeout: 1000 });
-console.log("[FigmaMcpRelay] 插件初始化完成, build=__BUILD_NUMBER__, time=" + Date.now());
+pluginLogger.info("插件初始化完成", { build: "__BUILD_NUMBER__" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -59,7 +59,7 @@ function sendSelectionUpdate() {
     });
   } catch (e) {
     // Figma 沙箱可能延迟加载后续文件，首次触发时 buildNodePathForPrompt 可能未就绪
-    console.warn("[FigmaMcpRelay] sendSelectionUpdate skipped:", e.message);
+    pluginLogger.warn("选区更新已跳过", { error: e.message });
   }
 }
 
@@ -67,12 +67,18 @@ figma.on("selectionchange", sendSelectionUpdate);
 setTimeout(sendSelectionUpdate, 100);
 
 // DIAG: 确认 handler 已注册
-console.log("[FigmaMcpRelay] figma.ui.onmessage 已注册, time=" + Date.now());
+pluginLogger.info("figma.ui.onmessage 已注册");
 
 figma.ui.onmessage = async (message) => {
   // DIAG: 记录收到的所有消息
   if (message && message.type) {
-    console.log("[FigmaMcpRelay] receive msg: " + message.type + ", requestId=" + (message.requestId || "-") + ", time=" + Date.now());
+    pluginLogger.debug("收到 UI 消息", {
+      type: message.type,
+      requestId: message.requestId || ""
+    }, {
+      operationId: message.operationId || message.requestId || undefined,
+      operationName: "plugin.message"
+    });
   }
   if (!message) return;
 

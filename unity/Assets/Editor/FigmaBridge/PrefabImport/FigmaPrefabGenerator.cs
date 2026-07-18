@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
-using ZLog = UnityEngine.Debug;
+using ZLog = MagicWarrior.Editor.FigmaBridge.BridgeLogger;
 using UnityEngine.Networking;
 using UnityEngine.UI;
 using TMPro;

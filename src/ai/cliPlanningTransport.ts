@@ -4,6 +4,8 @@ import type { Readable } from "node:stream";
 
 import { PLUGIN_ROOT } from "../config.js";
 import type { CleanupPlanningTransport } from "../cleanup/cleanupPlanner.js";
+import { getLoggingRuntime } from "../logging/loggingRuntime.js";
+import type { OperationScope } from "../logging/operationScope.js";
 
 export interface CliPlanningTransportOptions {
   workspace?: string;
@@ -26,8 +28,24 @@ export class CliPlanningTransport implements CleanupPlanningTransport {
     if (options.signal.aborted) throw new Error("cleanup planning was cancelled");
     const command = resolvePlanningCommand(options.provider.command);
     const args = options.provider.buildArgs(this.workspace, options.prompt);
-    const child = spawnPlanningCli(command, args, this.workspace);
-    return await collectPlanningResult(child, options, this.totalTimeoutMs, this.idleTimeoutMs);
+    const operation = getLoggingRuntime().logger("cli-planning-transport").startOperation(
+      "ai.cli-planning",
+      "开始 CLI 规划任务",
+      {
+        operationId: options.operationId,
+        data: { providerId: options.provider.id, command: path.basename(command), argumentCount: args.length },
+      },
+    );
+    try {
+      const child = spawnPlanningCli(command, args, this.workspace);
+      operation.step("cli-spawn", "CLI 规划进程已启动", { pid: child.pid });
+      const result = await collectPlanningResult(child, options, this.totalTimeoutMs, this.idleTimeoutMs, operation);
+      operation.succeed("CLI 规划任务完成", { outputChars: result.length });
+      return result;
+    } catch (error) {
+      if (!operation.completed) operation.fail(error, "CLI 规划任务失败");
+      throw error;
+    }
   }
 }
 
@@ -36,6 +54,7 @@ async function collectPlanningResult(
   options: Parameters<CleanupPlanningTransport["run"]>[0],
   totalTimeoutMs: number,
   idleTimeoutMs: number,
+  operation: OperationScope,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     let settled = false;
@@ -55,6 +74,7 @@ async function collectPlanningResult(
       else resolve(assistantText.trim());
     };
     const failTimeout = (message: string): void => {
+      operation.step("timeout", "CLI 规划任务超时", { message }, "warn");
       terminatePlanningProcess(child);
       finish(new Error(message));
     };
@@ -63,6 +83,7 @@ async function collectPlanningResult(
       idleTimer = setTimeout(() => failTimeout(`cleanup planning produced no output for ${Math.round(idleTimeoutMs / 1000)} seconds`), idleTimeoutMs);
     };
     const abort = (): void => {
+      operation.step("cancel", "CLI 规划任务已取消", undefined, "warn");
       terminatePlanningProcess(child);
       finish(new Error("cleanup planning was cancelled"));
     };
@@ -94,6 +115,7 @@ async function collectPlanningResult(
     wirePlanningLines(child.stderr, (line) => consume(line, "stderr"));
     child.once("error", (error) => finish(new Error(`planning provider failed to start: ${error.message}`)));
     child.once("close", (code) => {
+      operation.step("cli-exit", "CLI 规划进程已退出", { exitCode: code, outputChars: assistantText.length });
       if (terminalState === "failed" || code !== 0) {
         finish(new Error(`planning provider failed (exit ${code === null ? "unknown" : code})`));
         return;

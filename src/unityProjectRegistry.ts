@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { LOCAL_DIR } from "./config.js";
+import { getLoggingRuntime } from "./logging/loggingRuntime.js";
+import type { RelayLogger } from "./logging/relayLogger.js";
 
 export interface UnityProjectRecord {
   id: string;
@@ -24,58 +26,103 @@ interface UnityProjectRegistryData {
 }
 
 export class UnityProjectRegistry {
-  constructor(private readonly registryPath = path.join(LOCAL_DIR, "projects.json")) {}
+  private readonly logger: RelayLogger;
+
+  constructor(private readonly registryPath = path.join(LOCAL_DIR, "projects.json")) {
+    this.logger = getLoggingRuntime().logger("unity-project-registry");
+  }
 
   list(): { projects: UnityProjectStatus[]; lastSelectedProjectId: string } {
-    const data = this.read();
-    return {
-      projects: data.projects.map(projectStatus),
-      lastSelectedProjectId: data.lastSelectedProjectId
-    };
+    const operation = this.logger.startOperation("unity-project.read", "开始读取 Unity 项目注册表");
+    try {
+      operation.step("read", "正在读取 Unity 项目注册表");
+      const data = this.read();
+      const result = {
+        projects: data.projects.map(projectStatus),
+        lastSelectedProjectId: data.lastSelectedProjectId
+      };
+      operation.succeed("Unity 项目注册表读取完成", { projectCount: result.projects.length });
+      return result;
+    } catch (error) {
+      operation.fail(error, "Unity 项目注册表读取失败");
+      throw error;
+    }
   }
 
   add(projectPath: string): UnityProjectStatus {
-    const normalizedPath = normalizeUnityProjectPath(projectPath);
-    assertUnityProject(normalizedPath);
-    const data = this.read();
-    const key = pathKey(normalizedPath);
-    let record = data.projects.find((item) => pathKey(item.path) === key);
-    if (record) {
-      record.path = normalizedPath;
-      record.name = path.basename(normalizedPath);
-      record.lastSeenAt = new Date().toISOString();
-    } else {
-      record = {
-        id: projectId(normalizedPath),
-        name: path.basename(normalizedPath),
-        path: normalizedPath,
-        lastSeenAt: new Date().toISOString()
-      };
-      data.projects.push(record);
+    const operation = this.logger.startOperation("unity-project.write", "开始添加 Unity 项目");
+    try {
+      const normalizedPath = normalizeUnityProjectPath(projectPath);
+      assertUnityProject(normalizedPath);
+      const data = this.read();
+      const key = pathKey(normalizedPath);
+      let record = data.projects.find((item) => pathKey(item.path) === key);
+      if (record) {
+        record.path = normalizedPath;
+        record.name = path.basename(normalizedPath);
+        record.lastSeenAt = new Date().toISOString();
+      } else {
+        record = {
+          id: projectId(normalizedPath),
+          name: path.basename(normalizedPath),
+          path: normalizedPath,
+          lastSeenAt: new Date().toISOString()
+        };
+        data.projects.push(record);
+      }
+      operation.step("write", "正在写入 Unity 项目注册表", { projectId: record.id, name: record.name });
+      if (!data.lastSelectedProjectId) data.lastSelectedProjectId = record.id;
+      this.write(data);
+      const result = projectStatus(record);
+      operation.succeed("Unity 项目添加完成", { projectId: record.id, valid: result.valid });
+      return result;
+    } catch (error) {
+      operation.fail(error, "Unity 项目添加失败");
+      throw error;
     }
-    if (!data.lastSelectedProjectId) data.lastSelectedProjectId = record.id;
-    this.write(data);
-    return projectStatus(record);
   }
 
   remove(projectIdToRemove: string): void {
-    const data = this.read();
-    data.projects = data.projects.filter((item) => item.id !== projectIdToRemove);
-    if (data.lastSelectedProjectId === projectIdToRemove) {
-      data.lastSelectedProjectId = data.projects[0]?.id || "";
+    const operation = this.logger.startOperation("unity-project.delete", "开始移除 Unity 项目", {
+      operationId: `unity-project:${projectIdToRemove}`,
+      data: { projectId: projectIdToRemove }
+    });
+    operation.step("delete", "正在移除 Unity 项目", { projectId: projectIdToRemove });
+    try {
+      const data = this.read();
+      data.projects = data.projects.filter((item) => item.id !== projectIdToRemove);
+      if (data.lastSelectedProjectId === projectIdToRemove) {
+        data.lastSelectedProjectId = data.projects[0]?.id || "";
+      }
+      this.write(data);
+      operation.succeed("Unity 项目移除完成", { projectId: projectIdToRemove });
+    } catch (error) {
+      operation.fail(error, "Unity 项目移除失败", { projectId: projectIdToRemove });
+      throw error;
     }
-    this.write(data);
   }
 
   select(projectIdToSelect: string): UnityProjectStatus {
-    const data = this.read();
-    const record = data.projects.find((item) => item.id === projectIdToSelect);
-    if (!record) throw new Error(`unknown Unity project: ${projectIdToSelect}`);
-    assertUnityProject(record.path);
-    record.lastSeenAt = new Date().toISOString();
-    data.lastSelectedProjectId = record.id;
-    this.write(data);
-    return projectStatus(record);
+    const operation = this.logger.startOperation("unity-project.connect", "开始选择 Unity 项目", {
+      operationId: `unity-project:${projectIdToSelect}`,
+      data: { projectId: projectIdToSelect }
+    });
+    operation.step("connect", "正在验证并选择 Unity 项目", { projectId: projectIdToSelect });
+    try {
+      const data = this.read();
+      const record = data.projects.find((item) => item.id === projectIdToSelect);
+      if (!record) throw new Error(`unknown Unity project: ${projectIdToSelect}`);
+      assertUnityProject(record.path);
+      record.lastSeenAt = new Date().toISOString();
+      data.lastSelectedProjectId = record.id;
+      this.write(data);
+      const result = projectStatus(record);
+      operation.succeed("Unity 项目选择完成", { projectId: record.id, valid: result.valid });
+      return result;
+    } catch (error) {
+      operation.fail(error, "Unity 项目选择失败", { projectId: projectIdToSelect });
+      throw error;
+    }
   }
 
   snapshot(projectIdToUse?: string): UnityProjectStatus {

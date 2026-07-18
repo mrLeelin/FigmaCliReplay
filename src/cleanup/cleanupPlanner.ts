@@ -8,6 +8,7 @@ import {
 } from "../cleanupPlan.js";
 import type { PlanningProvider, PlanningProviderId } from "../ai/planningProvider.js";
 import type { PlanningProviderRegistry } from "../ai/providerRegistry.js";
+import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type {
   CleanupPlannerPort,
   CleanupPlannerRequest,
@@ -18,6 +19,7 @@ import type {
 export interface CleanupPlanningTransport {
   run(options: {
     provider: PlanningProvider;
+    operationId?: string;
     prompt: string;
     signal: AbortSignal;
     onOutput: (text: string) => void;
@@ -31,17 +33,31 @@ export class CleanupPlanner implements CleanupPlannerPort {
   ) {}
 
   async plan(request: CleanupPlannerRequest): Promise<CleanupPlanningResult> {
-    const provider = await this.registry.resolve(request.providerId);
-    request.onProgress({ state: "planning", message: `Planning with ${provider.label}.` });
-    const assistantText = await this.transport.run({
-      provider,
-      prompt: buildCleanupPlanV2ReviewTask(request.snapshot, request.providerId),
-      signal: request.signal,
-      onOutput: (text) => request.onProgress({ state: "planning", message: text }),
-    });
-    request.onProgress({ state: "validating", message: "Validating cleanup plan." });
-    const plan = validateCleanupPlanV2(extractCleanupPlan(assistantText), request.snapshot);
-    return { plan, summary: buildCleanupPlanV2Summary(plan) };
+    const operation = getLoggingRuntime().logger("cleanup-planner").startOperation(
+      "cleanup.planning",
+      "开始生成 Cleanup 计划",
+      { operationId: request.runId, data: { providerId: request.providerId } },
+    );
+    try {
+      const provider = await this.registry.resolve(request.providerId);
+      operation.step("provider-probe", "Cleanup Provider 已确认可用", { providerId: provider.id });
+      request.onProgress({ state: "planning", message: `Planning with ${provider.label}.` });
+      const assistantText = await this.transport.run({
+        provider,
+        operationId: request.runId,
+        prompt: buildCleanupPlanV2ReviewTask(request.snapshot, request.providerId),
+        signal: request.signal,
+        onOutput: (text) => request.onProgress({ state: "planning", message: text }),
+      });
+      request.onProgress({ state: "validating", message: "Validating cleanup plan." });
+      operation.step("verification", "开始校验 Cleanup 计划");
+      const plan = validateCleanupPlanV2(extractCleanupPlan(assistantText), request.snapshot);
+      operation.succeed("Cleanup 计划生成并校验成功", { operationCount: plan.operations.length });
+      return { plan, summary: buildCleanupPlanV2Summary(plan) };
+    } catch (error) {
+      operation.fail(error, "Cleanup 计划生成失败");
+      throw error;
+    }
   }
 }
 

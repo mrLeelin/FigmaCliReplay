@@ -2,7 +2,6 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 using TMPro;
-using ZLog = UnityEngine.Debug;
 
 namespace MagicWarrior.Editor.FigmaBridge
 {
@@ -73,7 +72,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// </summary>
         private void OnEnable()
         {
-            FigmaBridgeServer.OnLogChanged += OnLogChanged;
+            BridgeLogger.OnChanged += OnLogChanged;
             _figmaFileUrl = EditorPrefs.GetString(PrefsFigmaUrlKey, "");
             _serverPort = FigmaBridgeServer.PreferredPort;
             _importFont = FigmaBridgeImportSettings.Font;
@@ -84,7 +83,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// </summary>
         private void OnDisable()
         {
-            FigmaBridgeServer.OnLogChanged -= OnLogChanged;
+            BridgeLogger.OnChanged -= OnLogChanged;
             DestroyDotTextures();
         }
 
@@ -335,7 +334,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                 _logScrollPos,
                 GUILayout.ExpandHeight(true));
 
-            var logs = FigmaBridgeServer.Logs;
+            var logs = BridgeLogger.DisplayLogs;
             if (logs.Count == 0)
             {
                 EditorGUILayout.LabelField("暂无日志。", EditorStyles.miniLabel);
@@ -354,7 +353,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             // 清空日志按钮
             if (GUILayout.Button("清空日志", EditorStyles.miniButton))
             {
-                FigmaBridgeServer.Logs.Clear();
+                BridgeLogger.Clear();
                 Repaint();
             }
         }
@@ -384,7 +383,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
                 FigmaBridgeServer.AddLog(
                     $"[Window] 已生成 AI 推送指令：{prefabName}，文件：{filePath}");
-                ZLog.Log($"[FigmaBridge Window] 已生成 Kiro prompt 文件：{filePath}");
+                BridgeLogger.Info($"[FigmaBridge Window] 已生成 Kiro prompt 文件：{filePath}");
 
                 EditorUtility.DisplayDialog(
                     "Figma Bridge",
@@ -395,7 +394,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             else
             {
                 FigmaBridgeServer.AddLog($"[Window] 推送失败：{prefabName}");
-                ZLog.LogError($"[FigmaBridge Window] 推送失败：{prefabName}");
+                BridgeLogger.Error($"[FigmaBridge Window] 推送失败：{prefabName}");
             }
         }
 
@@ -458,7 +457,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             catch (System.Exception ex)
             {
                 FigmaBridgeServer.AddLog($"[Window] 推送失败：{ex.Message}");
-                ZLog.LogError($"[FigmaBridge Window] 推送失败：{ex}");
+                BridgeLogger.Error($"[FigmaBridge Window] 推送失败：{ex.Message}", ex);
                 return null;
             }
         }

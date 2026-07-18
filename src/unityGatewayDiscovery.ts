@@ -1,11 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { getLoggingRuntime } from "./logging/loggingRuntime.js";
+
+const logger = getLoggingRuntime().logger("unity-gateway-discovery");
+
 export type UnityGatewayDiscoveryResult =
   | { found: true; gatewayUrl: string; updatedAtUtc: string }
   | { found: false };
 
 export function readUnityGatewayDiscovery(projectPath: string): UnityGatewayDiscoveryResult {
+  const operation = logger.startOperation("unity.gateway-discover", "开始发现 Unity Bridge Gateway", {
+    data: { projectName: path.basename(projectPath) }
+  });
+  operation.step("discover", "正在扫描 Unity Bridge Gateway 记录");
   const normalizedProjectPath = path.resolve(projectPath);
   const discoveryDirectory = path.join(normalizedProjectPath, "Library", "FigmaBridge", "gateways");
   try {
@@ -15,15 +23,30 @@ export function readUnityGatewayDiscovery(projectPath: string): UnityGatewayDisc
       .filter((record): record is ValidGatewayRecord => Boolean(record))
       .sort((left, right) => Date.parse(right.updatedAtUtc) - Date.parse(left.updatedAtUtc));
     const latest = records[0];
-    if (!latest) return { found: false };
-    return {
+    if (!latest) {
+      operation.succeed("未发现可用的 Unity Bridge Gateway", { found: false });
+      return { found: false };
+    }
+    const result = {
       found: true,
       gatewayUrl: new URL(latest.gatewayUrl).origin,
       updatedAtUtc: latest.updatedAtUtc
-    };
-  } catch {
+    } as const;
+    operation.step("connect", "已找到 Unity Bridge Gateway", { found: true });
+    operation.succeed("Unity Bridge Gateway 发现完成", { found: true });
+    return result;
+  } catch (error) {
+    if (isMissingDirectory(error)) {
+      operation.succeed("未发现 Unity Bridge Gateway 目录", { found: false });
+      return { found: false };
+    }
+    operation.fail(error, "Unity Bridge Gateway 发现失败");
     return { found: false };
   }
+}
+
+function isMissingDirectory(error: unknown): boolean {
+  return Boolean(error) && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 interface ValidGatewayRecord {

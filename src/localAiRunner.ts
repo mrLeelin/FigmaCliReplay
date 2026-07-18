@@ -7,7 +7,9 @@ import type { Readable } from "node:stream";
 import { claudeCodeCliProvider } from "./ai/claudeCodeCliProvider.js";
 import { codexCliProvider } from "./ai/codexCliProvider.js";
 import { LOCAL_DIR, PLUGIN_ROOT } from "./config.js";
-import { logInfo } from "./logger.js";
+import { getLoggingRuntime } from "./logging/loggingRuntime.js";
+import type { OperationScope } from "./logging/operationScope.js";
+import { logInfo } from "./utils/logger.js";
 import { isRecord } from "./utils.js";
 import { UnityProjectRegistry, type UnityProjectStatus } from "./unityProjectRegistry.js";
 
@@ -21,6 +23,7 @@ interface AiRun {
   executionLog: string; status: RunStatus; child?: ChildProcess; pid?: number; cliSessionId?: string;
   taskKind: string; taskJson: string; unityProject?: Readonly<UnityProjectStatus>; startedAt: string; endedAt?: string; exitCode?: number | null; output: OutputEntry[]; nextSequence: number; finalised: boolean;
   totalTimeout?: NodeJS.Timeout; idleTimeout?: NodeJS.Timeout;
+  operation?: OperationScope; outputBytes: number;
 }
 
 const CONFIG_PATH = path.join(LOCAL_DIR, "ai-runner.json");
@@ -28,6 +31,7 @@ const RUNS_ROOT = path.join(PLUGIN_ROOT, ".tmp", "ai-runs");
 const runs = new Map<string, AiRun>();
 const MaxOutputEntries = 800;
 const SupportedPromptTemplates = new Set(["unity", "componentVariants"]);
+const aiLogger = getLoggingRuntime().logger("local-ai-runner");
 
 export function localAiRunnerStatus() {
   const config = readConfig();
@@ -86,8 +90,16 @@ function startLocalAiTask(
   fs.writeFileSync(taskJson, `${JSON.stringify({ schemaVersion: 1, taskKind, unityProject: unityProject || null }, null, 2)}\n`, "utf8");
   const run: AiRun = {
     runId, capabilityToken: randomBytes(32).toString("base64url"), sessionId, config, runDir, taskFile, taskJson, unityProject,
-    executionLog: path.join(runDir, "execution.log"), status: "starting", taskKind, startedAt: new Date().toISOString(), output: [], nextSequence: 1, finalised: false,
+    executionLog: path.join(runDir, "execution.log"), status: "starting", taskKind, startedAt: new Date().toISOString(), output: [], nextSequence: 1, finalised: false, outputBytes: 0,
   };
+  run.operation = aiLogger.startOperation("ai.run", "开始本地 AI 任务", {
+    operationId: runId,
+    data: { taskKind, runner: config.runner }
+  });
+  run.operation.step("provider-probe", "本地 AI Provider 已确认可用", {
+    runner: config.runner,
+    command: path.basename(config.command)
+  });
   runs.set(runId, run);
   startTurn(run, taskInstruction(run), false);
   logInfo("Local AI task started", { runId, taskKind, runner: config.runner });
@@ -111,6 +123,11 @@ export function followupAiRun(runId: string, capabilityToken: string, payload: u
   if (run.status !== "completed" && run.status !== "failed") throw new Error("follow-up is available only after the current turn stops");
   if (!run.cliSessionId) throw new Error("the current CLI did not return a resumable session id");
   run.status = "starting"; run.finalised = false; run.endedAt = undefined; run.exitCode = undefined;
+  run.outputBytes = 0;
+  run.operation = aiLogger.startOperation("ai.followup", "开始本地 AI 后续任务", {
+    operationId: run.runId,
+    data: { taskKind: run.taskKind, runner: run.config.runner }
+  });
   startTurn(run, prompt, true);
   return { ok: true, runId, status: run.status };
 }
@@ -136,6 +153,12 @@ function startTurn(run: AiRun, prompt: string, resume: boolean) {
   const args = commandArgs(run, prompt, resume);
   const launched = spawnCli(command, args, run.config.workspace);
   run.child = launched; run.pid = launched.pid; run.status = "running";
+  run.operation?.step("cli-spawn", "本地 AI CLI 进程已启动", {
+    command: path.basename(command),
+    argumentCount: args.length,
+    pid: launched.pid,
+    resume
+  });
   appendOutput(run, "system", `${resume ? "Follow-up" : "Initial"} turn started with ${run.config.runner}.`);
   scheduleRunTimeouts(run);
   wireOutput(run, launched.stdout, "stdout"); wireOutput(run, launched.stderr, "stderr");
@@ -267,6 +290,7 @@ function findSessionId(value: unknown): string | undefined {
 }
 function appendOutput(run: AiRun, stream: OutputEntry["stream"], text: string) {
   const entry = { sequence: run.nextSequence++, at: new Date().toISOString(), stream, text };
+  run.outputBytes += Buffer.byteLength(text, "utf8");
   run.output.push(entry); if (run.output.length > MaxOutputEntries) run.output.splice(0, run.output.length - MaxOutputEntries);
   fs.appendFileSync(run.executionLog, `${entry.at} [${stream}] ${text}\n`, "utf8");
   if (!run.finalised && (run.status === "starting" || run.status === "running")) resetIdleTimeout(run);
@@ -276,6 +300,21 @@ function finalise(run: AiRun, status: RunStatus, code: number | null) {
   if (run.finalised) return;
   clearRunTimeouts(run);
   run.finalised = true; run.status = status; run.exitCode = code; run.endedAt = new Date().toISOString(); run.child = undefined;
+  run.operation?.step("cli-exit", "本地 AI CLI 进程已退出", {
+    exitCode: code,
+    outputBytes: run.outputBytes,
+    status
+  });
+  if (status === "completed") {
+    run.operation?.succeed("本地 AI 任务执行完成", { exitCode: code, outputBytes: run.outputBytes });
+  } else if (status === "cancelled") {
+    run.operation?.cancel("本地 AI 任务已取消", { outputBytes: run.outputBytes });
+  } else {
+    run.operation?.fail(new Error(`local AI task ${status}`), "本地 AI 任务执行失败", {
+      exitCode: code,
+      outputBytes: run.outputBytes
+    });
+  }
   appendOutput(run, "system", `Turn ${status}${code === null ? "" : ` (exit ${code})`}.`);
 }
 function finishTerminalStreamEvent(run: AiRun, status: "completed" | "failed") {
@@ -300,6 +339,7 @@ function resetIdleTimeout(run: AiRun) {
 function failTimedOutRun(run: AiRun, reason: string) {
   if (run.finalised || (run.status !== "starting" && run.status !== "running")) return;
   appendOutput(run, "system", reason);
+  run.operation?.step("timeout", "本地 AI 任务超时", { reason }, "warn");
   terminateChild(run);
   finalise(run, "failed", null);
 }
@@ -313,6 +353,7 @@ function authorisedRun(runId: string, token: string) { const run = runs.get(runI
 function stopRun(run: AiRun, reason: string) {
   if (!run.child || (run.status !== "starting" && run.status !== "running")) return false;
   appendOutput(run, "system", reason);
+  run.operation?.step("cancel", "本地 AI 任务收到取消请求", { reason }, "warn");
   terminateChild(run);
   finalise(run, "cancelled", null);
   return true;

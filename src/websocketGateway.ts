@@ -2,7 +2,7 @@ import { Server as HttpServer } from "node:http";
 
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { logInfo, logWarn } from "./logger.js";
+import { logInfo, logWarn } from "./utils/logger.js";
 import type { RelayJob, PluginGatewayStatus, PluginSessionStatus, PluginSessionTarget } from "./types.js";
 import { isAllowedLocalRequest, isRecord } from "./utils.js";
 
@@ -27,12 +27,12 @@ export class WebSocketGateway {
   private readonly sessions = new Map<WebSocket, PluginSession>();
   private activeSocket?: WebSocket;
   private readonly heartbeatTimer: NodeJS.Timeout;
-  private onJobReceived?: (requestId: string) => void;
+  private onJobReceived?: (requestId: string, operationId?: string) => void;
   private onJobUndelivered?: (requestId: string, reason: string) => void;
   private onSessionDisconnected?: (sessionId: string, reason: string) => void;
   private readonly ackTimers = new Map<string, NodeJS.Timeout>();
 
-  constructor() {
+  constructor(private readonly ingestLogEvents?: (events: unknown[]) => unknown) {
     this.server = new WebSocketServer({ noServer: true });
     this.server.on("connection", (socket) => this.attach(socket));
     this.heartbeatTimer = setInterval(() => this.pruneStaleSession(), 5_000);
@@ -67,7 +67,7 @@ export class WebSocketGateway {
     this.activeSocket = undefined;
   }
 
-  onReceived(callback: (requestId: string) => void): void {
+  onReceived(callback: (requestId: string, operationId?: string) => void): void {
     this.onJobReceived = callback;
   }
 
@@ -91,6 +91,7 @@ export class WebSocketGateway {
       type: "command.request",
       id: job.requestId,
       requestId: job.requestId,
+      operationId: job.operationId,
       job: job.job
     };
     session.pending.add(job.requestId);
@@ -216,12 +217,36 @@ export class WebSocketGateway {
       });
       return;
     }
+    if (type === "log.events") {
+      const session = this.sessions.get(socket);
+      if (!session?.authenticated || !Array.isArray(message.events)) {
+        logWarn("WebSocket log batch rejected", {
+          authenticated: Boolean(session?.authenticated),
+          hasEvents: Array.isArray(message.events)
+        });
+        return;
+      }
+      try {
+        this.ingestLogEvents?.(message.events);
+        logInfo("WebSocket log batch ingested", {
+          sessionId: session.sessionId,
+          count: message.events.length
+        });
+      } catch (error) {
+        logWarn("WebSocket log batch rejected", {
+          sessionId: session.sessionId,
+          count: message.events.length,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return;
+    }
     if (type === "command.received") {
       const id = typeof message.id === "string" ? message.id : typeof message.requestId === "string" ? message.requestId : "";
       const session = this.sessions.get(socket);
       if (id && session?.pending.has(id)) {
         this.clearAckTimer(id);
-        this.onJobReceived?.(id);
+        this.onJobReceived?.(id, typeof message.operationId === "string" ? message.operationId : undefined);
         logInfo("Figma plugin acknowledged job", {
           requestId: id,
           sessionId: session.sessionId,

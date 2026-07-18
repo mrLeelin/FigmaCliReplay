@@ -33,17 +33,18 @@ from figma_mcp_relay_server import (
     create_server,
     redact_large_relay_payload,
 )
+from python_logger import PythonLogger
 
 
 SERVER_NAME = "figma-mcp-relay"
 SERVER_VERSION = "0.1.0"
 DEFAULT_RELAY_URL = f"http://{DEFAULT_PUBLIC_HOST}:{DEFAULT_PORT}"
 DEFAULT_MCP_PATH = "/mcp"
+LOGGER = PythonLogger("companion")
 
 
 def log(message: str) -> None:
-    sys.stderr.write(f"[{SERVER_NAME}] {message}\n")
-    sys.stderr.flush()
+    LOGGER.info(message, operation_name="python.companion")
 
 
 def normalize_url(value: str) -> str:
@@ -630,6 +631,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    global LOGGER
     args = parse_args()
     log_handle = None
     if args.log_file:
@@ -638,21 +640,27 @@ def main() -> int:
         log_handle = log_path.open("a", encoding="utf-8", buffering=1)
         sys.stdout = log_handle
         sys.stderr = log_handle
-    if args.transport == "http":
-        try:
-            return serve_http_companion(args)
-        finally:
-            if log_handle:
-                log_handle.close()
-
-    relay = RuntimeRelay(
-        relay_url=normalize_url(args.relay_url),
-        bind_ipv6=args.bind_ipv6,
-        verbose=args.verbose,
-    )
-    server = FigmaEditMcpServer(relay)
+        LOGGER = PythonLogger("companion", stream=log_handle)
+    operation = LOGGER.start_operation("python.companion.main", data={"transport": args.transport})
     try:
-        return serve_stdio(server)
+        if args.transport == "http":
+            result = serve_http_companion(args)
+        else:
+            relay = RuntimeRelay(
+                relay_url=normalize_url(args.relay_url),
+                bind_ipv6=args.bind_ipv6,
+                verbose=args.verbose,
+            )
+            server = FigmaEditMcpServer(relay)
+            result = serve_stdio(server)
+        operation.succeed("Companion stopped", {"exitCode": result})
+        return result
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            operation.cancel("Companion interrupted")
+        else:
+            operation.fail(exc, "Companion failed")
+        raise
     finally:
         if log_handle:
             log_handle.close()

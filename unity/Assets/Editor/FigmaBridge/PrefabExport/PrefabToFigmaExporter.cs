@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
-using ZLog = UnityEngine.Debug;
+using ZLog = MagicWarrior.Editor.FigmaBridge.BridgeLogger;
 
 namespace MagicWarrior.Editor.FigmaBridge
 {

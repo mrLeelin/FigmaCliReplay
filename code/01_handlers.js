@@ -342,11 +342,11 @@ async function handleQueryCleanupSnapshot(message) {
 /** 读取当前选区摘要，用于 UI 生成可复制的 AI 提示词，并提供根节点校验所需的父级信息。 */
 async function handleQueryAiPromptSelection(message) {
   // DIAG: 确认函数被调用
-  console.log("[FigmaMcpRelay] handleQueryAiPromptSelection 被调用, requestId=" + (message.requestId || "-") + ", time=" + Date.now());
+  pluginLogger.debug("开始读取 AI 提示词选区", { requestId: message.requestId || "" });
   try {
-    console.log("[FigmaMcpRelay] 读取 figma.currentPage.selection... time=" + Date.now());
+    pluginLogger.debug("读取 figma.currentPage.selection");
     const selection = figma.currentPage.selection || [];
-    console.log("[FigmaMcpRelay] selection.length=" + selection.length + ", time=" + Date.now());
+    pluginLogger.debug("Figma 选区读取完成", { selectionCount: selection.length });
     const nodes = selection.map(function (node, index) {
       return {
         index: index + 1,
@@ -361,7 +361,7 @@ async function handleQueryAiPromptSelection(message) {
         height: Math.round(Number(node.height || 0))
       };
     });
-    console.log("[FigmaMcpRelay] nodes.length=" + nodes.length + ", 准备 postMessage 回 UI, time=" + Date.now());
+    pluginLogger.debug("准备向 UI 返回 AI 提示词选区", { nodeCount: nodes.length });
     figma.ui.postMessage({
       type: "QUERY_AI_PROMPT_SELECTION_RESULT",
       requestId: message.requestId,
@@ -376,9 +376,9 @@ async function handleQueryAiPromptSelection(message) {
         nodes: nodes
       }
     });
-    console.log("[FigmaMcpRelay] QUERY_AI_PROMPT_SELECTION_RESULT 已发送, time=" + Date.now());
+    pluginLogger.info("AI 提示词选区结果已发送", { requestId: message.requestId || "" });
   } catch (error) {
-    console.error("[FigmaMcpRelay] handleQueryAiPromptSelection 异常:", error);
+    pluginLogger.error("读取 AI 提示词选区失败", error, { requestId: message.requestId || "" });
     figma.ui.postMessage({
       type: "QUERY_AI_PROMPT_SELECTION_RESULT",
       requestId: message.requestId,

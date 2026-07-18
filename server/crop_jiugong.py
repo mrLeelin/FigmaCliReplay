@@ -10,11 +10,16 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from python_logger import PythonLogger
+
 try:
     from PIL import Image
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
+
+
+LOGGER = PythonLogger("crop-jiugong")
 
 
 def resolve_unity_project_root(payload: Dict[str, Any]) -> Path:
@@ -37,6 +42,26 @@ def resolve_unity_project_root(payload: Dict[str, Any]) -> Path:
 
 
 def crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Log and execute one nine-slice crop operation."""
+    operation = LOGGER.start_operation(
+        "python.crop-jiugong",
+        operation_id=str(payload.get("operationId") or ""),
+        data={"imageCount": len(payload.get("images") or []) if isinstance(payload.get("images"), list) else 0},
+    )
+    try:
+        operation.step("validate", "Validate nine-slice request")
+        result = _crop_jiugong_images(payload)
+        if result.get("ok"):
+            operation.succeed("Nine-slice crop completed", {"importedCount": result.get("importedCount", 0)})
+        else:
+            operation.fail(RuntimeError(str(result.get("error") or "Nine-slice crop failed")), "Nine-slice crop failed")
+        return result
+    except BaseException as exc:
+        operation.fail(exc, "Nine-slice crop crashed")
+        raise
+
+
+def _crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
     """处理 Figma 九宫导出请求，裁切图片并写入 Unity Sprite meta。"""
     try:
         unity_project_root = resolve_unity_project_root(payload)

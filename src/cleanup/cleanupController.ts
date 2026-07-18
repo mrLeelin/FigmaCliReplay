@@ -1,5 +1,7 @@
 import { computeCleanupSnapshotHash, validateCleanupPlanV2 } from "../cleanupPlan.js";
 import type { PlanningProviderId } from "../ai/planningProvider.js";
+import { getLoggingRuntime } from "../logging/loggingRuntime.js";
+import type { OperationScope } from "../logging/operationScope.js";
 import { CleanupRunStore, type CleanupRunRecord } from "./cleanupRunStore.js";
 import {
   CleanupError,
@@ -34,6 +36,8 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
   const store = dependencies.store || new CleanupRunStore();
   const planningTasks = new Map<string, Promise<void>>();
   const executionTasks = new Map<string, Promise<void>>();
+  const operations = new Map<string, OperationScope>();
+  const logger = getLoggingRuntime().logger("cleanup-controller");
 
   function progress(run: CleanupRunRecord, value: CleanupProgress): void {
     if (value.state === "validating" && (run.state === "planning" || run.state === "validating")) {
@@ -41,6 +45,15 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
     }
     if (value.state === "verifying" && (run.state === "applying" || run.state === "verifying")) {
       transition(run, ["applying", "verifying"], "verifying");
+      operations.get(run.runId)?.step("verification", "开始验证 Cleanup 执行结果", {
+        completed: value.completed,
+        total: value.total
+      });
+    }
+    if (value.state === "rolled_back" || value.state === "recovery_required") {
+      operations.get(run.runId)?.step("rollback", "Cleanup 执行进入回滚或恢复状态", {
+        state: value.state
+      }, "warn");
     }
     store.addOutput(run, "system", value.message);
   }
@@ -51,6 +64,12 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
     assertCleanupSnapshotHasNoRecoveryNodes(request?.snapshot);
     const snapshotHash = computeCleanupSnapshotHash(request?.snapshot);
     const run = store.create({ sessionId, providerId, snapshot: request.snapshot, snapshotHash });
+    const operation = logger.startOperation("cleanup.run", "开始 Cleanup 操作", {
+      operationId: run.runId,
+      data: { providerId, rootNodeId: run.rootNodeId }
+    });
+    operations.set(run.runId, operation);
+    operation.step("planning", "开始生成 Cleanup 计划", { providerId });
     store.addOutput(run, "system", `Cleanup planning started with ${providerId}.`);
     const task = Promise.resolve()
       .then(() => dependencies.planner.plan({
@@ -68,6 +87,9 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
         run.planSummary = result.summary;
         run.planReady = true;
         transition(run, ["validating"], "review");
+        operation.step("planning", "Cleanup 计划生成并校验完成", {
+          operationCount: result.summary.operationCount
+        });
         store.addOutput(run, "system", `Cleanup plan validated: ${result.summary.operationCount} operations.`);
       })
       .catch((error) => {
@@ -75,6 +97,8 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
         run.planReady = false;
         store.addOutput(run, "stderr", error instanceof Error ? error.message : String(error));
         store.finish(run, "failed");
+        operation.fail(error, "Cleanup 计划生成失败");
+        operations.delete(run.runId);
       });
     planningTasks.set(run.runId, task);
     return { ok: true, runId: run.runId, capabilityToken: run.capabilityToken, providerId, state: run.state };
@@ -94,7 +118,11 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
       throw new CleanupError("SNAPSHOT_CHANGED", "the approved snapshot hash does not match the planned snapshot");
     }
     run.abortController = new AbortController();
+    operations.get(run.runId)?.step("approval", "Cleanup 计划已获得明确批准", {
+      snapshotHash: run.snapshotHash
+    });
     transition(run, ["review"], "applying");
+    operations.get(run.runId)?.step("execution", "开始执行 Cleanup 计划");
     store.addOutput(run, "system", "Cleanup apply started from the approved exact plan.");
     const task = Promise.resolve().then(() => dependencies.executor.execute({
       runId: run.runId,
@@ -106,9 +134,21 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
     })).then((result) => {
       store.addOutput(run, "system", `Cleanup execution ended as ${result.state}.`);
       store.finish(run, result.state);
+      const operation = operations.get(run.runId);
+      if (result.state === "succeeded") {
+        operation?.succeed("Cleanup 操作执行成功", { state: result.state });
+      } else {
+        operation?.step("rollback", "Cleanup 操作未成功完成", { state: result.state }, "warn");
+        operation?.fail(new Error(`cleanup ended as ${result.state}`), "Cleanup 操作执行失败", {
+          state: result.state
+        });
+      }
+      operations.delete(run.runId);
     }).catch((error) => {
       store.addOutput(run, "stderr", error instanceof Error ? error.message : String(error));
       store.finish(run, "failed");
+      operations.get(run.runId)?.fail(error, "Cleanup 执行异常");
+      operations.delete(run.runId);
     });
     executionTasks.set(run.runId, task);
     return view(run, 0);
@@ -119,12 +159,15 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
     if (isCleanupTerminalState(run.state)) return view(run, 0);
     run.cancelRequested = true;
     run.abortController.abort();
+    operations.get(run.runId)?.step("cancel", "收到 Cleanup 取消请求", undefined, "warn");
     store.addOutput(run, "system", "Cleanup cancellation requested.");
     if (run.state === "planning" || run.state === "validating" || run.state === "review") {
       run.planReady = false;
       run.plan = undefined;
       run.planSummary = undefined;
       store.finish(run, "cancelled");
+      operations.get(run.runId)?.cancel("Cleanup 操作已取消");
+      operations.delete(run.runId);
     }
     return view(run, 0);
   }

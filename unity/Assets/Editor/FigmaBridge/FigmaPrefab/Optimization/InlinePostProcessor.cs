@@ -1,7 +1,7 @@
 using TMPro;
 using UnityEditor;
 using UnityEngine;
-using ZLog = UnityEngine.Debug;
+using ZLog = MagicWarrior.Editor.FigmaBridge.BridgeLogger;
 using UnityEngine.UI;
 
 namespace MagicWarrior.Editor.FigmaPrefab.Optimization

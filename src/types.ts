@@ -2,6 +2,7 @@ export type JsonObject = Record<string, unknown>;
 
 export interface RelayJob {
   requestId: string;
+  operationId: string;
   job: JsonObject;
   assetPaths: Map<string, string>;
   targetSessionId?: string;
@@ -41,6 +42,7 @@ export interface PluginCommand {
   type: "command.request";
   id: string;
   requestId: string;
+  operationId: string;
   job: JsonObject;
 }
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import argparse
 import base64
+import importlib.util
 import subprocess
 import sys
 import urllib.error
@@ -26,6 +27,24 @@ DEFAULT_MCP_URL = f"{DEFAULT_RELAY_URL}/mcp"
 DEFAULT_MCP_HTTP_TIMEOUT = 300.0
 RELAY_ROOT = Path(__file__).resolve().parent.parent
 MCP_SERVER_SCRIPT = RELAY_ROOT / "server" / "figma_mcp_companion.py"
+SERVER_DIR = RELAY_ROOT / "server"
+
+
+def _load_python_logger_class() -> Any:
+    """Load the shared logger without mutating the caller's import path."""
+    logger_path = SERVER_DIR / "python_logger.py"
+    spec = importlib.util.spec_from_file_location("_figma_relay_python_logger", logger_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load PythonLogger from {logger_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.PythonLogger
+
+
+PythonLogger = _load_python_logger_class()
+
+
+LOGGER = PythonLogger("cli-client")
 
 
 class McpToolError(RuntimeError):
@@ -555,11 +574,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _main(operation: Any) -> int:
     args = parse_args()
     relay_url = args.relay_url.rstrip("/")
     mcp_url = args.mcp_url.rstrip("/")
     if args.health:
+        operation.step("health", "Query MCP companion health")
         print(json.dumps({
             "status": "ok",
             "relayUrl": relay_url,
@@ -568,6 +588,7 @@ def main() -> int:
         }, ensure_ascii=False, indent=2))
         return 0
     if args.get_selection:
+        operation.step("selection", "Query current Figma selection")
         result_payload = query_selection(
             relay_url=relay_url,
             timeout=min(args.timeout, 15.0),
@@ -584,8 +605,10 @@ def main() -> int:
 
     manifest_path = args.manifest.resolve()
     source_root = args.source_root.resolve() if args.source_root else manifest_path.parent
-    request_id = str(uuid.uuid4())
+    request_id = operation.operation_id
+    operation.step("manifest", "Build PSD import job", {"manifest": manifest_path.name})
     job, asset_paths = build_psd_import_job(manifest_path, source_root, args.job_name, args.target_node_id)
+    operation.step("submit", "Submit PSD import job", {"assetCount": len(asset_paths)})
     result_payload = submit_job(
         job,
         asset_paths,
@@ -609,6 +632,20 @@ def main() -> int:
         "result": result_payload.get("result", {}),
     }, ensure_ascii=False, indent=2))
     return 0
+
+
+def main() -> int:
+    operation = LOGGER.start_operation("python.cli-command")
+    try:
+        result = _main(operation)
+        operation.succeed("Python CLI command completed", {"exitCode": result})
+        return result
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            operation.cancel("Python CLI command interrupted")
+        else:
+            operation.fail(exc, "Python CLI command failed")
+        raise
 
 
 if __name__ == "__main__":

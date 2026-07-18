@@ -4,7 +4,9 @@ import path from "node:path";
 
 import type { GatewayConfig } from "./config.js";
 import { PLUGIN_ROOT, publicUrl } from "./config.js";
-import { logInfo, logWarn } from "./logger.js";
+import { getLoggingRuntime } from "./logging/loggingRuntime.js";
+import type { OperationScope } from "./logging/operationScope.js";
+import { logInfo, logWarn } from "./utils/logger.js";
 import { isRecord } from "./utils.js";
 
 type PsdImportMode = "initial" | "incremental-preview" | "incremental-apply";
@@ -40,6 +42,10 @@ export interface PsdImportTask {
 }
 
 const tasks = new Map<string, PsdImportTask>();
+const taskOperations = new Map<string, OperationScope>();
+const logging = getLoggingRuntime();
+const taskLogger = logging.logger("psd-import-task");
+const PYTHON_LOG_MARKER = "FIGMA_RELAY_LOG ";
 
 export function startPsdImportTask(config: GatewayConfig, payload: unknown): PsdImportTask {
   if (!isRecord(payload)) {
@@ -101,6 +107,7 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
     logs: []
   };
   tasks.set(taskId, task);
+  startTaskOperation(task, "psd.import", "开始 PSD 导入任务");
   void runPsdImportTask(config, task, { reuseExportArtifacts: false });
   return serializePsdImportTask(task);
 }
@@ -128,6 +135,7 @@ export function applyPsdImportTask(config: GatewayConfig, taskId: string, payloa
   task.percent = 0;
   task.error = undefined;
   task.updatedAt = Date.now();
+  startTaskOperation(task, "psd.incremental-apply", "开始 PSD 增量应用任务");
   void runPsdImportTask(config, task, { reuseExportArtifacts: true });
   return serializePsdImportTask(task);
 }
@@ -194,6 +202,9 @@ async function runPsdImportTask(
     await runPythonScript(task, submitScript, submitArgs);
 
     const result = readResultSummary(task.resultPath);
+    taskOperations.get(task.taskId)?.step("result", "已读取 PSD 导入结果", {
+      mode: task.mode
+    });
     task.summary = result;
     if (task.mode === "incremental-preview") {
       if (!isRecord(result) || !stringValue(result.baselineFingerprint)) {
@@ -206,6 +217,8 @@ async function runPsdImportTask(
       task.percent = 100;
       task.updatedAt = Date.now();
       task.logs.push(formatTaskLog(task, "PSD 增量差异已生成，等待确认"));
+      taskOperations.get(task.taskId)?.succeed("PSD 增量预览已生成", { status: task.status });
+      taskOperations.delete(task.taskId);
       return;
     }
     if (task.mode === "incremental-apply" && (!isRecord(result) || result.status !== "applied")) {
@@ -216,6 +229,8 @@ async function runPsdImportTask(
     task.completedAt = Date.now();
     task.updatedAt = task.completedAt;
     logInfo("PSD import task completed", { taskId: task.taskId, fileName: task.fileName });
+    taskOperations.get(task.taskId)?.succeed("PSD 导入任务完成", { mode: task.mode });
+    taskOperations.delete(task.taskId);
   } catch (error) {
     task.status = "error";
     task.stage = "error";
@@ -225,6 +240,8 @@ async function runPsdImportTask(
     task.updatedAt = task.completedAt;
     task.logs.push(formatTaskLog(task, `错误：${task.error}`));
     logWarn("PSD import task failed", { taskId: task.taskId, error: task.error });
+    taskOperations.get(task.taskId)?.fail(error, "PSD 导入任务失败");
+    taskOperations.delete(task.taskId);
   }
 }
 
@@ -242,6 +259,10 @@ function setTaskStage(task: PsdImportTask, stage: string, percent: number, log: 
   task.percent = percent;
   task.updatedAt = Date.now();
   task.logs.push(formatTaskLog(task, log));
+  const step = stage.includes("export")
+    ? "export"
+    : stage.includes("submit") ? "submit" : stage.includes("queue") ? "queued" : stage;
+  taskOperations.get(task.taskId)?.step(step, log, { stage, percent });
   logInfo("PSD import task stage", { taskId: task.taskId, stage, percent });
 }
 
@@ -256,7 +277,14 @@ function runPythonScript(task: PsdImportTask, scriptPath: string, args: string[]
   return new Promise((resolve, reject) => {
     const child = spawn(command.command, [...command.args, scriptPath, ...args], {
       cwd: PLUGIN_ROOT,
-      windowsHide: true
+      windowsHide: true,
+      env: {
+        ...process.env,
+        FIGMA_RELAY_OPERATION_ID: task.taskId,
+        FIGMA_RELAY_OPERATION_NAME: "psd.import",
+        PYTHONUTF8: "1",
+        PYTHONIOENCODING: "utf-8"
+      }
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -267,7 +295,7 @@ function runPythonScript(task: PsdImportTask, scriptPath: string, args: string[]
       const out = Buffer.concat(stdout).toString("utf8").trim();
       const err = Buffer.concat(stderr).toString("utf8").trim();
       appendCommandOutput(task, out);
-      appendCommandOutput(task, err);
+      appendPythonStderr(task, err);
       if (code === 0) {
         resolve();
       } else {
@@ -275,6 +303,37 @@ function runPythonScript(task: PsdImportTask, scriptPath: string, args: string[]
       }
     });
   });
+}
+
+function startTaskOperation(task: PsdImportTask, name: string, message: string): void {
+  const operation = taskLogger.startOperation(name, message, {
+    operationId: task.taskId,
+    data: { mode: task.mode, fileName: task.fileName }
+  });
+  operation.step("queued", "PSD 任务已进入执行队列", { mode: task.mode });
+  taskOperations.set(task.taskId, operation);
+}
+
+function appendPythonStderr(task: PsdImportTask, text: string): void {
+  if (!text) return;
+  for (const line of text.split(/\r?\n/).filter(Boolean)) {
+    if (line.startsWith(PYTHON_LOG_MARKER)) {
+      try {
+        logging.store.ingest([JSON.parse(line.slice(PYTHON_LOG_MARKER.length))]);
+        continue;
+      } catch (error) {
+        taskOperations.get(task.taskId)?.step("python.stderr", "Python 结构化日志解析失败", {
+          error: error instanceof Error ? error.message : String(error)
+        }, "warn");
+      }
+    } else {
+      taskOperations.get(task.taskId)?.step("python.stderr", "Python 进程输出了非结构化 stderr", {
+        chars: line.length,
+        summary: trimText(line, 500)
+      }, "warn");
+    }
+  }
+  appendCommandOutput(task, text);
 }
 
 function appendCommandOutput(task: PsdImportTask, text: string): void {
