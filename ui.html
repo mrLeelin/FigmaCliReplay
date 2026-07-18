@@ -777,8 +777,8 @@
   <div class="tabs" role="tablist">
     <button class="tab-button active" data-tab="sync-unity-tab" type="button">同步Unity</button>
     <button class="tab-button" data-tab="nine-slice-tab" type="button">切九宫</button>
-    <button class="tab-button" data-tab="ai-prompt-tab" type="button">AI 工具</button>
-    <button class="tab-button" data-tab="ai-execution-tab" type="button">任务详情</button>
+    <button class="tab-button" data-tab="ai-prompt-tab" type="button">AI 提示词</button>
+    <button class="tab-button" data-tab="ai-execution-tab" type="button">AI 执行</button>
     <button class="tab-button" id="settingsTabBtn" data-tab="settings-tab" type="button" aria-label="设置">设置</button>
   </div>
 
@@ -986,7 +986,7 @@
   <!-- ========== AI 提示词 ========== -->
   <div class="tab-page" id="ai-prompt-tab">
     <div class="section" id="ai-prompt-section">
-      <h2>AI 工具</h2>
+      <h2>AI 提示词</h2>
       <div class="field">
         <label>选择模板</label>
         <div class="template-grid" id="templateGrid">
@@ -1037,15 +1037,15 @@
       <div class="row" id="aiPromptManualActions">
         <button id="generateAiPromptBtn">生成提示词</button>
         <button id="copyAiPromptBtn" class="secondary">复制提示词</button>
+        <button id="runAiCleanupBtn" class="export-btn">AI 自动整理节点</button>
       </div>
-      <button id="runAiCleanupBtn" class="export-btn">AI 自动整理节点</button>
       <div class="mcp-config-panel expanded" id="aiRunnerPanel">
         <div class="mcp-config-head"><div class="mcp-title">AI</div></div>
         <div class="mcp-config-body">
           <div class="control-grid mcp-config-controls">
-            <div class="control-card" id="cleanupProviderField"><label for="cleanupProviderSelect">AI</label><select id="cleanupProviderSelect"><option value="codex">Codex</option><option value="claude-code">Claude Code</option></select></div>
+          <div class="control-card" id="cleanupProviderField"><label for="cleanupProviderSelect">AI</label><select id="cleanupProviderSelect"><option value="codex">Codex CLI</option><option value="claude-code">Claude Code</option></select></div>
+          <div class="control-card" hidden><label for="aiRunnerSelect" hidden>AI runner</label><select id="aiRunnerSelect" hidden><option value="codex">Codex CLI</option><option value="claude">Claude Code</option></select></div>
           </div>
-          <select id="aiRunnerSelect" hidden><option value="codex">Codex CLI</option><option value="claude">Claude Code</option></select>
           <div class="status-box" id="ai-runner-status" hidden>等待读取本机 AI 设置...</div>
           <div class="status-box" id="cleanup-provider-status">正在检查可用 AI...</div>
         </div>
@@ -1062,10 +1062,26 @@
   <!-- ========== AI 执行中心 ========== -->
   <div class="tab-page" id="ai-execution-tab">
     <div class="section" id="ai-execution-section">
-      <h2>任务详情</h2>
+      <h2>AI 执行</h2>
       <div class="folder-box ai-execution-meta" id="aiExecutionMeta">当前任务：未启动</div>
       <div class="status-box" id="ai-execution-status">选择模板和节点并点击对应的 AI 操作后，任务会在这里执行。</div>
       <div class="status-box" id="aiCleanupPlanPreview" style="display:none"></div>
+      <div class="status-box" id="aiCleanupSatisfaction" hidden>
+        <div id="aiCleanupSatisfactionStatus">层级整理已完成。确认满意后将自动打组并创建 ComponentSet 变体。</div>
+        <div class="button-row">
+          <button id="aiCleanupSatisfiedBtn" type="button">满意</button>
+          <button id="aiCleanupAdjustBtn" class="secondary" type="button">需要调整</button>
+        </div>
+      </div>
+      <div class="status-box" id="aiCleanupRecoveryActions" hidden>
+        <div id="aiCleanupRecoverySummary">检测到未处理的整理恢复备份。</div>
+        <div class="field"><label for="cleanupRecoveryBackupSelect">恢复备份</label><select id="cleanupRecoveryBackupSelect"></select></div>
+        <div class="button-row">
+          <button class="secondary" id="deferCleanupRecoveryBtn" type="button">暂不处理</button>
+          <button class="danger" id="deleteCleanupRecoveryBtn" type="button">删除备份</button>
+          <button id="restoreCleanupRecoveryBtn" type="button">恢复所选节点</button>
+        </div>
+      </div>
       <div class="status-box" id="aiImageHealth" style="display:none">图片体检：等待导出结果</div>
       <div class="log ai-execution-log" id="aiExecutionLog">等待 AI 任务...</div>
       <div class="field">
@@ -1077,19 +1093,6 @@
         <button id="aiExecutionStopBtn" class="export-btn danger" type="button" disabled>停止</button>
       </div>
     </div>
-  </div>
-
-  <div class="modal-backdrop" id="cleanupRunDialog" hidden>
-    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="cleanupRunDialogTitle">
-      <h2 id="cleanupRunDialogTitle">AI 整理节点</h2>
-      <div class="status-box" id="cleanupRunDialogStatus">正在读取所选节点...</div>
-      <div class="status-box" id="cleanupRunPlanPreview" style="display:none"></div>
-      <div class="button-row">
-        <button class="danger" id="cancelCleanupRunBtn" type="button" hidden>停止</button>
-        <button class="secondary" id="closeCleanupRunBtn" type="button" hidden>关闭</button>
-        <button id="confirmCleanupRunBtn" type="button" hidden disabled>确认整理</button>
-      </div>
-    </section>
   </div>
 
   <!-- ========== 底部日志面板 ========== -->
@@ -1127,13 +1130,6 @@
   <div class="modal-backdrop" id="psdIncrementalDialog" hidden>
     <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="psdIncrementalDialogTitle">
       <h2 id="psdIncrementalDialogTitle">确认 PSD 增量更新</h2>
-    const logSourceFilter = document.getElementById("logSourceFilter");
-    const logLevelFilter = document.getElementById("logLevelFilter");
-    const logOperationFilter = document.getElementById("logOperationFilter");
-    const logKeywordFilter = document.getElementById("logKeywordFilter");
-    const refreshLogsBtn = document.getElementById("refreshLogsBtn");
-    const downloadLogsBtn = document.getElementById("downloadLogsBtn");
-    const logViewerMeta = document.getElementById("logViewerMeta");
       <div id="psdIncrementalDialogSummary" class="status-box"></div>
       <details>
         <summary>查看受影响图层</summary>
@@ -1146,25 +1142,16 @@
     </section>
   </div>
 
-  <div class="modal-backdrop" id="cleanupRecoveryDialog" hidden>
-    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="cleanupRecoveryDialogTitle">
-      <h2 id="cleanupRecoveryDialogTitle">发现 AI 整理恢复备份</h2>
-      <div id="cleanupRecoveryDialogSummary" class="status-box"></div>
-      <div class="field">
-        <label for="cleanupRecoveryBackupSelect">恢复备份</label>
-        <select id="cleanupRecoveryBackupSelect"></select>
-      </div>
-      <div class="button-row">
-        <button class="secondary" id="deferCleanupRecoveryBtn" type="button">暂不处理</button>
-        <button class="danger" id="deleteCleanupRecoveryBtn" type="button">删除备份</button>
-        <button id="restoreCleanupRecoveryBtn" type="button">恢复所选节点</button>
-      </div>
-    </section>
-  </div>
-
   <script>
     // ─── DOM ───
     const logEl = document.getElementById("log");
+    const logSourceFilter = document.getElementById("logSourceFilter");
+    const logLevelFilter = document.getElementById("logLevelFilter");
+    const logOperationFilter = document.getElementById("logOperationFilter");
+    const logKeywordFilter = document.getElementById("logKeywordFilter");
+    const refreshLogsBtn = document.getElementById("refreshLogsBtn");
+    const downloadLogsBtn = document.getElementById("downloadLogsBtn");
+    const logViewerMeta = document.getElementById("logViewerMeta");
     const relayUrlInput = document.getElementById("relayUrl");
     const connectBtn = document.getElementById("connectBtn");
     const openServerBtn = document.getElementById("openServerBtn");
@@ -1219,9 +1206,6 @@
     const textStyleStatusEl = document.getElementById("text-style-status");
     const aiPromptTemplateSelect = document.getElementById("aiPromptTemplateSelect");
     const aiPromptPsdFileSection = document.getElementById("aiPromptPsdFileSection");
-    const aiPromptManualActions = document.getElementById("aiPromptManualActions");
-    const aiPromptSubAgentRow = document.getElementById("aiPromptSubAgentRow");
-    const aiPromptPreviewField = document.getElementById("aiPromptPreviewField");
     const aiPromptPsdDropZone = document.getElementById("aiPromptPsdDropZone");
     const psdWindowDropOverlay = document.getElementById("psdWindowDropOverlay");
     const psdIncrementalDialog = document.getElementById("psdIncrementalDialog");
@@ -1229,32 +1213,28 @@
     const psdIncrementalDialogDetails = document.getElementById("psdIncrementalDialogDetails");
     const cancelPsdIncrementalBtn = document.getElementById("cancelPsdIncrementalBtn");
     const confirmPsdIncrementalBtn = document.getElementById("confirmPsdIncrementalBtn");
-    const cleanupRecoveryDialog = document.getElementById("cleanupRecoveryDialog");
-    const cleanupRecoveryDialogSummary = document.getElementById("cleanupRecoveryDialogSummary");
+    const aiPromptPsdFileBox = document.getElementById("aiPromptPsdFileBox");
+    const generateAiPromptBtn = document.getElementById("generateAiPromptBtn");
+    const copyAiPromptBtn = document.getElementById("copyAiPromptBtn");
+    const runAiCleanupBtn = document.getElementById("runAiCleanupBtn");
+    const aiRunnerSelect = document.getElementById("aiRunnerSelect");
+    const cleanupProviderField = document.getElementById("cleanupProviderField");
+    const cleanupProviderSelect = document.getElementById("cleanupProviderSelect");
+    const cleanupProviderStatusEl = document.getElementById("cleanup-provider-status");
+    const aiRunnerStatusEl = document.getElementById("ai-runner-status");
+    const aiExecutionMetaEl = document.getElementById("aiExecutionMeta");
+    const aiExecutionStatusEl = document.getElementById("ai-execution-status");
+    const aiCleanupPlanPreviewEl = document.getElementById("aiCleanupPlanPreview");
+    const aiCleanupSatisfaction = document.getElementById("aiCleanupSatisfaction");
+    const aiCleanupSatisfactionStatus = document.getElementById("aiCleanupSatisfactionStatus");
+    const aiCleanupSatisfiedBtn = document.getElementById("aiCleanupSatisfiedBtn");
+    const aiCleanupAdjustBtn = document.getElementById("aiCleanupAdjustBtn");
+    const aiCleanupRecoveryActions = document.getElementById("aiCleanupRecoveryActions");
+    const aiCleanupRecoverySummary = document.getElementById("aiCleanupRecoverySummary");
     const cleanupRecoveryBackupSelect = document.getElementById("cleanupRecoveryBackupSelect");
     const deferCleanupRecoveryBtn = document.getElementById("deferCleanupRecoveryBtn");
     const deleteCleanupRecoveryBtn = document.getElementById("deleteCleanupRecoveryBtn");
     const restoreCleanupRecoveryBtn = document.getElementById("restoreCleanupRecoveryBtn");
-    const cleanupRunDialog = document.getElementById("cleanupRunDialog");
-    const cleanupRunDialogStatus = document.getElementById("cleanupRunDialogStatus");
-    const cleanupRunPlanPreviewEl = document.getElementById("cleanupRunPlanPreview");
-    const confirmCleanupRunBtn = document.getElementById("confirmCleanupRunBtn");
-    const cancelCleanupRunBtn = document.getElementById("cancelCleanupRunBtn");
-    const closeCleanupRunBtn = document.getElementById("closeCleanupRunBtn");
-    const aiPromptPsdFileBox = document.getElementById("aiPromptPsdFileBox");
-    const generateAiPromptBtn = document.getElementById("generateAiPromptBtn");
-    let relayLogFlushTimer = null;
-    const copyAiPromptBtn = document.getElementById("copyAiPromptBtn");
-    const runAiCleanupBtn = document.getElementById("runAiCleanupBtn");
-    let relayOperations = {};
-    const aiRunnerSelect = document.getElementById("aiRunnerSelect");
-    const aiRunnerStatusEl = document.getElementById("ai-runner-status");
-    const cleanupProviderField = document.getElementById("cleanupProviderField");
-    const cleanupProviderSelect = document.getElementById("cleanupProviderSelect");
-    const cleanupProviderStatusEl = document.getElementById("cleanup-provider-status");
-    const aiExecutionMetaEl = document.getElementById("aiExecutionMeta");
-    const aiExecutionStatusEl = document.getElementById("ai-execution-status");
-    const aiCleanupPlanPreviewEl = document.getElementById("aiCleanupPlanPreview");
     const aiImageHealthEl = document.getElementById("aiImageHealth");
     const aiExecutionLogEl = document.getElementById("aiExecutionLog");
     const aiExecutionFollowupInput = document.getElementById("aiExecutionFollowupInput");
@@ -1294,8 +1274,10 @@
     let pollTimer = null;
     let relaySocket = null;
     let relaySocketHeartbeat = null;
+    let relayLogFlushTimer = null;
     let relaySessionId = "figma-relay-session-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     let relaySocketJobQueue = [];
+    let relayOperations = {};
     let mcpConfigRefreshInFlight = false;
     let executingRequestId = "";
     let executingJobType = "";
@@ -1474,15 +1456,18 @@
     let aiCleanupBusy = false;
     let aiCleanupPollTimer = null;
     let activeAiCleanupRun = null;
+    let activeAiCleanupOperation = null;
     let aiCleanupUnloadStopSent = false;
     let cleanupProviders = [];
     let cleanupProviderPreferenceLoaded = false;
     let cleanupPreferredProviderId = "";
     let aiProviderSyncing = false;
-    let aiProviderSyncGeneration = 0;
+    let aiProviderSyncPromise = null;
+    let aiProviderSyncTargetRunner = "";
     let cleanupRecoveryBackups = [];
     let cleanupRecoveryActionPending = false;
     let cleanupRecoveryDeferred = false;
+    let cleanupRecoveryOperation = null;
     let pendingFigmaKeyRequestId = "";
     let selectedAiPromptPsdFile = null;
     let aiPromptPsdDragDepth = 0;
@@ -1663,100 +1648,50 @@
       return "等待任务";
     }
 
-    function aiRunPhaseText(state) {
-      if (state === "capturing") return "正在读取节点";
-      if (state === "planning") return "AI 正在分析节点";
-      if (state === "validating") return "正在检查整理内容";
-      if (state === "review") return "请确认整理内容";
-      if (state === "applying") return "正在整理节点";
-      if (state === "verifying") return "正在检查整理结果";
-      if (state === "succeeded") return "整理完成";
-      if (state === "rolled_back") return "执行失败，已回滚";
-      if (state === "recovery_required") return "回滚不完整，需要恢复";
-      if (state === "cancelled") return "已取消";
-      if (state === "failed") return "整理失败";
+    function aiRunPhaseText(phase) {
+      if (phase === "capturing") return "采集层级快照";
+      if (phase === "planning") return "生成结构化计划";
+      if (phase === "validating") return "校验计划";
+      if (phase === "awaiting-approval") return "等待确认";
+      if (phase === "applying") return "应用层级整理";
+      if (phase === "verifying") return "验证整理结果";
       return "";
     }
 
-    function isCleanupTerminalState(state) {
-      return state === "succeeded" || state === "failed" || state === "cancelled"
-        || state === "rolled_back" || state === "recovery_required";
-    }
-
     function renderCleanupPlanPreview(run) {
-      var planSummary = run && run.planSummary;
-      var previewTargets = [aiCleanupPlanPreviewEl, cleanupRunPlanPreviewEl];
-      if (!run || run.template !== "cleanup" || !planSummary) {
-        previewTargets.forEach(function (target) {
-          target.style.display = "none";
-          target.textContent = "";
-        });
-        return;
-      }
-      var operationLabels = {
-        CREATE_GROUP: "新建分组",
-        RENAME_NODE: "重命名",
-        MOVE_NODE: "移动节点",
-        REORDER_CHILDREN: "调整顺序",
-        SET_AUTO_LAYOUT: "设置自动布局"
-      };
-      var lines = ["将进行以下整理（" + Number(planSummary.operationCount || 0) + " 项）"];
-      (planSummary.operations || []).forEach(function (operation, index) {
-        var operationType = String(operation.type || "UNKNOWN");
-        lines.push((index + 1) + ". " + (operationLabels[operationType] || operationType) + " · " + String(operation.label || operation.id || "-"));
-      });
-      if (Number(planSummary.warningCount || 0) > 0) {
-        lines.push("注意：");
-        (planSummary.warnings || []).forEach(function (warning) { lines.push("- " + warning); });
-      }
-      previewTargets.forEach(function (target) {
-        target.textContent = lines.join("\n");
-        target.style.display = "";
-      });
+      // Direct cleanup is authorized by the initiating click. The skill pipeline
+      // creates a fresh live plan, so showing the preliminary AI draft here
+      // would be misleading. Its audited artifacts remain in the execution log.
+      aiCleanupPlanPreviewEl.style.display = "none";
+      aiCleanupPlanPreviewEl.textContent = "";
     }
 
-    function cleanupRunStatusText(run) {
-      if (!run) return "正在读取所选节点...";
-      if (run.state === "review") return "请检查下面的整理内容。确认前不会修改 Figma。";
-      if (run.state === "succeeded") return "整理完成。";
-      if (run.state === "rolled_back") return "整理没有完成，已自动恢复原状。";
-      if (run.state === "recovery_required") return "自动恢复未完成，请处理保留的恢复备份。";
-      if (run.state === "cancelled") return "整理已停止。";
-      if (run.state === "failed") return "整理失败，画布未被修改。";
-      return aiRunPhaseText(run.state) + "，请稍候...";
+    function cleanupRunStateText(state) {
+      if (state === "capturing") return "正在采集层级快照";
+      if (state === "planning") return "正在生成整理计划";
+      if (state === "validating") return "正在校验整理计划";
+      if (state === "review") return "整理计划已就绪，正在自动开始执行";
+      if (state === "applying") return "正在执行层级整理或确认后的变体创建";
+      if (state === "verifying") return "正在验证整理结果";
+      if (state === "awaiting_component_confirmation") return "层级整理已完成，等待最终满意确认";
+      if (state === "rolled_back") return "整理已回滚";
+      if (state === "recovery_required") return "需要恢复处理";
+      if (state === "succeeded") return "整理完成";
+      if (state === "cancelled") return "整理已取消";
+      if (state === "failed") return "整理失败";
+      return "等待任务";
     }
 
-    function renderCleanupRunDialog(run) {
-      if (!run || run.template !== "cleanup") return;
-      var terminal = isCleanupTerminalState(run.state);
-      var approvalReady = run.state === "review" && run.planReady === true && !!run.snapshotHash;
-      cleanupRunDialogStatus.textContent = cleanupRunStatusText(run);
-      renderCleanupPlanPreview(run);
-      confirmCleanupRunBtn.hidden = run.state !== "review";
-      confirmCleanupRunBtn.disabled = !approvalReady;
-      cancelCleanupRunBtn.hidden = terminal;
-      cancelCleanupRunBtn.disabled = false;
-      cancelCleanupRunBtn.textContent = run.state === "review" ? "取消" : "停止";
-      closeCleanupRunBtn.hidden = !terminal;
+    function cleanupRunIsActive(state) {
+      return state === "capturing" || state === "planning" || state === "validating" || state === "review" || state === "applying" || state === "verifying";
     }
 
-    function openCleanupRunDialog() {
-      cleanupRunDialog.hidden = false;
-      if (activeAiCleanupRun && activeAiCleanupRun.template === "cleanup") {
-        renderCleanupRunDialog(activeAiCleanupRun);
-        return;
-      }
-      cleanupRunDialogStatus.textContent = "正在读取所选节点...";
-      cleanupRunPlanPreviewEl.style.display = "none";
-      cleanupRunPlanPreviewEl.textContent = "";
-      confirmCleanupRunBtn.hidden = true;
-      cancelCleanupRunBtn.hidden = true;
-      closeCleanupRunBtn.hidden = true;
+    function cleanupRunCanBeCancelled(state) {
+      return cleanupRunIsActive(state) || state === "awaiting_component_confirmation";
     }
 
-    function closeCleanupRunDialog() {
-      if (activeAiCleanupRun && activeAiCleanupRun.template === "cleanup" && !isCleanupTerminalState(activeAiCleanupRun.state)) return;
-      cleanupRunDialog.hidden = true;
+    function cleanupRunIsTerminal(state) {
+      return state === "succeeded" || state === "cancelled" || state === "failed" || state === "rolled_back" || state === "recovery_required";
     }
 
     function requestCleanupRecoveryBackups(forceOpen) {
@@ -1770,7 +1705,7 @@
       }, "*");
     }
 
-    function renderCleanupRecoveryDialog() {
+    function renderCleanupRecoveryActions() {
       cleanupRecoveryBackupSelect.textContent = "";
       cleanupRecoveryBackups.forEach(function (backup) {
         var option = document.createElement("option");
@@ -1778,15 +1713,15 @@
         option.textContent = (backup.sourceName || backup.name || "未命名备份") + " · " + (backup.runId || backup.nodeId);
         cleanupRecoveryBackupSelect.appendChild(option);
       });
-      cleanupRecoveryDialogSummary.textContent = cleanupRecoveryBackups.length
-        ? "检测到 " + cleanupRecoveryBackups.length + " 个未清理的隐藏备份。\n恢复前请在画布中只选择 1 个受损根节点；恢复会用备份替换它，根节点 ID 会变化。也可以删除备份或暂不处理。"
+      aiCleanupRecoverySummary.textContent = cleanupRecoveryBackups.length
+        ? "检测到 " + cleanupRecoveryBackups.length + " 个未清理的隐藏备份。恢复前请在画布中只选择 1 个受损根节点；恢复会替换它且根节点 ID 会变化。"
         : "当前页面没有未处理的整理恢复备份。";
       var unavailable = cleanupRecoveryActionPending || cleanupRecoveryBackups.length === 0;
       cleanupRecoveryBackupSelect.disabled = cleanupRecoveryActionPending;
       restoreCleanupRecoveryBtn.disabled = unavailable;
       deleteCleanupRecoveryBtn.disabled = unavailable;
       deferCleanupRecoveryBtn.disabled = cleanupRecoveryActionPending;
-      if (cleanupRecoveryBackups.length === 0) cleanupRecoveryDialog.hidden = true;
+      aiCleanupRecoveryActions.hidden = cleanupRecoveryDeferred || cleanupRecoveryBackups.length === 0;
     }
 
     function handleCleanupRecoveryBackupsResult(message) {
@@ -1795,17 +1730,13 @@
         return;
       }
       cleanupRecoveryBackups = Array.isArray(message.backups) ? message.backups : [];
-      renderCleanupRecoveryDialog();
-      if (cleanupRecoveryBackups.length > 0 && !cleanupRecoveryDeferred) {
-        cleanupRecoveryDialog.hidden = false;
-        deferCleanupRecoveryBtn.focus();
-      }
+      renderCleanupRecoveryActions();
     }
 
     function deferCleanupRecovery() {
       if (cleanupRecoveryActionPending) return;
       cleanupRecoveryDeferred = true;
-      cleanupRecoveryDialog.hidden = true;
+      aiCleanupRecoveryActions.hidden = true;
       appendLog("已暂缓处理 AI 整理恢复备份；备份仍保持隐藏和锁定。", true);
     }
 
@@ -1815,7 +1746,12 @@
       if (action === "restore" && !window.confirm("恢复会删除当前选中的受损根节点，并用备份副本替换。根节点 ID 会变化，确认继续吗？")) return;
       if (action === "delete" && !window.confirm("删除后将无法再使用这个隐藏备份恢复。确认删除吗？")) return;
       cleanupRecoveryActionPending = true;
-      renderCleanupRecoveryDialog();
+      renderCleanupRecoveryActions();
+      cleanupRecoveryOperation = uiLogger.startOperation("cleanup.recovery", "执行整理恢复操作", {
+        operationId: "cleanup-recovery-" + action + "-" + Date.now(),
+        data: { action: action, backupNodeId: backupNodeId }
+      });
+      cleanupRecoveryOperation.step("request", "已请求整理恢复操作");
       parent.postMessage({
         pluginMessage: {
           type: action === "restore" ? "RESTORE_CLEANUP_RECOVERY_BACKUP" : "DELETE_CLEANUP_RECOVERY_BACKUP",
@@ -1828,20 +1764,27 @@
     function handleCleanupRecoveryActionResult(message) {
       cleanupRecoveryActionPending = false;
       if (!message.ok) {
-        renderCleanupRecoveryDialog();
-        cleanupRecoveryDialogSummary.textContent = "操作失败：" + (message.error || "未知错误") + "\n备份仍保留，请检查画布选择后重试。";
-        cleanupRecoveryDialog.hidden = false;
+        cleanupRecoveryOperation?.fail(new Error(message.error || "unknown recovery error"), "整理恢复操作失败");
+        cleanupRecoveryOperation = null;
+        renderCleanupRecoveryActions();
+        aiCleanupRecoverySummary.textContent = "操作失败：" + (message.error || "未知错误") + "；备份仍保留，请检查画布选择后重试。";
+        aiCleanupRecoveryActions.hidden = false;
         appendLog("整理恢复操作失败：" + (message.error || "未知错误"), true);
         return;
       }
       cleanupRecoveryDeferred = false;
+      cleanupRecoveryOperation?.succeed("整理恢复操作完成");
+      cleanupRecoveryOperation = null;
       appendLog(message.type === "RESTORE_CLEANUP_RECOVERY_BACKUP_RESULT" ? "已从整理备份恢复所选节点。" : "已删除整理恢复备份。");
       requestCleanupRecoveryBackups(true);
     }
 
     function invalidateTerminalCleanupRun(run) {
-      var terminal = !!run && run.template === "cleanup" && isCleanupTerminalState(run.state);
+      var terminal = !!run && run.template === "cleanup" && (run.state === "cancelled" || run.state === "failed" || run.state === "rolled_back" || run.state === "recovery_required");
       if (!terminal) return false;
+      run.planReady = false;
+      run.planSummary = null;
+      run.sessionAvailable = false;
       aiCleanupBusy = false;
       return true;
     }
@@ -1860,121 +1803,50 @@
 
     function refreshAiExecutionControls() {
       var run = activeAiCleanupRun;
-      var cleanupTerminal = invalidateTerminalCleanupRun(run);
+      var cleanupInvalidated = invalidateTerminalCleanupRun(run);
       var isCleanup = !!run && run.template === "cleanup";
-      var cleanupActive = isCleanup && !isCleanupTerminalState(run.state);
-      var running = isCleanup ? cleanupActive : !!run && (run.status === "starting" || run.status === "running");
-      var cleanupApprovalReady = !!run && run.template === "cleanup" && run.state === "review"
-        && run.planReady === true;
+      var cleanupTerminal = isCleanup && cleanupRunIsTerminal(run.state);
+      var cleanupAwaitingConfirmation = isCleanup && run.state === "awaiting_component_confirmation";
+      var cleanupFeedbackEditable = cleanupAwaitingConfirmation && run.satisfactionMode === "adjust" && !run.satisfactionRecorded;
+      var running = isCleanup ? cleanupRunCanBeCancelled(run.state) : !!run && (run.status === "starting" || run.status === "running");
       var resumable = !!run && run.template !== "cleanup" && (run.status === "completed" || run.status === "failed") && run.sessionAvailable === true;
-      aiExecutionFollowupInput.disabled = !resumable;
-      aiExecutionContinueBtn.disabled = run && run.template === "cleanup"
-        ? !cleanupApprovalReady
+      aiExecutionFollowupInput.disabled = isCleanup ? !cleanupFeedbackEditable : !resumable;
+      aiExecutionContinueBtn.disabled = isCleanup
+        ? !cleanupFeedbackEditable || !aiExecutionFollowupInput.value.trim()
         : !resumable || !aiExecutionFollowupInput.value.trim();
-      aiExecutionContinueBtn.textContent = run && run.template === "cleanup" ? "确认并执行整理" : "继续执行";
-      aiExecutionContinueBtn.hidden = cleanupTerminal;
+      aiExecutionContinueBtn.textContent = isCleanup ? "提交调整反馈" : "继续执行";
+      aiExecutionContinueBtn.hidden = isCleanup ? !cleanupFeedbackEditable : cleanupTerminal;
       aiExecutionStopBtn.disabled = !running;
+      aiCleanupSatisfaction.hidden = !cleanupAwaitingConfirmation;
+      if (cleanupAwaitingConfirmation) {
+        aiCleanupSatisfiedBtn.disabled = !!run.satisfactionRecorded;
+        aiCleanupAdjustBtn.disabled = !!run.satisfactionRecorded;
+        aiCleanupSatisfactionStatus.textContent = run.satisfactionRecorded
+          ? (run.satisfied === true ? "已确认满意，正在自动打组并创建 ComponentSet 变体。" : "已记录你的调整反馈；本次不会创建 ComponentSet 变体。")
+          : cleanupFeedbackEditable
+            ? "请在下方填写需要调整的内容，然后提交反馈。"
+            : "层级整理已完成。确认满意后将自动打组并创建 ComponentSet 变体。";
+      }
       if (!run) {
         aiExecutionMetaEl.textContent = "当前任务：未启动";
         aiExecutionStatusEl.textContent = "选择模板和节点并点击对应的 AI 操作后，任务会在这里执行。";
         renderCleanupPlanPreview(null);
         return;
       }
-    function buildLogQuery() {
-      const query = new URLSearchParams();
-      if (logSourceFilter.value) query.set("source", logSourceFilter.value);
-      if (logLevelFilter.value) query.set("level", logLevelFilter.value);
-      if (logOperationFilter.value.trim()) query.set("operationId", logOperationFilter.value.trim());
-      if (logKeywordFilter.value.trim()) query.set("keyword", logKeywordFilter.value.trim());
-      query.set("limit", "1000");
-      return query;
-    }
-
-    function renderStructuredLogs(events) {
-      logEl.textContent = "";
-      const fragment = document.createDocumentFragment();
-      (events || []).slice().reverse().forEach(function (event) {
-        const row = document.createElement("div");
-        const isError = event.level === "error" || event.level === "fatal";
-        row.className = "log-event-row" + (isError ? " log-event-error" : "");
-        const meta = document.createElement("span");
-        meta.className = "log-event-meta";
-        meta.textContent = "[" + String(event.timestamp || "-") + "] [" + String(event.level || "info") + "] ["
-          + String(event.source || "-") + "] [" + String(event.operationId || "-") + "] ";
-        row.appendChild(meta);
-        row.appendChild(document.createTextNode(String(event.message || event.step || "")));
-        fragment.appendChild(row);
-      });
-      if (!events || events.length === 0) logEl.textContent = "没有匹配的日志。";
-      else logEl.appendChild(fragment);
-    }
-
-    async function refreshLogViewer() {
-      const operation = uiLogger.startOperation("ui.log-query");
-      refreshLogsBtn.disabled = true;
-      try {
-        const query = buildLogQuery();
-        operation.step("request", "查询 Relay 日志", { query: query.toString() });
-        const response = await fetchWithTimeout(relayEndpoint("/logs?" + query.toString()), {
-          method: "GET",
-          headers: relayRuntimeHeaders()
-        }, 8000);
-        const payload = await response.json().catch(function () { return {}; });
-        if (!response.ok) throw new Error(payload.error || ("HTTP " + response.status));
-        const events = Array.isArray(payload.events) ? payload.events : [];
-        renderStructuredLogs(events);
-        logViewerMeta.textContent = "显示 " + events.length + " / 匹配 " + Number(payload.totalMatched || events.length) + " 条";
-        operation.succeed("日志查询完成", { returned: events.length, totalMatched: payload.totalMatched || events.length });
-      } catch (error) {
-        logViewerMeta.textContent = "日志查询失败：" + (error.message || error);
-        operation.fail(error, "日志查询失败");
-      } finally {
-        refreshLogsBtn.disabled = false;
-      }
-    }
-
-    async function downloadFilteredLogs() {
-      const operation = uiLogger.startOperation("ui.log-download");
-      downloadLogsBtn.disabled = true;
-      try {
-        const query = buildLogQuery();
-        operation.step("request", "下载 Relay 日志", { query: query.toString() });
-        const response = await fetchWithTimeout(relayEndpoint("/logs/download?" + query.toString()), {
-          method: "GET",
-          headers: relayRuntimeHeaders()
-        }, 15000);
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = "figma-mcp-relay-logs-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jsonl";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
-        operation.succeed("日志下载完成", { bytes: blob.size });
-      } catch (error) {
-        logViewerMeta.textContent = "日志下载失败：" + (error.message || error);
-        operation.fail(error, "日志下载失败");
-      } finally {
-        downloadLogsBtn.disabled = false;
-      }
-    }
-
-      if (isCleanup && !cleanupRunDialog.hidden) renderCleanupRunDialog(run);
-      var providerLabel = run.providerId === "claude-code" || run.runner === "claude" ? "Claude Code" : "Codex";
-      aiExecutionMetaEl.textContent = "操作：" + aiTemplateTaskLabel(run.template) + "\nAI：" + providerLabel + "\n任务：" + run.runId;
+      aiExecutionMetaEl.textContent = "操作：" + aiTemplateTaskLabel(run.template) + "\n执行器：" + (run.providerId === "claude-code" || run.runner === "claude" ? "Claude Code" : "Codex CLI") + "\n任务：" + run.runId;
       aiImageHealthEl.style.display = run.template === "unity" ? "" : "none";
       var elapsedMs = run.startedAt ? Math.max(0, Date.now() - new Date(run.startedAt).getTime()) : 0;
       var elapsedText = formatAiExecutionDuration(elapsedMs);
       var idleMs = run.lastOutputAt ? Math.max(0, Date.now() - new Date(run.lastOutputAt).getTime()) : 0;
       var idleText = run.lastOutputAt ? "；最近输出 " + formatAiExecutionDuration(idleMs) + " 前" : "；等待首条输出";
-      var phaseText = aiRunPhaseText(isCleanup ? run.state : run.phase);
-      var statusText = isCleanup ? phaseText : ((phaseText ? phaseText + "；" : "") + aiRunStatusText(run.status));
-      aiExecutionStatusEl.textContent = statusText + "；已运行 " + elapsedText + idleText
-        + (cleanupTerminal ? "；可以关闭本窗口后重新开始。" : "")
-        + (!isCleanup && (run.status === "completed" || run.status === "failed") && !run.sessionAvailable ? "；当前 CLI 未返回可继续的会话 ID。" : "");
+      if (isCleanup) {
+        aiExecutionStatusEl.textContent = cleanupRunStateText(run.state) + "；已运行 " + elapsedText + idleText
+          + (cleanupInvalidated ? "；可以关闭本窗口后重新开始。" : "");
+      } else {
+        var phaseText = aiRunPhaseText(run.phase);
+        aiExecutionStatusEl.textContent = (phaseText ? phaseText + "；" : "") + aiRunStatusText(run.status) + "；已运行 " + elapsedText + idleText
+          + ((run.status === "completed" || run.status === "failed") && !run.sessionAvailable ? "；当前 CLI 未返回可继续的会话 ID。" : "");
+      }
       renderCleanupPlanPreview(run);
     }
 
@@ -2166,6 +2038,88 @@
       return Object.assign({ "X-Figma-Mcp-Relay-Internal": "plugin-runtime" }, extraHeaders || {});
     }
 
+    function buildLogQuery() {
+      const query = new URLSearchParams();
+      if (logSourceFilter.value) query.set("source", logSourceFilter.value);
+      if (logLevelFilter.value) query.set("level", logLevelFilter.value);
+      if (logOperationFilter.value.trim()) query.set("operationId", logOperationFilter.value.trim());
+      if (logKeywordFilter.value.trim()) query.set("keyword", logKeywordFilter.value.trim());
+      query.set("limit", "1000");
+      return query;
+    }
+
+    function renderStructuredLogs(events) {
+      logEl.textContent = "";
+      const fragment = document.createDocumentFragment();
+      (events || []).slice().reverse().forEach(function (event) {
+        const row = document.createElement("div");
+        const isError = event.level === "error" || event.level === "fatal";
+        row.className = "log-event-row" + (isError ? " log-event-error" : "");
+        const meta = document.createElement("span");
+        meta.className = "log-event-meta";
+        meta.textContent = "[" + String(event.timestamp || "-") + "] [" + String(event.level || "info") + "] ["
+          + String(event.source || "-") + "] [" + String(event.operationId || "-") + "] ";
+        row.appendChild(meta);
+        row.appendChild(document.createTextNode(String(event.message || event.step || "")));
+        fragment.appendChild(row);
+      });
+      if (!events || events.length === 0) logEl.textContent = "没有匹配的日志。";
+      else logEl.appendChild(fragment);
+    }
+
+    async function refreshLogViewer() {
+      const operation = uiLogger.startOperation("ui.log-query");
+      refreshLogsBtn.disabled = true;
+      try {
+        const query = buildLogQuery();
+        operation.step("request", "查询 Relay 日志", { query: query.toString() });
+        const response = await fetchWithTimeout(relayEndpoint("/logs?" + query.toString()), {
+          method: "GET",
+          headers: relayRuntimeHeaders()
+        }, 8000);
+        const payload = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(payload.error || ("HTTP " + response.status));
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        renderStructuredLogs(events);
+        logViewerMeta.textContent = "显示 " + events.length + " / 匹配 " + Number(payload.totalMatched || events.length) + " 条";
+        operation.succeed("日志查询完成", { returned: events.length, totalMatched: payload.totalMatched || events.length });
+      } catch (error) {
+        logViewerMeta.textContent = "日志查询失败：" + (error.message || error);
+        operation.fail(error, "日志查询失败");
+      } finally {
+        refreshLogsBtn.disabled = false;
+      }
+    }
+
+    async function downloadFilteredLogs() {
+      const operation = uiLogger.startOperation("ui.log-download");
+      downloadLogsBtn.disabled = true;
+      try {
+        const query = buildLogQuery();
+        operation.step("request", "下载 Relay 日志", { query: query.toString() });
+        const response = await fetchWithTimeout(relayEndpoint("/logs/download?" + query.toString()), {
+          method: "GET",
+          headers: relayRuntimeHeaders()
+        }, 15000);
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "figma-mcp-relay-logs-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jsonl";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        operation.succeed("日志下载完成", { bytes: blob.size });
+      } catch (error) {
+        logViewerMeta.textContent = "日志下载失败：" + (error.message || error);
+        operation.fail(error, "日志下载失败");
+      } finally {
+        downloadLogsBtn.disabled = false;
+      }
+    }
+
     function normalizeRelayUrl(value) {
       var raw = String(value || "").trim() || "http://localhost:32130";
       try {
@@ -2249,15 +2203,33 @@
         unityProjectStatus.textContent = "请输入 Unity 工程根目录。";
         return;
       }
-      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/add"), {
-        method: "POST",
-        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ path: projectPath, sessionId: relaySessionId })
-      }, 8000);
-      var result = await response.json();
-      if (!response.ok || !result.ok) throw new Error(result.error || "添加 Unity 工程失败");
-      unityProjectPathInput.value = "";
-      renderUnityProjects(result);
+      if (!relaySocket || relaySocket.readyState !== WebSocket.OPEN) {
+        unityProjectStatus.textContent = "本地 MCP Companion 未连接，无法添加 Unity 工程。";
+        appendLog("添加 Unity 工程失败：本地 MCP Companion 未连接。", true);
+        return;
+      }
+      var operation = uiLogger.startOperation("unity.project.add", "添加 Unity 工程", {
+        data: { projectPath: projectPath }
+      });
+      unityProjectStatus.textContent = "正在添加 Unity 工程...";
+      addUnityProjectBtn.disabled = true;
+      try {
+        var response = await fetchWithTimeout(relayEndpoint("/unity-projects/add"), {
+          method: "POST",
+          headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ path: projectPath, sessionId: relaySessionId })
+        }, 8000);
+        var result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || "添加 Unity 工程失败");
+        unityProjectPathInput.value = "";
+        renderUnityProjects(result);
+        operation.succeed("Unity 工程已添加");
+      } catch (error) {
+        operation.fail(error, "添加 Unity 工程失败");
+        throw error;
+      } finally {
+        addUnityProjectBtn.disabled = false;
+      }
     }
 
     async function selectUnityProject() {
@@ -2412,26 +2384,24 @@
     }
 
     function currentAiPromptTemplate() {
-      var selectValue = aiPromptTemplateSelect ? aiPromptTemplateSelect.value : "";
-      if (selectValue) return selectValue;
       var selectedCard = document.querySelector(".template-card.selected");
-      var selectedValue = selectedCard ? selectedCard.getAttribute("data-value") : "";
-      if (aiPromptTemplateSelect) aiPromptTemplateSelect.value = selectedValue || "cleanup";
+      var selectedValue = selectedCard && selectedCard.getAttribute("data-value");
       return selectedValue || "cleanup";
     }
 
     function refreshAiPromptControls() {
       var template = currentAiPromptTemplate();
       var provider = cleanupProviders.find(function (item) { return item.id === cleanupProviderSelect.value; });
-      aiPromptManualActions.style.display = template === "cleanup" ? "none" : "";
-      aiPromptSubAgentRow.style.display = template === "cleanup" ? "none" : "";
-      aiPromptPreviewField.style.display = template === "cleanup" ? "none" : "";
+      aiPromptTemplateSelect.value = template;
       generateAiPromptBtn.disabled = generatingAiPrompt;
       copyAiPromptBtn.disabled = !aiPromptPreviewEl.value.trim();
-      runAiCleanupBtn.disabled = generatingAiPrompt || aiProviderSyncing || !provider || provider.available !== true || (aiCleanupBusy && template !== "cleanup");
+      runAiCleanupBtn.disabled = generatingAiPrompt || aiProviderSyncing || !provider || provider.available !== true || aiCleanupBusy;
       runAiCleanupBtn.textContent = aiTemplateActionLabel(template);
       cleanupProviderField.style.display = "";
       cleanupProviderStatusEl.style.display = "";
+      aiPromptManualActions.style.display = "";
+      aiPromptSubAgentRow.style.display = template === "cleanup" ? "none" : "";
+      aiPromptPreviewField.style.display = template === "cleanup" ? "none" : "";
       readFigmaKeyBtn.disabled = !!pendingFigmaKeyRequestId;
       copyFigmaLinkBtn.disabled = !aiPromptFigmaKeyInput.value.trim();
       refreshAiPromptPsdFileControls();
@@ -3392,15 +3362,6 @@
       }
     }
 
-    async function refreshAiRunner() {
-      try {
-        var result = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/status", {}, 5000).then(function (r) { return r.json(); });
-        var config = result.config || {};
-        aiRunnerSelect.value = config.runner || "codex";
-        aiRunnerStatusEl.textContent = result.available ? "当前 AI：" + aiRunnerSelect.options[aiRunnerSelect.selectedIndex].text : "当前 AI 不可用。";
-      } catch (error) { aiRunnerStatusEl.textContent = "读取本机 AI 设置失败：" + (error.message || error); }
-    }
-
     function requestCleanupProviderPreference() {
       parent.postMessage({
         pluginMessage: {
@@ -3452,21 +3413,34 @@
       return providerId === "claude-code" ? "claude" : "codex";
     }
 
-    async function syncAiRunnerToCleanupProvider() {
-      var generation = ++aiProviderSyncGeneration;
-      aiProviderSyncing = true;
+    function syncAiRunnerToCleanupProvider() {
       aiRunnerSelect.value = runnerIdForCleanupProvider(cleanupProviderSelect.value);
+      aiProviderSyncTargetRunner = aiRunnerSelect.value;
+      if (aiProviderSyncing && aiProviderSyncPromise) return aiProviderSyncPromise;
+      aiProviderSyncing = true;
+      aiProviderSyncPromise = (async function syncNextRunner() {
+        var targetRunner = aiProviderSyncTargetRunner;
+        aiRunnerSelect.value = targetRunner;
+        var synced = await selectAiRunner();
+        if (targetRunner !== aiProviderSyncTargetRunner) return syncNextRunner();
+        return synced;
+      })().then(function (synced) {
+        aiProviderSyncing = false;
+        aiProviderSyncPromise = null;
+        if (synced && typeof renderCleanupProviderStatus === "function") renderCleanupProviderStatus();
+        else cleanupProviderStatusEl.textContent = "AI 切换失败，请检查本机服务。";
+        refreshAiPromptControls();
+        return synced;
+      }, function (error) {
+        aiProviderSyncing = false;
+        aiProviderSyncPromise = null;
+        cleanupProviderStatusEl.textContent = "AI 切换失败：" + (error.message || error);
+        refreshAiPromptControls();
+        return false;
+      });
       cleanupProviderStatusEl.textContent = "正在切换 AI...";
       refreshAiPromptControls();
-      var synced = await selectAiRunner();
-      if (generation !== aiProviderSyncGeneration) {
-        syncAiRunnerToCleanupProvider();
-        return false;
-      }
-      aiProviderSyncing = false;
-      if (synced) renderCleanupProviderStatus();
-      else cleanupProviderStatusEl.textContent = "AI 切换失败，请检查本机服务。";
-      refreshAiPromptControls();
+      return aiProviderSyncPromise;
     }
 
     function selectCleanupProvider() {
@@ -3483,6 +3457,15 @@
       }, "*");
     }
 
+    async function refreshAiRunner() {
+      try {
+        var result = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/status", {}, 5000).then(function (r) { return r.json(); });
+        var config = result.config || {};
+        aiRunnerSelect.value = config.runner || "codex";
+        aiRunnerStatusEl.textContent = result.available ? "当前 AI：" + aiRunnerSelect.options[aiRunnerSelect.selectedIndex].text : "当前 AI 不可用。";
+      } catch (error) { aiRunnerStatusEl.textContent = "读取本机 AI 设置失败：" + (error.message || error); }
+    }
+
     async function selectAiRunner() {
       try {
         var payload = { runner: aiRunnerSelect.value, sessionId: relaySessionId };
@@ -3492,35 +3475,36 @@
         if (!response.ok || !result.ok) throw new Error(result.error || "本机 AI 请求失败");
         aiRunnerSelect.value = result.config.runner || aiRunnerSelect.value;
         aiRunnerStatusEl.textContent = "当前 AI：" + aiRunnerSelect.options[aiRunnerSelect.selectedIndex].text;
-        return true;
-      } catch (error) {
-        aiRunnerStatusEl.textContent = "本机 AI 设置失败：" + (error.message || error);
-        return false;
-      }
+      } catch (error) { aiRunnerStatusEl.textContent = "本机 AI 设置失败：" + (error.message || error); }
     }
 
     function startAiRun(template, selection) {
       var isCleanup = template === "cleanup";
       var taskLabel = aiTemplateTaskLabel(template);
+      var cleanupProviderId = cleanupProviderSelect.value;
       var endpoint = isCleanup ? "/cleanup/runs" : "/ai-runner/run-prompt";
       var payload = isCleanup
-        ? { snapshot: selection, sessionId: relaySessionId, providerId: cleanupProviderSelect.value }
+        ? { snapshot: selection, sessionId: relaySessionId, providerId: cleanupProviderId, autoApprove: true }
         : { template: template, prompt: aiPromptPreviewEl.value, sessionId: relaySessionId, unityProject: selectedUnityProject };
       setAiPromptStatus("正在启动" + taskLabel + "任务...");
       fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }, 8000)
         .then(function (response) { return response.json().then(function (result) { if (!response.ok || !result.ok) throw new Error(result.error || "启动失败"); return result; }); })
         .then(function (result) {
           activeAiCleanupRun = isCleanup
-            ? { runId: result.runId, capabilityToken: result.capabilityToken, providerId: result.providerId, template: template, state: result.state || "planning", snapshotHash: "", planReady: false, planSummary: null, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "" }
+            ? { runId: result.runId, capabilityToken: result.capabilityToken, providerId: result.providerId || cleanupProviderId, template: template, state: result.state || "planning", planReady: false, planSummary: null, snapshotHash: "", lastSequence: 0, pollFailures: 0, satisfactionMode: "", satisfactionRecorded: false, startedAt: new Date().toISOString(), lastOutputAt: "" }
             : { runId: result.runId, capabilityToken: result.capabilityToken, runner: result.runner || aiRunnerSelect.value, template: template, status: "starting", phase: "", planReady: false, planSummary: null, sessionAvailable: false, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "" };
+          activeAiCleanupOperation = uiLogger.startOperation("ai.cleanup", "AI 整理任务已启动", {
+            operationId: result.runId,
+            data: { template: template, providerId: isCleanup ? cleanupProviderId : aiRunnerSelect.value }
+          });
           aiCleanupUnloadStopSent = false;
           aiExecutionLogEl.textContent = "";
           aiImageHealthEl.textContent = "图片体检：等待导出结果";
           aiImageHealthEl.style.borderColor = "";
           aiExecutionFollowupInput.value = "";
           refreshAiExecutionControls();
-          if (isCleanup) openCleanupRunDialog(); else switchTab("ai-execution-tab");
-          setAiPromptStatus(isCleanup ? "AI 正在分析所选节点..." : taskLabel + "任务已启动，可在“任务详情”页查看。\n" + result.runId);
+          switchTab("ai-execution-tab");
+          setAiPromptStatus(isCleanup ? taskLabel + "任务已启动；正在执行层级整理。整理完成后会询问是否满意，只有确认满意才会自动打组并创建变体。\n" + result.runId : taskLabel + "任务已启动，可在“AI 执行”页查看。\n" + result.runId);
           appendLog(taskLabel + "任务已启动：" + result.runId);
           scheduleAiCleanupPoll();
         })
@@ -3530,10 +3514,6 @@
           refreshAiPromptControls();
           refreshAiExecutionControls();
           setAiPromptStatus("启动" + taskLabel + "任务失败：" + (error.message || error));
-          if (isCleanup) {
-            cleanupRunDialogStatus.textContent = "启动整理失败：" + (error.message || error);
-            closeCleanupRunBtn.hidden = false;
-          }
           appendLog("启动" + taskLabel + "任务失败：" + (error.message || error), true);
         });
     }
@@ -3544,114 +3524,204 @@
       aiCleanupPollTimer = setTimeout(pollAiCleanupRun, 700);
     }
 
+    function applyCleanupRunView(run, result) {
+      run.state = result.state || run.state;
+      run.providerId = result.providerId || run.providerId;
+      run.snapshotHash = result.snapshotHash || run.snapshotHash;
+      run.startedAt = result.startedAt || run.startedAt;
+      run.planReady = result.planReady === true;
+      run.planSummary = result.planSummary || run.planSummary;
+      run.endedAt = result.endedAt || run.endedAt;
+    }
+
     function pollAiCleanupRun() {
       if (!activeAiCleanupRun) return;
       var currentRun = activeAiCleanupRun;
       var taskLabel = aiTemplateTaskLabel(currentRun.template);
       var isCleanup = currentRun.template === "cleanup";
-      var runEndpoint = isCleanup ? "/cleanup/runs/" : "/ai-runner/runs/";
-      fetchWithTimeout(normalizeRelayUrl(relayUrl) + runEndpoint + encodeURIComponent(currentRun.runId) + "?afterSequence=" + currentRun.lastSequence, {
+      var endpoint = isCleanup ? "/cleanup/runs/" : "/ai-runner/runs/";
+      fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint + encodeURIComponent(currentRun.runId) + "?afterSequence=" + currentRun.lastSequence, {
         headers: { "X-AI-Run-Capability": currentRun.capabilityToken }
       }, 5000)
         .then(function (response) { return response.json().then(function (result) { if (!response.ok || !result.ok) throw new Error(result.error || "状态读取失败"); return result; }); })
         .then(function (result) {
           if (!activeAiCleanupRun || activeAiCleanupRun.runId !== currentRun.runId) return;
           currentRun.pollFailures = 0;
-          currentRun.startedAt = result.startedAt || currentRun.startedAt;
-          currentRun.planReady = result.planReady === true;
-          currentRun.planSummary = result.planSummary || currentRun.planSummary;
           if (isCleanup) {
-            currentRun.state = result.state || currentRun.state;
-            currentRun.providerId = result.providerId || currentRun.providerId;
-            currentRun.snapshotHash = result.snapshotHash || currentRun.snapshotHash;
+            applyCleanupRunView(currentRun, result);
           } else {
-            currentRun.status = result.status;
-            currentRun.runner = result.runner || currentRun.runner;
-            currentRun.sessionAvailable = result.cliSessionId === "available";
-            currentRun.phase = result.phase || currentRun.phase;
+            Object.assign(currentRun, {
+              status: result.status || currentRun.status,
+              runner: result.runner || currentRun.runner,
+              startedAt: result.startedAt || currentRun.startedAt,
+              sessionAvailable: result.cliSessionId === "available",
+              phase: result.phase || currentRun.phase,
+              planReady: result.planReady === true,
+              planSummary: result.planSummary || currentRun.planSummary,
+            });
           }
           appendAiExecutionOutput(result.output);
           refreshAiExecutionControls();
-          if (isCleanup && (currentRun.state === "planning" || currentRun.state === "validating" || currentRun.state === "applying" || currentRun.state === "verifying")) {
-            setAiPromptStatus(aiRunPhaseText(currentRun.state) + "...");
+          if (isCleanup && cleanupRunIsActive(currentRun.state)) {
+            activeAiCleanupOperation?.step("poll", "AI 整理进度更新", { state: currentRun.state });
+            setAiPromptStatus(taskLabel + "正在" + cleanupRunStateText(currentRun.state) + "。\n" + currentRun.runId);
             scheduleAiCleanupPoll();
             return;
           }
+          if (isCleanup && currentRun.state === "awaiting_component_confirmation") {
+            clearAiCleanupPollTimer();
+            aiCleanupBusy = false;
+            activeAiCleanupOperation?.step("final-satisfaction", "层级整理已完成，等待最终满意确认。", { state: currentRun.state });
+            refreshAiPromptControls();
+            setAiPromptStatus("层级整理已完成。请在“AI 执行”页确认是否满意；只有点击“满意”后才会自动打组并创建 ComponentSet 变体。");
+            return;
+          }
           if (!isCleanup && (result.status === "running" || result.status === "starting")) {
-            setAiPromptStatus(taskLabel + "正在执行；详情见“任务详情”页。\n" + currentRun.runId);
+            setAiPromptStatus(taskLabel + "正在执行；详情见“AI 执行”页。\n" + currentRun.runId);
             scheduleAiCleanupPoll();
             return;
           }
           clearAiCleanupPollTimer();
-          aiCleanupBusy = isCleanup ? !isCleanupTerminalState(currentRun.state) : false;
+          aiCleanupBusy = false;
           refreshAiPromptControls();
-          if (isCleanup && currentRun.state === "review") {
-            setAiPromptStatus("请检查整理内容，确认后才会修改 Figma。");
-            openCleanupRunDialog();
-          } else if (isCleanup && currentRun.state === "succeeded") {
-            setAiPromptStatus("AI 整理已完成。");
-          } else if (isCleanup && currentRun.state === "rolled_back") {
-            setAiPromptStatus("整理校验失败，已自动回滚。");
-          } else if (isCleanup && currentRun.state === "recovery_required") {
-            setAiPromptStatus("整理回滚不完整，请保留隐藏备份并查看恢复信息。");
-            requestCleanupRecoveryBackups(true);
-          } else if (!isCleanup && result.status === "completed") {
-            setAiPromptStatus(currentRun.sessionAvailable ? taskLabel + "已完成；可在“任务详情”页继续补充要求。" : taskLabel + "已完成，但当前 CLI 没有返回可恢复会话 ID。");
-          } else if ((!isCleanup && result.status === "cancelled") || (isCleanup && currentRun.state === "cancelled")) {
+          if (isCleanup) {
+            if (currentRun.state === "succeeded") {
+              if (currentRun.satisfied === false) {
+                activeAiCleanupOperation?.succeed("AI 层级整理完成；用户未确认满意，未创建 ComponentSet 变体。", { state: currentRun.state });
+                setAiPromptStatus("AI 层级整理已完成；已记录需要调整，本次没有自动打组或创建 ComponentSet 变体。");
+              } else {
+                activeAiCleanupOperation?.succeed("AI 整理和确认后的自动变体完成", { state: currentRun.state });
+                setAiPromptStatus("AI 整理、层级验证和确认后的自动 ComponentSet 变体已完成。");
+              }
+            } else if (currentRun.state === "recovery_required") {
+              activeAiCleanupOperation?.fail(new Error("cleanup recovery is required"), "AI 整理需要恢复处理", { state: currentRun.state });
+              setAiPromptStatus("整理验证未完成，已保留隐藏备份；请在“AI 执行”页处理恢复。" );
+              requestCleanupRecoveryBackups(true);
+            } else if (currentRun.state === "cancelled") {
+              activeAiCleanupOperation?.cancel("AI 整理已取消", { state: currentRun.state });
+              setAiPromptStatus("AI 整理已取消。");
+            } else {
+              activeAiCleanupOperation?.fail(new Error("cleanup ended as " + currentRun.state), "AI 整理未完成", { state: currentRun.state });
+              setAiPromptStatus("AI 整理未完成，请查看日志。");
+            }
+            activeAiCleanupOperation = null;
+          } else if (result.status === "completed") {
+            setAiPromptStatus(currentRun.sessionAvailable ? taskLabel + "已完成；可在“AI 执行”页继续补充要求。" : taskLabel + "已完成，但当前 CLI 没有返回可恢复会话 ID。");
+          } else if (result.status === "cancelled") {
             setAiPromptStatus(taskLabel + "已停止。");
           } else {
-            setAiPromptStatus(isCleanup ? taskLabel + "失败。" : taskLabel + "失败，请查看“任务详情”页日志。");
+            setAiPromptStatus(taskLabel + "失败，请查看“AI 执行”页日志。");
           }
         })
         .catch(function (error) {
           if (!activeAiCleanupRun || activeAiCleanupRun.runId !== currentRun.runId) return;
           currentRun.pollFailures = (currentRun.pollFailures || 0) + 1;
           aiExecutionStatusEl.textContent = "读取任务状态失败（" + currentRun.pollFailures + "）：" + (error.message || error);
-          if (isCleanup) cleanupRunDialogStatus.textContent = "暂时无法读取整理状态，正在重试...";
           appendLog("读取" + taskLabel + "状态失败：" + (error.message || error), true);
+          if (isCleanup) activeAiCleanupOperation?.step("poll-retry", "读取 AI 整理状态失败，继续重试", { failures: currentRun.pollFailures }, "warn");
           scheduleAiCleanupPoll();
-          refreshAiExecutionControls();
         });
+    }
+
+    async function recordCleanupSatisfaction(satisfied) {
+      var run = activeAiCleanupRun;
+      if (!run || run.template !== "cleanup" || run.state !== "awaiting_component_confirmation" || run.satisfactionRecorded) return;
+      if (!satisfied) {
+        run.satisfactionMode = "adjust";
+        aiExecutionFollowupInput.focus();
+        refreshAiExecutionControls();
+        return;
+      }
+      var operation = uiLogger.startOperation("cleanup.satisfaction", "AI 整理满意度反馈", {
+        operationId: run.runId + "-satisfaction",
+        data: { satisfied: true }
+      });
+      try {
+        aiCleanupSatisfiedBtn.disabled = true;
+        aiCleanupAdjustBtn.disabled = true;
+        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/cleanup/runs/" + encodeURIComponent(run.runId) + "/confirm-component-sets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
+          body: JSON.stringify({ satisfied: true })
+        }, 8000);
+        var result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || "确认满意失败");
+        run.satisfactionRecorded = true;
+        run.satisfied = true;
+        applyCleanupRunView(run, result);
+        run.pollFailures = 0;
+        aiCleanupBusy = true;
+        operation.succeed("已确认满意，已开始自动创建 ComponentSet 变体");
+        appendLog("AI 整理满意度反馈：满意；开始自动打组并创建 ComponentSet 变体");
+        refreshAiPromptControls();
+        refreshAiExecutionControls();
+        scheduleAiCleanupPoll();
+      } catch (error) {
+        operation.fail(error, "确认满意失败");
+        aiExecutionStatusEl.textContent = "确认满意失败：" + (error.message || error);
+        refreshAiExecutionControls();
+      }
     }
 
     async function continueAiCleanup() {
       var run = activeAiCleanupRun;
       var text = aiExecutionFollowupInput.value.trim();
-      var isCleanupApproval = !!run && run.template === "cleanup";
+      var isCleanupFeedback = !!run && run.template === "cleanup";
       if (!run) return;
-      if (isCleanupApproval && (run.state !== "review" || run.planReady !== true || !run.snapshotHash)) return;
-      if (!isCleanupApproval && (run.status !== "completed" || !run.sessionAvailable)) return;
-      if (!isCleanupApproval && !text) return;
+      if (isCleanupFeedback) {
+        if (run.state !== "awaiting_component_confirmation" || run.satisfactionMode !== "adjust" || !text) return;
+        var feedbackOperation = uiLogger.startOperation("cleanup.satisfaction", "AI 整理满意度反馈", {
+          operationId: run.runId + "-satisfaction",
+          data: { satisfied: false, feedback: text }
+        });
+        try {
+          aiExecutionContinueBtn.disabled = true;
+          var feedbackResponse = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/cleanup/runs/" + encodeURIComponent(run.runId) + "/confirm-component-sets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
+            body: JSON.stringify({ satisfied: false, feedback: text })
+          }, 8000);
+          var feedbackResult = await feedbackResponse.json();
+          if (!feedbackResponse.ok || !feedbackResult.ok) throw new Error(feedbackResult.error || "提交调整反馈失败");
+          run.satisfactionRecorded = true;
+          run.satisfied = false;
+          run.satisfactionFeedback = text;
+          aiExecutionFollowupInput.value = "";
+          applyCleanupRunView(run, feedbackResult);
+          run.pollFailures = 0;
+          feedbackOperation.succeed("已记录调整反馈；本次不会创建 ComponentSet 变体");
+          appendLog("AI 整理满意度反馈：需要调整；本次不会自动打组或创建变体。" + text);
+          refreshAiExecutionControls();
+          scheduleAiCleanupPoll();
+        } catch (error) {
+          feedbackOperation.fail(error, "提交调整反馈失败");
+          aiExecutionStatusEl.textContent = "提交调整反馈失败：" + (error.message || error);
+          refreshAiExecutionControls();
+        }
+        return;
+      }
+      if (run.status !== "completed" || !run.sessionAvailable || !text) return;
       try {
         aiExecutionContinueBtn.disabled = true;
-        if (isCleanupApproval) confirmCleanupRunBtn.disabled = true;
-        var actionEndpoint = isCleanupApproval
-          ? "/cleanup/runs/" + encodeURIComponent(run.runId) + "/approve"
-          : "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/followup";
-        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + actionEndpoint, {
+        var endpoint = "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/followup";
+        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-          body: isCleanupApproval ? JSON.stringify({ approval: true, snapshotHash: run.snapshotHash }) : JSON.stringify({ text: text })
+          body: JSON.stringify({ text: text })
         }, 8000);
         var result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "继续执行失败");
         aiExecutionFollowupInput.value = "";
-        if (isCleanupApproval) {
-          run.state = result.state || "applying";
-        } else {
-          run.status = result.status || "starting";
-          run.phase = result.phase || run.phase;
-          run.sessionAvailable = false;
-        }
+        run.status = result.status || "starting";
+        run.phase = result.phase || run.phase;
+        run.sessionAvailable = false;
         run.pollFailures = 0;
         aiCleanupBusy = true;
         refreshAiPromptControls();
         refreshAiExecutionControls();
-        if (isCleanupApproval) renderCleanupRunDialog(run);
         scheduleAiCleanupPoll();
       } catch (error) {
         aiExecutionStatusEl.textContent = "继续执行失败：" + (error.message || error);
-        if (isCleanupApproval) cleanupRunDialogStatus.textContent = "确认整理失败：" + (error.message || error);
         refreshAiExecutionControls();
       }
     }
@@ -3659,27 +3729,25 @@
     async function stopActiveAiCleanup() {
       var run = activeAiCleanupRun;
       var isCleanup = !!run && run.template === "cleanup";
-      if (!run || (isCleanup ? isCleanupTerminalState(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
+      if (!run || (isCleanup ? !cleanupRunCanBeCancelled(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
       try {
         aiExecutionStopBtn.disabled = true;
-        if (isCleanup) cancelCleanupRunBtn.disabled = true;
-        var stopEndpoint = isCleanup
+        var endpoint = isCleanup
           ? "/cleanup/runs/" + encodeURIComponent(run.runId) + "/cancel"
           : "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/stop";
-        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + stopEndpoint, {
+        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
           body: JSON.stringify({ sessionId: relaySessionId })
         }, 8000);
         var result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "停止失败");
-        if (isCleanup) run.state = result.state || "cancelled";
+        if (isCleanup) applyCleanupRunView(run, result);
         else run.status = result.status || "cancelled";
         scheduleAiCleanupPoll();
         refreshAiExecutionControls();
       } catch (error) {
         aiExecutionStatusEl.textContent = "停止 AI 失败：" + (error.message || error);
-        if (isCleanup) cleanupRunDialogStatus.textContent = "停止整理失败：" + (error.message || error);
         refreshAiExecutionControls();
       }
     }
@@ -3687,7 +3755,7 @@
     function stopAiCleanupOnPanelClose() {
       var run = activeAiCleanupRun;
       var isCleanup = !!run && run.template === "cleanup";
-      if (aiCleanupUnloadStopSent || !run || (isCleanup ? isCleanupTerminalState(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
+      if (aiCleanupUnloadStopSent || !run || (isCleanup ? !cleanupRunCanBeCancelled(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
       aiCleanupUnloadStopSent = true;
       try {
         var endpoint = isCleanup
@@ -3705,29 +3773,24 @@
     }
 
     function requestAiRun() {
-      var requestedTemplate = currentAiPromptTemplate();
-      if (requestedTemplate === "cleanup" && activeAiCleanupRun && activeAiCleanupRun.template === "cleanup" && !isCleanupTerminalState(activeAiCleanupRun.state)) {
-        openCleanupRunDialog();
-        refreshAiExecutionControls();
-        if (activeAiCleanupRun.state !== "review") scheduleAiCleanupPoll();
-        setAiPromptStatus("当前整理任务仍在" + aiRunPhaseText(activeAiCleanupRun.state) + "，已重新打开同一任务。");
-        return;
-      }
       if (generatingAiPrompt || aiCleanupBusy) {
         setAiPromptStatus("已有 AI 任务正在启动或执行，请等待当前任务结束。");
         return;
       }
+      aiCleanupBusy = true;
+      var requestedTemplate = currentAiPromptTemplate();
       if (requestedTemplate === "cleanup") {
         var provider = cleanupProviders.find(function (item) { return item.id === cleanupProviderSelect.value; });
         if (!provider || provider.available !== true) {
+          aiCleanupBusy = false;
           setAiPromptStatus("所选 AI 当前不可用，请检查本机服务。");
+          refreshAiPromptControls();
           return;
         }
       }
-      aiCleanupBusy = true;
       refreshAiPromptControls();
       if (requestedTemplate === "cleanup") {
-        openCleanupRunDialog();
+        switchTab("ai-execution-tab");
         requestCleanupSnapshot();
         return;
       }
@@ -3748,8 +3811,6 @@
         aiCleanupBusy = false;
         refreshAiPromptControls();
         setAiPromptStatus("层级快照采集超时，请确认插件已加载最新构建。");
-        cleanupRunDialogStatus.textContent = "读取节点超时，请关闭后重试。";
-        closeCleanupRunBtn.hidden = false;
       }, 8000);
       parent.postMessage({
         pluginMessage: {
@@ -3760,6 +3821,26 @@
     }
 
     function handleCleanupSnapshotResult(message) {
+      if (message.requestId === executingRequestId && executingJobType === "QUERY_CLEANUP_SNAPSHOT") {
+        var result = message.result || {};
+        isExecuting = false;
+        clearExecutionWatchdog();
+        executingRequestId = "";
+        executingJobType = "";
+        lastResultPayload = { requestId: message.requestId, result: result };
+        finishUiRelayOperation(message.requestId, result);
+        (async function () {
+          try {
+            await postResult(message.requestId, result);
+            appendLog("Relay 层级快照采集完成：" + (result.status || "unknown"));
+          } catch (error) {
+            appendLog("Relay 层级快照回传失败：" + (error.message || error), true);
+          }
+          scheduleNextPoll(500);
+          processRelaySocketQueue();
+        })();
+        return;
+      }
       if (!pendingCleanupSnapshotRequestId || message.requestId !== pendingCleanupSnapshotRequestId) return;
       clearAiPromptTimeout();
       pendingCleanupSnapshotRequestId = "";
@@ -3769,13 +3850,10 @@
         refreshAiPromptControls();
         var error = (result.errors && result.errors[0]) || "层级快照采集失败";
         setAiPromptStatus(error);
-        cleanupRunDialogStatus.textContent = error;
-        closeCleanupRunBtn.hidden = false;
         appendLog("层级快照采集失败：" + error, true);
         return;
       }
-      setAiPromptStatus("节点已读取，AI 正在分析...");
-      cleanupRunDialogStatus.textContent = "AI 正在分析所选节点，请稍候...";
+      setAiPromptStatus("层级快照已采集，正在生成结构化计划...");
       startAiRun("cleanup", result.snapshot);
     }
 
@@ -3910,10 +3988,6 @@
         if (copied) {
           setAiPromptStatus("提示词已复制。");
           appendLog("AI 提示词已复制。");
-      if (relayLogFlushTimer) {
-        clearInterval(relayLogFlushTimer);
-        relayLogFlushTimer = null;
-      }
         } else {
           setAiPromptStatus("已选中提示词内容，请按 Ctrl+C 复制。");
           appendLog("自动复制不可用，已选中 AI 提示词，请手动 Ctrl+C。", true);
@@ -3938,16 +4012,6 @@
       }
       if (document.queryCommandSupported && !document.queryCommandSupported("copy")) {
         return false;
-    function flushRelayLogEvents() {
-      if (!relaySocket || relaySocket.readyState !== WebSocket.OPEN || !uiLogger.pendingEvents.length) return;
-      var events = uiLogger.drain(50);
-      try {
-        relaySocket.send(JSON.stringify({ type: "log.events", events: events }));
-      } catch (_) {
-        uiLogger.restore(events);
-      }
-    }
-
       }
       try {
         return document.execCommand("copy");
@@ -3962,9 +4026,6 @@
       try {
         const requestOptions = Object.assign({}, options || {});
         requestOptions.signal = controller.signal;
-        if (relayLogFlushTimer) clearInterval(relayLogFlushTimer);
-        relayLogFlushTimer = setInterval(flushRelayLogEvents, 250);
-        flushRelayLogEvents();
         return await fetch(url, requestOptions);
       } finally {
         clearTimeout(timer);
@@ -3983,10 +4044,6 @@
 
     async function showManualStartHint(error) {
       const copied = await tryCopyStartPath();
-        if (relayLogFlushTimer) {
-          clearInterval(relayLogFlushTimer);
-          relayLogFlushTimer = null;
-        }
       const mcpStartBatPath = relayRuntimePaths.mcpStartBatPath || "请打开 Relay 安装目录并双击 启动MCP.bat；连接成功后将自动记住经过验证的路径。";
       const hint = [
         "本地 MCP Companion 未连接",
@@ -4019,8 +4076,6 @@
       if (!isCurrent()) return { stale: true };
       if (!response.ok || result.ok === false) throw new Error(result.error || "HTTP " + response.status);
       return { stale: false, payload: payload, result: result };
-          operation.fail(error, "UI 分发 Relay 任务失败");
-          delete relayOperations[payload.requestId];
     }
 
     async function runRelayRequestWithStaleFailureGuard(context, operation, isCurrent, showFailure, ignoreStale) {
@@ -4041,18 +4096,6 @@
       var requestContext = captureRelayRequestContext();
       appendLog("检查本地 MCP Companion：" + requestContext.relayUrl);
       var guarded = await runRelayRequestWithStaleFailureGuard(
-    function finishUiRelayOperation(requestId, result) {
-      var operation = relayOperations[requestId || ""];
-      if (!operation) return;
-      var status = result && result.status ? String(result.status).toLowerCase() : "";
-      if (result && (result.ok === false || status === "error" || status === "failed" || status === "blocked")) {
-        operation.fail(new Error(String(result.error || status || "plugin operation failed")), "UI 收到插件失败结果", { status: status });
-      } else {
-        operation.succeed("UI 收到插件执行结果", { status: status || "completed" });
-      }
-      delete relayOperations[requestId || ""];
-    }
-
         requestContext,
         function () { return runRelayOpenFolderRequest(
           requestContext,
@@ -4120,12 +4163,6 @@
       payload.sessionId = relaySessionId;
       return JSON.stringify(payload);
     }
-        payload.operationId = payload.operationId || payload.requestId || "";
-        relayOperations[payload.requestId || ""] = uiLogger.startOperation("ui.command", "UI 开始处理轮询任务", {
-          operationId: payload.operationId,
-          data: { requestId: payload.requestId || "", jobType: (payload.job && payload.job.type) || "IMPORT_PSD_JOB" }
-        });
-        relayOperations[payload.requestId || ""].step("received", "UI 已接收轮询任务");
 
     function formatMcpClientSummary(clientsPayload) {
       var clients = clientsPayload && Array.isArray(clientsPayload.clients) ? clientsPayload.clients : [];
@@ -4325,6 +4362,10 @@
         clearInterval(relaySocketHeartbeat);
         relaySocketHeartbeat = null;
       }
+      if (relayLogFlushTimer) {
+        clearInterval(relayLogFlushTimer);
+        relayLogFlushTimer = null;
+      }
       if (relaySocket) {
         try { relaySocket.onclose = null; relaySocket.close(); } catch (_) {}
         relaySocket = null;
@@ -4349,6 +4390,16 @@
       }));
     }
 
+    function flushRelayLogEvents() {
+      if (!relaySocket || relaySocket.readyState !== WebSocket.OPEN || !uiLogger.pendingEvents.length) return;
+      var events = uiLogger.drain(50);
+      try {
+        relaySocket.send(JSON.stringify({ type: "log.events", events: events }));
+      } catch (_) {
+        uiLogger.restore(events);
+      }
+    }
+
     function connectRelaySocket() {
       if (!("WebSocket" in window)) return;
       if (relaySocket && (relaySocket.readyState === WebSocket.OPEN || relaySocket.readyState === WebSocket.CONNECTING)) return;
@@ -4363,6 +4414,9 @@
         sendRelaySocketHeartbeat();
         if (relaySocketHeartbeat) clearInterval(relaySocketHeartbeat);
         relaySocketHeartbeat = setInterval(sendRelaySocketHeartbeat, 5000);
+        if (relayLogFlushTimer) clearInterval(relayLogFlushTimer);
+        relayLogFlushTimer = setInterval(flushRelayLogEvents, 250);
+        flushRelayLogEvents();
         appendLog("WebSocket 已连接本地 MCP Companion。");
         refreshCleanupProviders();
       };
@@ -4381,6 +4435,10 @@
         if (relaySocketHeartbeat) {
           clearInterval(relaySocketHeartbeat);
           relaySocketHeartbeat = null;
+        }
+        if (relayLogFlushTimer) {
+          clearInterval(relayLogFlushTimer);
+          relayLogFlushTimer = null;
         }
         relaySocket = null;
         setTimeout(connectRelaySocket, 1500);
@@ -4402,17 +4460,16 @@
       appendLog("WebSocket 收到任务 " + (payload.requestId || "") + " (" + ((payload.job && payload.job.type) || "IMPORT_PSD_JOB") + ")");
       setAiStatus("执行中：" + (payload.requestId || ""));
       startExecutionWatchdog(payload.requestId || "", (payload.job && payload.job.type) || "IMPORT_PSD_JOB");
-      executeJob(payload)
-        .then(function () {
-          clearExecutionWatchdog();
-          isExecuting = false;
-          if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-            relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, operationId: payload.operationId, accepted: true }));
-          }
-          scheduleNextPoll(500);
-          setTimeout(processRelaySocketQueue, 0);
-        })
+        executeJob(payload)
+          .then(function () {
+            operation.step("plugin-dispatched", "UI 已将任务发送给 Figma 插件");
+            if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+              relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, operationId: payload.operationId, accepted: true }));
+            }
+          })
         .catch(function (error) {
+          operation.fail(error, "UI 分发 Relay 任务失败");
+          delete relayOperations[payload.requestId];
           clearExecutionWatchdog();
           isExecuting = false;
           var result = { status: "error", errors: [error.message || String(error)], warnings: [] };
@@ -4431,6 +4488,18 @@
         clearTimeout(executionWatchdogTimer);
         executionWatchdogTimer = null;
       }
+    }
+
+    function finishUiRelayOperation(requestId, result) {
+      var operation = relayOperations[requestId || ""];
+      if (!operation) return;
+      var status = result && result.status ? String(result.status).toLowerCase() : "";
+      if (result && (result.ok === false || status === "error" || status === "failed" || status === "blocked")) {
+        operation.fail(new Error(String(result.error || status || "plugin operation failed")), "UI 收到插件失败结果", { status: status });
+      } else {
+        operation.succeed("UI 收到插件执行结果", { status: status || "completed" });
+      }
+      delete relayOperations[requestId || ""];
     }
 
     function startExecutionWatchdog(requestId, jobType) {
@@ -4452,6 +4521,9 @@
           summary: { requestId: requestId, jobType: executingJobType }
         };
         isExecuting = false;
+        executingRequestId = "";
+        executingJobType = "";
+        finishUiRelayOperation(requestId, result);
         lastResultPayload = { requestId: requestId, result: result };
         postResult(requestId, result)
           .then(function () {
@@ -4500,6 +4572,12 @@
         if (!resp.ok) throw new Error("轮询失败 HTTP " + resp.status);
         isExecuting = true;
         const payload = await resp.json();
+        payload.operationId = payload.operationId || payload.requestId || "";
+        relayOperations[payload.requestId || ""] = uiLogger.startOperation("ui.command", "UI 开始处理轮询任务", {
+          operationId: payload.operationId,
+          data: { requestId: payload.requestId || "", jobType: (payload.job && payload.job.type) || "IMPORT_PSD_JOB" }
+        });
+        relayOperations[payload.requestId || ""].step("received", "UI 已接收轮询任务");
         appendLog("收到任务 " + (payload.requestId || "") + " (" + ((payload.job && payload.job.type) || "IMPORT_PSD_JOB") + ")");
         setAiStatus("执行中：" + (payload.requestId || ""));
         startExecutionWatchdog(payload.requestId || "", (payload.job && payload.job.type) || "IMPORT_PSD_JOB");
@@ -5594,11 +5672,6 @@
             canvasByPrefabPath[path] = "auto";
           }
         });
-      if (message.type === "LOG_EVENT") {
-        uiLogger.ingest(message.event);
-        return;
-      }
-
 
         prefabImportBusy = true;
         startPrefabImportProgressAnimation(2);
@@ -5623,7 +5696,6 @@
         }
         prefabImportTaskId = data.taskId || "";
         appendLog("Prefab 导入任务已创建：" + prefabImportTaskId + "，Prefab 数=" + (data.prefabCount || prefabPaths.length));
-        finishUiRelayOperation(message.requestId, hierarchyRelayResult);
         pollPrefabImportTask();
       } catch (error) {
         finishPrefabImport(false);
@@ -5677,7 +5749,6 @@
       }
       setPrefabImportStatus(lines.join("\n"));
     }
-        finishUiRelayOperation(message.requestId, result);
 
     function setPrefabImportProgress(percent) {
       var value = Math.max(0, Math.min(100, Number(percent || 0)));
@@ -5854,11 +5925,6 @@
               + ",top:" + img.borderTop
               + "} sliceKind=" + (img.sliceKind || "<empty>");
           })).join("\n"));
-    refreshLogsBtn.addEventListener("click", refreshLogViewer);
-    downloadLogsBtn.addEventListener("click", downloadFilteredLogs);
-    logKeywordFilter.addEventListener("keydown", function (event) {
-      if (event.key === "Enter") refreshLogViewer();
-    });
           appendLog("发送 " + nineSliceList.length + " 张九宫图到 MCP Relay 切图：" + (selectedUnityReplaceAssetPath || targetDir));
           var cropResp = await fetchWithTimeout(relayEndpoint("/crop-jiugong"), {
             method: "POST",
@@ -5980,6 +6046,36 @@
       var message = event.data && event.data.pluginMessage;
       if (!message) return;
 
+      if (message.type === "LOG_EVENT") {
+        uiLogger.ingest(message.event);
+        return;
+      }
+
+      if (message.type === "GET_CLEANUP_PROVIDER_PREFERENCE_RESULT") {
+        cleanupProviderPreferenceLoaded = true;
+        cleanupPreferredProviderId = message.providerId || cleanupProviderSelect.value || "codex";
+        cleanupProviderSelect.value = cleanupPreferredProviderId;
+        renderCleanupProviderStatus();
+        refreshAiPromptControls();
+        syncAiRunnerToCleanupProvider();
+        return;
+      }
+
+      if (message.type === "SET_CLEANUP_PROVIDER_PREFERENCE_RESULT") {
+        if (!message.ok) cleanupProviderStatusEl.textContent = "保存 AI 选择失败：" + (message.error || "未知错误");
+        return;
+      }
+
+      if (message.type === "QUERY_CLEANUP_RECOVERY_BACKUPS_RESULT") {
+        handleCleanupRecoveryBackupsResult(message);
+        return;
+      }
+
+      if (message.type === "RESTORE_CLEANUP_RECOVERY_BACKUP_RESULT" || message.type === "DELETE_CLEANUP_RECOVERY_BACKUP_RESULT") {
+        handleCleanupRecoveryActionResult(message);
+        return;
+      }
+
       if (message.type === "SUGGEST_NINE_SLICE_FROM_SELECTION_RESULT") {
         handleNineSliceSuggestionResult(message);
         return;
@@ -6004,6 +6100,7 @@
           ? { status: "completed", hierarchy: message.result || {} }
           : { status: "error", errors: [message.error || "Figma hierarchy export failed"], warnings: [] };
         lastResultPayload = { requestId: message.requestId, result: hierarchyRelayResult };
+        finishUiRelayOperation(message.requestId, hierarchyRelayResult);
         (async function () {
           try {
             await postResult(message.requestId, hierarchyRelayResult);
@@ -6025,34 +6122,6 @@
 
       if (message.type === "QUERY_CLEANUP_SNAPSHOT_RESULT") {
         handleCleanupSnapshotResult(message);
-        return;
-      }
-
-      if (message.type === "GET_CLEANUP_PROVIDER_PREFERENCE_RESULT") {
-        cleanupProviderPreferenceLoaded = true;
-        cleanupPreferredProviderId = message.providerId || cleanupProviderSelect.value || "codex";
-        cleanupProviderSelect.value = cleanupPreferredProviderId;
-        renderCleanupProviderStatus();
-        refreshAiPromptControls();
-        syncAiRunnerToCleanupProvider();
-        return;
-      }
-      if (requestedTemplate === "cleanup" && activeAiCleanupRun && activeAiCleanupRun.template === "cleanup" && isCleanupTerminalState(activeAiCleanupRun.state)) {
-        activeAiCleanupRun = null;
-      }
-
-      if (message.type === "SET_CLEANUP_PROVIDER_PREFERENCE_RESULT") {
-        if (!message.ok) cleanupProviderStatusEl.textContent = "保存 AI 选择失败：" + (message.error || "未知错误");
-        return;
-      }
-
-      if (message.type === "QUERY_CLEANUP_RECOVERY_BACKUPS_RESULT") {
-        handleCleanupRecoveryBackupsResult(message);
-        return;
-      }
-
-      if (message.type === "RESTORE_CLEANUP_RECOVERY_BACKUP_RESULT" || message.type === "DELETE_CLEANUP_RECOVERY_BACKUP_RESULT") {
-        handleCleanupRecoveryActionResult(message);
         return;
       }
 
@@ -6085,6 +6154,7 @@
         executingJobType = "";
         var result = message.result || {};
         lastResultPayload = { requestId: message.requestId, result: result };
+        finishUiRelayOperation(message.requestId, result);
         (async function () {
           try {
             await postResult(message.requestId, result);
@@ -6261,6 +6331,11 @@
     }
 
     // ─── 事件绑定 ───
+    refreshLogsBtn.addEventListener("click", refreshLogViewer);
+    downloadLogsBtn.addEventListener("click", downloadFilteredLogs);
+    logKeywordFilter.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") refreshLogViewer();
+    });
     connectBtn.addEventListener("click", reconnect);
     openServerBtn.addEventListener("click", openServerOrFolder);
     if (mcpConfigToggleBtn) mcpConfigToggleBtn.addEventListener("click", toggleMcpConfigPanel);
@@ -6295,12 +6370,14 @@
     runAiCleanupBtn.addEventListener("click", requestAiRun);
     aiExecutionContinueBtn.addEventListener("click", continueAiCleanup);
     aiExecutionStopBtn.addEventListener("click", stopActiveAiCleanup);
-    confirmCleanupRunBtn.addEventListener("click", continueAiCleanup);
-    cancelCleanupRunBtn.addEventListener("click", stopActiveAiCleanup);
-    closeCleanupRunBtn.addEventListener("click", closeCleanupRunDialog);
+    aiCleanupSatisfiedBtn.addEventListener("click", function () { recordCleanupSatisfaction(true); });
+    aiCleanupAdjustBtn.addEventListener("click", function () { recordCleanupSatisfaction(false); });
     aiExecutionFollowupInput.addEventListener("input", refreshAiExecutionControls);
     aiRunnerSelect.addEventListener("change", selectAiRunner);
     cleanupProviderSelect.addEventListener("change", selectCleanupProvider);
+    deferCleanupRecoveryBtn.addEventListener("click", deferCleanupRecovery);
+    deleteCleanupRecoveryBtn.addEventListener("click", function () { runCleanupRecoveryAction("delete"); });
+    restoreCleanupRecoveryBtn.addEventListener("click", function () { runCleanupRecoveryAction("restore"); });
     aiPromptPreviewEl.addEventListener("input", refreshAiPromptControls);
     aiPromptTemplateSelect.addEventListener("change", refreshAiPromptControls);
     prefabImportBtn.addEventListener("click", startPrefabImportToFigma);
@@ -6315,9 +6392,6 @@
     document.addEventListener("drop", handleAiPromptPsdWindowDrop);
     cancelPsdIncrementalBtn.addEventListener("click", cancelPsdIncrementalUpdate);
     confirmPsdIncrementalBtn.addEventListener("click", confirmPsdIncrementalUpdate);
-    deferCleanupRecoveryBtn.addEventListener("click", deferCleanupRecovery);
-    deleteCleanupRecoveryBtn.addEventListener("click", function () { runCleanupRecoveryAction("delete"); });
-    restoreCleanupRecoveryBtn.addEventListener("click", function () { runCleanupRecoveryAction("restore"); });
     window.addEventListener("pagehide", stopAiCleanupOnPanelClose);
     window.addEventListener("beforeunload", stopAiCleanupOnPanelClose);
     tabButtons.forEach(function (button) {

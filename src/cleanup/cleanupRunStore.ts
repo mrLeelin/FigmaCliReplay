@@ -22,6 +22,7 @@ export interface CleanupRunRecord {
   snapshot: CleanupSnapshotV1;
   state: CleanupState;
   planReady: boolean;
+  autoApproved: boolean;
   plan?: CleanupPlanV2;
   planSummary?: CleanupPlanSummaryV2;
   startedAt: string;
@@ -59,6 +60,7 @@ export class CleanupRunStore {
     providerId: PlanningProviderId;
     snapshot: CleanupSnapshotV1;
     snapshotHash: string;
+    autoApprove?: boolean;
   }): CleanupRunRecord {
     if (this.activeBySession.has(options.sessionId)) {
       throw new CleanupError("CLEANUP_ALREADY_RUNNING", "the Figma plugin session already owns an active cleanup run");
@@ -79,6 +81,7 @@ export class CleanupRunStore {
       snapshot: options.snapshot,
       state: "planning",
       planReady: false,
+      autoApproved: options.autoApprove === true,
       startedAt,
       output: [],
       nextSequence: 1,

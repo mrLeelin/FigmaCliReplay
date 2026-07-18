@@ -66,12 +66,12 @@ function validPlan(overrides = {}) {
 test("extracts exactly one marked cleanup plan", () => {
   const plan = validPlan();
   assert.deepEqual(extractCleanupPlan(`${CleanupPlanMarker}\n${JSON.stringify(plan)}`), plan);
-  assert.throws(() => extractCleanupPlan(JSON.stringify(plan)), /missing cleanup plan marker/i);
+  assert.throws(() => extractCleanupPlan(JSON.stringify(plan)), /缺少清理计划标记/);
   assert.throws(
     () => extractCleanupPlan(`${CleanupPlanMarker}\n{}\n${CleanupPlanMarker}\n{}`),
-    /exactly one cleanup plan marker/i,
+    /期望恰好一个清理计划标记/,
   );
-  assert.throws(() => extractCleanupPlan(`${CleanupPlanMarker}\n{broken`), /invalid cleanup plan JSON/i);
+  assert.throws(() => extractCleanupPlan(`${CleanupPlanMarker}\n{broken`), /无效的清理计划 JSON/);
 });
 
 test("extracts a marked cleanup plan wrapped in one JSON code fence", () => {
@@ -80,7 +80,7 @@ test("extracts a marked cleanup plan wrapped in one JSON code fence", () => {
   assert.deepEqual(extractCleanupPlan(fencedPlan), plan);
   assert.throws(
     () => extractCleanupPlan(`${fencedPlan}\nAdditional explanation`),
-    /invalid cleanup plan JSON/i,
+    /无效的清理计划 JSON/,
   );
 });
 
@@ -92,44 +92,44 @@ test("normalizes a valid plan and drops unknown display fields", () => {
 });
 
 test("rejects root mismatch and foreign references", () => {
-  assert.throws(() => validateCleanupPlan(validPlan({ rootNodeId: "OTHER" }), snapshot), /rootNodeId must match snapshot root/i);
+  assert.throws(() => validateCleanupPlan(validPlan({ rootNodeId: "OTHER" }), snapshot), /rootNodeId 必须与快照根节点匹配/);
   const foreignGroup = validPlan();
   foreignGroup.groups[1].sourceNodeIds = ["FOREIGN"];
-  assert.throws(() => validateCleanupPlan(foreignGroup, snapshot), /unknown snapshot node FOREIGN/i);
+  assert.throws(() => validateCleanupPlan(foreignGroup, snapshot), /未知的快照节点 FOREIGN/);
   const foreignCandidate = validPlan();
   foreignCandidate.componentCandidates[0].sourceNodeIds = ["FOREIGN"];
-  assert.throws(() => validateCleanupPlan(foreignCandidate, snapshot), /unknown snapshot node FOREIGN/i);
+  assert.throws(() => validateCleanupPlan(foreignCandidate, snapshot), /未知的快照节点 FOREIGN/);
 });
 
 test("rejects duplicate, incomplete, and reordered root child coverage", () => {
   const duplicate = validPlan();
   duplicate.groups[1].sourceNodeIds = ["B", "C"];
-  assert.throws(() => validateCleanupPlan(duplicate, snapshot), /node B appears in more than one group/i);
+  assert.throws(() => validateCleanupPlan(duplicate, snapshot), /节点 B 出现在多个分组中/);
 
   const incomplete = validPlan();
   incomplete.groups[1].sourceNodeIds = [];
-  assert.throws(() => validateCleanupPlan(incomplete, snapshot), /group sourceNodeIds must not be empty|root direct children exactly once/i);
+  assert.throws(() => validateCleanupPlan(incomplete, snapshot), /sourceNodeIds 不能为空|完整覆盖根节点/);
 
   const reordered = validPlan();
   reordered.groups[0].sourceNodeIds = ["B", "A"];
-  assert.throws(() => validateCleanupPlan(reordered, snapshot), /sourceNodeIds must preserve sibling order/i);
+  assert.throws(() => validateCleanupPlan(reordered, snapshot), /sourceNodeIds 必须保持兄弟节点顺序/);
 });
 
 test("rejects a source under the wrong or unsupported parent", () => {
   const wrongParent = validPlan();
   wrongParent.groups[0].sourceNodeIds = ["D"];
-  assert.throws(() => validateCleanupPlan(wrongParent, snapshot), /node D is not a direct child of R/i);
+  assert.throws(() => validateCleanupPlan(wrongParent, snapshot), /节点 D 不是 R 的直接子节点/);
 
   const nestedParent = validPlan();
   nestedParent.groups[0] = { name: "Nested", parentNodeId: "A", sourceNodeIds: ["D"], preserveSiblingOrder: true };
-  assert.throws(() => validateCleanupPlan(nestedParent, snapshot), /group parentNodeId must equal snapshot root/i);
+  assert.throws(() => validateCleanupPlan(nestedParent, snapshot), /parentNodeId 必须等于快照根节点/);
 });
 
 test("rejects mutation authority embedded in AI output", () => {
   for (const field of ["applied", "commands", "toolCalls", "mutationResult"]) {
     assert.throws(
       () => validateCleanupPlan(validPlan({ [field]: field === "applied" ? true : [] }), snapshot),
-      new RegExp(`forbidden cleanup plan field ${field}`, "i"),
+      new RegExp(`禁止的清理计划字段 ${field}`),
     );
   }
 });
@@ -161,7 +161,22 @@ test("validates an exact V2 hierarchy plan and canonical snapshot hash", () => {
   assert.deepEqual(validateCleanupPlanV2(plan, v2Snapshot), plan);
   assert.throws(
     () => validateCleanupPlanV2({ ...plan, snapshotHash: "0".repeat(64) }, v2Snapshot),
-    /snapshot hash/i,
+    /快照哈希/,
+  );
+});
+
+test("rejects a V2 plan that only renames original nodes", () => {
+  const renameOnly = {
+    ...validV2Plan(),
+    operations: [
+      { id: "rename-a", type: "RENAME_NODE", nodeId: "A", name: "Background_Image" },
+      { id: "rename-b", type: "RENAME_NODE", nodeId: "B", name: "Title_Text" },
+    ],
+  };
+
+  assert.throws(
+    () => validateCleanupPlanV2(renameOnly, v2Snapshot),
+    /must create semantic groups instead of only renaming original nodes/i,
   );
 });
 
@@ -169,11 +184,11 @@ test("rejects component writes, duplicate operation ids, and redundant wrappers"
   const plan = validV2Plan();
   assert.throws(
     () => validateCleanupPlanV2({ ...plan, operations: [{ id: "component", type: "CREATE_COMPONENT", nodeId: "A" }] }, v2Snapshot),
-    /unsupported cleanup operation/i,
+    /不支持的清理操作/,
   );
   assert.throws(
     () => validateCleanupPlanV2({ ...plan, operations: [plan.operations[0], { ...plan.operations[1], id: plan.operations[0].id }] }, v2Snapshot),
-    /duplicate cleanup operation id/i,
+    /重复的清理操作 id/,
   );
   const alreadyWrapped = {
     ...v2Snapshot,
@@ -185,7 +200,7 @@ test("rejects component writes, duplicate operation ids, and redundant wrappers"
       snapshotHash: computeCleanupSnapshotHash(alreadyWrapped),
       operations: [{ id: "wrapper", type: "CREATE_GROUP", parentNodeId: "R", name: "Background", childNodeIds: ["A"] }],
     }, alreadyWrapped),
-    /single-child group|redundant wrapper/i,
+    /不允许单子节点分组|冗余/,
   );
 });
 
@@ -214,6 +229,6 @@ test("adapts V2 without adding post-approval operations", () => {
     target: { nodeId: "R", snapshotHash: plan.snapshotHash },
     operations: plan.operations,
     verification: plan.verification,
-    createBackup: true,
+    createBackup: false,
   });
 });

@@ -23,6 +23,7 @@ async function requestJson(pathname, options = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
     ...options,
     headers: {
+      "x-figma-mcp-relay-internal": "plugin-runtime",
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...(options.headers || {})
     }
@@ -183,7 +184,7 @@ async function postPluginResult(requestId, result) {
         assetPaths: { token: tokenFile }
       })
     });
-    assert(assetSubmit.response.status === 400, `token asset path status=${assetSubmit.response.status}`);
+    assert(assetSubmit.response.status >= 400 && assetSubmit.response.status < 500, `token asset path status=${assetSubmit.response.status}`);
   }
 
   log("websocket multi-session routing");

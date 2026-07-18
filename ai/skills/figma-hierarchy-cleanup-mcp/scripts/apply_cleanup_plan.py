@@ -46,8 +46,8 @@ def validate_transaction_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("cleanup transaction plan operations must be an array")
     if not isinstance(plan.get("verification"), dict):
         raise ValueError("cleanup transaction plan verification must be an object")
-    if plan.get("createBackup") is not True:
-        raise ValueError("cleanup transaction plan createBackup must be true")
+    if plan.get("createBackup") is not False:
+        raise ValueError("cleanup transaction plan createBackup must be false")
     reject_forbidden_fields(plan)
     return plan
 

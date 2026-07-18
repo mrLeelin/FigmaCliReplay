@@ -1068,6 +1068,45 @@ def execute_auto_component_sets(
     }
 
 
+def run_component_sets_only(
+    args: argparse.Namespace,
+    relay_url: str,
+    root_target: Dict[str, str],
+    work_dir: Path,
+) -> Tuple[int, Dict[str, Any]]:
+    """Create variants only after the caller has recorded final satisfaction."""
+    timings: List[Dict[str, Any]] = []
+    artifact_paths: List[Path] = []
+    health = run_timed_step(timings, "health", lambda: ensure_mcp_companion(relay_url, startup_timeout=args.startup_timeout))
+    pipeline_report: Dict[str, Any] = {
+        "status": "planned",
+        "workDir": work_dir.as_posix(),
+        "health": health,
+        "root": {"target": root_target, "skippedHierarchyCleanup": True},
+        "steps": [],
+        "timings": timings,
+        "summary": {"hierarchyCleanupSkipped": True, "finalScreenshotExpected": False},
+        "quality": {},
+    }
+    if not args.apply_confirmed:
+        pipeline_report["message"] = "ComponentSet creation requires --apply-confirmed after final satisfaction."
+        return 0, pipeline_report
+
+    auto_component_sets = execute_auto_component_sets(args, relay_url, root_target, work_dir, timings, artifact_paths)
+    pipeline_report["steps"].append(auto_component_sets)
+    pipeline_report["autoComponentSets"] = auto_component_sets
+    pipeline_report["status"] = "completed"
+    pipeline_report["timings"] = timings
+    pipeline_report["summary"] = {
+        "hierarchyCleanupSkipped": True,
+        "autoComponentSetCount": auto_component_sets.get("appliedCount", 0),
+        "elapsedSeconds": round(sum(float(item.get("elapsedSeconds") or 0) for item in timings), 3),
+        "finalScreenshotExpected": False,
+    }
+    pipeline_report["quality"] = collect_pipeline_quality({"summary": {}}, timings, artifact_paths)
+    return 0, pipeline_report
+
+
 def run_pipeline(args: argparse.Namespace) -> Tuple[int, Dict[str, Any]]:
     """执行完整整理流水线。"""
     timings: List[Dict[str, Any]] = []
@@ -1075,6 +1114,8 @@ def run_pipeline(args: argparse.Namespace) -> Tuple[int, Dict[str, Any]]:
     work_dir.mkdir(parents=True, exist_ok=True)
     relay_url = args.relay_url.rstrip("/")
     root_target = extract_figma_target(args.figma_url, args.node_id, args.file_key)
+    if args.auto_component_sets_only:
+        return run_component_sets_only(args, relay_url, root_target, work_dir)
     if args.nested_target:
         return run_explicit_nested_targets(args, relay_url, root_target, work_dir)
     wrapper_chain_values = list(args.wrapper_chain)
@@ -1421,6 +1462,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wrapper-root-name", default="", help="Expected live wrapper root name, for example [ListRoot].")
     parser.add_argument("--auto-nested-generic", action="store_true", help="After root/wrapper apply, split generic TabBar, ProgressSection, and list Content children automatically.")
     parser.add_argument("--auto-component-sets", default=True, action=argparse.BooleanOptionalAction, help="After cleanup, automatically create generic ComponentSet variants for clear repeated sibling frames.")
+    parser.add_argument("--auto-component-sets-only", action="store_true", help="Create ComponentSet variants only; requires --apply-confirmed after final satisfaction and skips hierarchy cleanup.")
     parser.add_argument("--fast-wrapper-chain", default=True, action=argparse.BooleanOptionalAction, help="Use FIGMA_HIERARCHY_WRAP_CHAIN for multi-layer wrapper chains when available.")
     parser.add_argument("--allow-blocking-plan", action="store_true", help="允许存在 blockingErrors 的计划继续执行")
     parser.add_argument("--plan", type=Path, default=None, help="使用已人工确认的根计划 JSON；不传则自动生成")

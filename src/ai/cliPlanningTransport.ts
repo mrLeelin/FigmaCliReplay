@@ -1,11 +1,12 @@
 import { spawn, spawnSync, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import path from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
 import { PLUGIN_ROOT } from "../config.js";
 import type { CleanupPlanningTransport } from "../cleanup/cleanupPlanner.js";
 import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type { OperationScope } from "../logging/operationScope.js";
+import { logInfo, logError, logWarn } from "../utils/logger.js";
 
 export interface CliPlanningTransportOptions {
   workspace?: string;
@@ -20,26 +21,38 @@ export class CliPlanningTransport implements CleanupPlanningTransport {
 
   constructor(options: CliPlanningTransportOptions = {}) {
     this.workspace = options.workspace || PLUGIN_ROOT;
-    this.totalTimeoutMs = options.totalTimeoutMs ?? 180_000;
-    this.idleTimeoutMs = options.idleTimeoutMs ?? 90_000;
+    this.totalTimeoutMs = options.totalTimeoutMs ?? 300_000; // 5 minutes
+    this.idleTimeoutMs = options.idleTimeoutMs ?? 180_000; // 3 minutes
   }
 
   async run(options: Parameters<CleanupPlanningTransport["run"]>[0]): Promise<string> {
     if (options.signal.aborted) throw new Error("cleanup planning was cancelled");
     const command = resolvePlanningCommand(options.provider.command);
-    const args = options.provider.buildArgs(this.workspace, options.prompt);
+    const args = options.provider.buildArgs(this.workspace);
     const operation = getLoggingRuntime().logger("cli-planning-transport").startOperation(
       "ai.cli-planning",
       "开始 CLI 规划任务",
       {
         operationId: options.operationId,
-        data: { providerId: options.provider.id, command: path.basename(command), argumentCount: args.length },
+        data: {
+          providerId: options.provider.id,
+          command: path.basename(command),
+          argumentCount: args.length,
+          totalTimeoutMs: this.totalTimeoutMs,
+          idleTimeoutMs: this.idleTimeoutMs,
+        }
       },
     );
     try {
       const child = spawnPlanningCli(command, args, this.workspace);
       operation.step("cli-spawn", "CLI 规划进程已启动", { pid: child.pid });
-      const result = await collectPlanningResult(child, options, this.totalTimeoutMs, this.idleTimeoutMs, operation);
+      const result = await collectPlanningResult(
+        child,
+        options,
+        this.totalTimeoutMs,
+        this.idleTimeoutMs,
+        operation,
+      );
       operation.succeed("CLI 规划任务完成", { outputChars: result.length });
       return result;
     } catch (error) {
@@ -50,7 +63,7 @@ export class CliPlanningTransport implements CleanupPlanningTransport {
 }
 
 async function collectPlanningResult(
-  child: ChildProcessByStdio<null, Readable, Readable>,
+  child: ChildProcessByStdio<Writable, Readable, Readable>,
   options: Parameters<CleanupPlanningTransport["run"]>[0],
   totalTimeoutMs: number,
   idleTimeoutMs: number,
@@ -69,12 +82,22 @@ async function collectPlanningResult(
       clearTimeout(totalTimer);
       clearTimeout(idleTimer);
       options.signal.removeEventListener("abort", abort);
-      if (error) reject(error);
-      else if (!assistantText.trim()) reject(new Error("planning provider returned no assistant plan"));
-      else resolve(assistantText.trim());
+      if (error) {
+        logError("CLI planning transport failed", {
+          error: error.message,
+          assistantTextLength: assistantText.length,
+        });
+        reject(error);
+      } else if (!assistantText.trim()) {
+        logError("CLI planning transport returned no output");
+        reject(new Error("planning provider returned no assistant plan"));
+      } else {
+        resolve(assistantText.trim());
+      }
     };
     const failTimeout = (message: string): void => {
       operation.step("timeout", "CLI 规划任务超时", { message }, "warn");
+      logWarn("CLI planning transport timeout", { message });
       terminatePlanningProcess(child);
       finish(new Error(message));
     };
@@ -114,14 +137,19 @@ async function collectPlanningResult(
     wirePlanningLines(child.stdout, (line) => consume(line, "stdout"));
     wirePlanningLines(child.stderr, (line) => consume(line, "stderr"));
     child.once("error", (error) => finish(new Error(`planning provider failed to start: ${error.message}`)));
+    child.stdin.once("error", (error) => finish(new Error(`planning provider input failed: ${error.message}`)));
     child.once("close", (code) => {
-      operation.step("cli-exit", "CLI 规划进程已退出", { exitCode: code, outputChars: assistantText.length });
+      operation.step("cli-exit", "CLI 规划进程已退出", {
+        exitCode: code,
+        outputChars: assistantText.length
+      });
       if (terminalState === "failed" || code !== 0) {
         finish(new Error(`planning provider failed (exit ${code === null ? "unknown" : code})`));
         return;
       }
       finish();
     });
+    child.stdin.end(options.provider.buildStdin(options.prompt), "utf8");
   });
 }
 
@@ -139,20 +167,20 @@ function wirePlanningLines(stream: NodeJS.ReadableStream, consume: (line: string
   });
 }
 
-function spawnPlanningCli(command: string, args: string[], cwd: string): ChildProcessByStdio<null, Readable, Readable> {
+function spawnPlanningCli(command: string, args: string[], cwd: string): ChildProcessByStdio<Writable, Readable, Readable> {
   const env = { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" };
   if (process.platform === "win32" && /\.cmd$/i.test(command)) {
     const commandLine = `call ${cmdQuote(command)} ${args.map(cmdQuote).join(" ")}`;
     return spawn("cmd.exe", ["/d", "/s", "/c", commandLine], {
       cwd,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
       windowsVerbatimArguments: true,
     });
   }
-  return spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true });
+  return spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: false, windowsHide: true });
 }
 
 function resolvePlanningCommand(command: string): string {

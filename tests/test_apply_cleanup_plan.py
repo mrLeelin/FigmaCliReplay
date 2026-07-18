@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SCRIPT_DIR = (
@@ -15,6 +18,7 @@ SCRIPT_DIR = (
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from apply_cleanup_plan import build_transaction_job, normalize_transaction_report, validate_transaction_plan
+from run_cleanup_pipeline import run_pipeline
 
 
 def valid_plan() -> dict:
@@ -24,7 +28,7 @@ def valid_plan() -> dict:
         "target": {"nodeId": "R", "snapshotHash": "a" * 64},
         "operations": [],
         "verification": {"preserveAbsoluteBoundsTolerance": 0.01},
-        "createBackup": True,
+        "createBackup": False,
     }
 
 
@@ -53,6 +57,30 @@ class ApplyCleanupPlanTests(unittest.TestCase):
             normalize_transaction_report({"result": {"status": "completed", "state": "rolled_back"}})
         with self.assertRaisesRegex(RuntimeError, "transaction state"):
             normalize_transaction_report({"result": {"status": "failed", "state": "unknown"}})
+
+    def test_component_sets_only_skips_hierarchy_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = SimpleNamespace(
+                work_dir=Path(temp_dir),
+                relay_url="http://127.0.0.1:32130",
+                figma_url="",
+                node_id="R",
+                file_key="",
+                auto_component_sets_only=True,
+                nested_target=[],
+                startup_timeout=0.1,
+                apply_confirmed=True,
+            )
+            with patch("run_cleanup_pipeline.ensure_mcp_companion", return_value={"ok": True}), \
+                 patch("run_cleanup_pipeline.execute_auto_component_sets", return_value={"appliedCount": 1, "planCount": 1, "steps": []}) as execute_sets, \
+                 patch("run_cleanup_pipeline.plan_root", side_effect=AssertionError("hierarchy plan must not run")):
+                exit_code, report = run_pipeline(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["status"], "completed")
+        self.assertTrue(report["summary"]["hierarchyCleanupSkipped"])
+        self.assertEqual(report["summary"]["autoComponentSetCount"], 1)
+        execute_sets.assert_called_once()
 
 
 if __name__ == "__main__":

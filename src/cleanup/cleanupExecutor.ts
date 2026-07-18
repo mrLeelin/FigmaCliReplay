@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { PLUGIN_ROOT } from "../config.js";
-import { toFigmaCleanupTransactionPlan } from "../cleanupPlan.js";
 import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type { OperationScope } from "../logging/operationScope.js";
 import { isRecord } from "../utils.js";
@@ -28,6 +27,17 @@ export interface CleanupExecutorOptions {
   workspace?: string;
   pythonCommand?: string;
   timeoutMs?: number;
+}
+
+export interface CleanupPipelineProcessOptions {
+  pluginRoot: string;
+  sessionId: string;
+  rootNodeId: string;
+  fileKey?: string;
+  workDir: string;
+  outputPath: string;
+  stage?: "hierarchy" | "component-sets";
+  timeoutSeconds?: number;
 }
 
 export function buildCleanupApplyProcess(options: CleanupApplyProcessOptions): { command: string; args: string[] } {
@@ -55,6 +65,43 @@ export function buildCleanupApplyProcess(options: CleanupApplyProcessOptions): {
   };
 }
 
+/**
+ * The repository skill is the authoritative cleanup path.  It re-analyzes the
+ * live Figma tree, plans semantic/nested groups, verifies every write, then
+ * creates only unambiguous ComponentSets with source backups.
+ */
+export function buildCleanupPipelineProcess(options: CleanupPipelineProcessOptions): { command: string; args: string[] } {
+  const scriptPath = path.join(
+    options.pluginRoot,
+    "ai",
+    "skills",
+    "figma-hierarchy-cleanup-mcp",
+    "scripts",
+    "run_cleanup_pipeline.py",
+  );
+  const stageArgs = options.stage === "component-sets"
+    ? ["--auto-component-sets-only"]
+    : ["--auto-nested-generic", "--no-auto-component-sets"];
+  const args = [
+    scriptPath,
+    "--node-id",
+    options.rootNodeId,
+    "--session-id",
+    options.sessionId,
+    "--work-dir",
+    path.normalize(options.workDir),
+    "--output",
+    path.normalize(options.outputPath),
+    "--apply-confirmed",
+    ...stageArgs,
+    "--detect-psd-prefix-hints",
+    "--timeout",
+    String(options.timeoutSeconds ?? 600),
+  ];
+  if (options.fileKey) args.splice(3, 0, "--file-key", options.fileKey);
+  return { command: "python", args };
+}
+
 export function validateCleanupExecutionReport(value: unknown): CleanupExecutionResult {
   if (!isRecord(value)) throw new Error("cleanup transaction report must be a JSON object");
   const state = value.state;
@@ -66,6 +113,30 @@ export function validateCleanupExecutionReport(value: unknown): CleanupExecution
     throw new Error(`cleanup transaction status is ${String(value.status || "missing")}`);
   }
   return { state, report: value };
+}
+
+export function validateCleanupPipelineReport(value: unknown): CleanupExecutionResult {
+  if (!isRecord(value)) throw new Error("cleanup skill pipeline report must be a JSON object");
+  if (value.status !== "completed") {
+    throw new Error(`cleanup skill pipeline status is ${String(value.status || "missing")}`);
+  }
+  const steps = Array.isArray(value.steps) ? value.steps : [];
+  if (hasFailedPipelineVerification(steps)) {
+    return { state: "recovery_required", report: value };
+  }
+  return { state: "succeeded", report: value };
+}
+
+function hasFailedPipelineVerification(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasFailedPipelineVerification);
+  if (!isRecord(value)) return false;
+  if (value.allPass === false) return true;
+
+  // The ComponentSet stage is nested beneath its own stage record. Inspect
+  // every nested `steps` / `summary` node so a failed sub-verification never
+  // gets reported to the UI as a completed cleanup.
+  return hasFailedPipelineVerification(value.steps)
+    || hasFailedPipelineVerification(value.summary);
 }
 
 export class CleanupExecutor implements CleanupExecutorPort {
@@ -80,30 +151,48 @@ export class CleanupExecutor implements CleanupExecutorPort {
     this.runsRoot = options.runsRoot || path.join(this.pluginRoot, ".tmp", "ai-runs");
     this.workspace = options.workspace || this.pluginRoot;
     this.pythonCommand = options.pythonCommand || "python";
-    this.timeoutMs = options.timeoutMs ?? 120_000;
+    this.timeoutMs = options.timeoutMs ?? 600_000;
   }
 
   async execute(request: CleanupExecutorRequest): Promise<CleanupExecutionResult> {
+    return await this.executePipeline(request, "hierarchy");
+  }
+
+  async executeComponentSets(request: CleanupExecutorRequest): Promise<CleanupExecutionResult> {
+    return await this.executePipeline(request, "component-sets");
+  }
+
+  private async executePipeline(
+    request: CleanupExecutorRequest,
+    stage: "hierarchy" | "component-sets",
+  ): Promise<CleanupExecutionResult> {
     const operation = getLoggingRuntime().logger("cleanup-executor").startOperation(
       "cleanup.execution",
       "开始执行 Cleanup 事务",
-      { operationId: request.runId, data: { sessionId: request.sessionId } },
+      { operationId: `${request.runId}:${stage}`, data: { sessionId: request.sessionId, stage } },
     );
     const runDir = path.join(this.runsRoot, request.runId);
-    const planPath = path.join(runDir, "cleanup-transaction-plan.json");
-    const outputPath = path.join(runDir, "cleanup-apply-report.json");
+    const planPath = path.join(runDir, "ai-review-plan.json");
+    const pipelineDir = path.join(runDir, "skill-pipeline", stage);
+    const outputPath = path.join(runDir, stage === "hierarchy" ? "cleanup-pipeline-report.json" : "cleanup-component-sets-report.json");
     try {
       fs.mkdirSync(runDir, { recursive: true });
-      const transactionPlan = toFigmaCleanupTransactionPlan(request.plan, request.snapshot);
-      fs.writeFileSync(planPath, `${JSON.stringify(transactionPlan, null, 2)}\n`, "utf8");
-      operation.step("execution", "Cleanup 事务计划已写入", {
+      fs.writeFileSync(planPath, `${JSON.stringify(request.plan, null, 2)}\n`, "utf8");
+      operation.step("ai-plan-audit", "AI 整理计划已归档，实际写入将由技能流水线重新分析", {
         operationCount: request.plan.operations.length
       });
-      const processSpec = buildCleanupApplyProcess({
+      const fileKey = typeof request.snapshot.fileKey === "string" ? request.snapshot.fileKey.trim() : "";
+      operation.step("stage", stage === "hierarchy"
+        ? "Executing hierarchy cleanup; ComponentSet creation is disabled until final satisfaction."
+        : "Executing ComponentSet creation after final satisfaction.", { stage });
+      const processSpec = buildCleanupPipelineProcess({
         pluginRoot: this.pluginRoot,
         sessionId: request.sessionId,
-        planPath,
+        rootNodeId: request.snapshot.rootNodeId,
+        ...(fileKey ? { fileKey } : {}),
+        workDir: pipelineDir,
         outputPath,
+        stage,
         timeoutSeconds: Math.ceil(this.timeoutMs / 1000),
       });
       processSpec.command = this.pythonCommand;
@@ -114,15 +203,21 @@ export class CleanupExecutor implements CleanupExecutorPort {
         request.signal,
         request.onProgress,
         this.timeoutMs,
-        request.runId,
+        `${request.runId}:${stage}`,
         operation,
+        validateCleanupPipelineReport,
       );
+      emitPipelineReportProgress(result.report, request.onProgress, operation);
       if (result.state === "succeeded") {
-        operation.step("verification", "Cleanup 事务报告验证通过");
-        operation.succeed("Cleanup 事务执行成功");
+        operation.step("verification", stage === "hierarchy"
+          ? "层级整理报告验证通过，等待最终满意确认。"
+          : "确认后的 ComponentSet 变体报告验证通过。");
+        operation.succeed(stage === "hierarchy"
+          ? "层级整理技能流水线执行成功"
+          : "确认后的 ComponentSet 变体技能流水线执行成功");
       } else {
-        operation.step("rollback", "Cleanup 事务已回滚或需要恢复", { state: result.state }, "warn");
-        operation.fail(new Error(`cleanup transaction ended as ${result.state}`), "Cleanup 事务执行失败");
+        operation.step("rollback", "技能流水线验证未通过，需要恢复处理", { state: result.state }, "warn");
+        operation.fail(new Error(`cleanup skill pipeline ended as ${result.state}`), "完整层级整理技能流水线未通过验证");
       }
       return result;
     } catch (error) {
@@ -141,6 +236,7 @@ async function runCleanupProcess(
   timeoutMs: number,
   operationId: string,
   operation: OperationScope,
+  reportValidator: (value: unknown) => CleanupExecutionResult,
 ): Promise<CleanupExecutionResult> {
   return await new Promise((resolve, reject) => {
     const child = spawn(processSpec.command, processSpec.args, {
@@ -182,12 +278,38 @@ async function runCleanupProcess(
       operation.step("cli-exit", "Cleanup Python 执行进程已退出", { exitCode: code });
       try {
         if (!fs.existsSync(outputPath)) throw new Error("cleanup transaction report is missing");
-        resolve(validateCleanupExecutionReport(JSON.parse(fs.readFileSync(outputPath, "utf8"))));
+        resolve(reportValidator(JSON.parse(fs.readFileSync(outputPath, "utf8"))));
       } catch (error) {
         reject(error);
       }
     });
   });
+}
+
+function emitPipelineReportProgress(
+  report: Record<string, unknown>,
+  onProgress: (progress: CleanupProgress) => void,
+  operation: OperationScope,
+): void {
+  const timings = Array.isArray(report.timings) ? report.timings : [];
+  for (const timing of timings) {
+    if (!isRecord(timing) || typeof timing.name !== "string") continue;
+    const elapsedMs = typeof timing.elapsedMs === "number"
+      ? timing.elapsedMs
+      : typeof timing.elapsedSeconds === "number"
+        ? timing.elapsedSeconds * 1000
+        : undefined;
+    const message = `Skill pipeline completed ${timing.name}${elapsedMs === undefined ? "" : ` (${Math.round(elapsedMs)}ms)`}.`;
+    onProgress({ message, state: "applying" });
+    operation.step(`skill.${timing.name}`, "技能流水线步骤完成", { ...(elapsedMs === undefined ? {} : { elapsedMs }) });
+  }
+  const autoSets = isRecord(report.autoComponentSets) ? report.autoComponentSets : undefined;
+  if (autoSets) {
+    const planCount = typeof autoSets.planCount === "number" ? autoSets.planCount : 0;
+    const appliedCount = typeof autoSets.appliedCount === "number" ? autoSets.appliedCount : 0;
+    onProgress({ message: `AutoComponentSet finished: ${appliedCount}/${planCount} clear candidates applied.`, state: "verifying" });
+    operation.step("auto-component-set", "自动 ComponentSet 阶段完成", { planCount, appliedCount });
+  }
 }
 
 function wireProgress(

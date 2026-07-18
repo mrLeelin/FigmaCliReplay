@@ -1,12 +1,15 @@
 import { isRecord } from "../utils.js";
+import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type { PlanningProvider } from "./planningProvider.js";
+
+const logger = getLoggingRuntime().logger("codex-cli-provider");
 
 export const codexCliProvider: PlanningProvider = {
   id: "codex",
   label: "Codex",
   command: "codex",
-  buildArgs(workspace: string, prompt: string): string[] {
-    return [
+  buildArgs(workspace: string, prompt?: string): string[] {
+    const args = [
       "exec",
       "--json",
       "--sandbox",
@@ -19,8 +22,17 @@ export const codexCliProvider: PlanningProvider = {
       "mcp_servers.coplay_mcp.enabled=false",
       "--cd",
       workspace,
-      prompt,
+      prompt ?? "-",
     ];
+    logger.debug("已构建 Codex CLI 安全参数", {
+      step: "cli-spawn",
+      argumentCount: args.length,
+      promptViaStdin: prompt === undefined
+    });
+    return args;
+  },
+  buildStdin(prompt: string): string {
+    return prompt;
   },
   extractAssistantText(event: unknown): string {
     if (!isRecord(event) || event.type !== "item.completed" || !isRecord(event.item) || event.item.type !== "agent_message") return "";
@@ -33,4 +45,3 @@ export const codexCliProvider: PlanningProvider = {
     return null;
   },
 };
-

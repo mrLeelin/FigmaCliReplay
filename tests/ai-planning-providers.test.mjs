@@ -20,11 +20,13 @@ test("registry exposes Codex and Claude Code without silently falling back", asy
 });
 
 test("Codex provider produces cleanup-safe arguments and final text", () => {
-  const args = codexCliProvider.buildArgs("E:\\relay", "prompt");
+  const args = codexCliProvider.buildArgs("E:\\relay");
   assert.deepEqual(args.slice(0, 5), ["exec", "--json", "--sandbox", "workspace-write", "--disable"]);
   assert.match(args.join(" "), /--cd E:\\relay/);
-  assert.equal(args.at(-1), "prompt");
+  assert.equal(args.at(-1), "-");
+  assert.doesNotMatch(args.join(" "), /prompt/);
   assert.doesNotMatch(args.join(" "), /resume|full-auto/i);
+  assert.equal(codexCliProvider.buildStdin("prompt"), "prompt");
   assert.equal(codexCliProvider.extractAssistantText({
     type: "item.completed",
     item: { type: "agent_message", text: "codex plan" },
@@ -36,10 +38,14 @@ test("Codex provider produces cleanup-safe arguments and final text", () => {
 });
 
 test("Claude Code provider produces cleanup-safe arguments and final text", () => {
-  const args = claudeCodeCliProvider.buildArgs("E:\\relay", "prompt");
-  assert.deepEqual(args.slice(0, 5), ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]);
-  assert.equal(args.at(-1), "prompt");
+  const args = claudeCodeCliProvider.buildArgs("E:\\relay");
+  assert.deepEqual(args, ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]);
+  assert.doesNotMatch(args.join(" "), /prompt/);
   assert.doesNotMatch(args.join(" "), /resume/i);
+  assert.deepEqual(JSON.parse(claudeCodeCliProvider.buildStdin("prompt")), {
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: "prompt" }] },
+  });
   assert.equal(claudeCodeCliProvider.extractAssistantText({ type: "result", result: "claude plan" }), "claude plan");
   assert.equal(claudeCodeCliProvider.extractAssistantText({
     type: "assistant",

@@ -8,6 +8,7 @@ export type CleanupState =
   | "review"
   | "applying"
   | "verifying"
+  | "awaiting_component_confirmation"
   | "succeeded"
   | "failed"
   | "cancelled"
@@ -39,6 +40,8 @@ export interface StartCleanupRequest {
   sessionId: string;
   providerId: PlanningProviderId;
   snapshot: CleanupSnapshotV1;
+  /** The initiating action is the user's explicit approval for the full skill pipeline. */
+  autoApprove?: boolean;
 }
 
 export interface StartCleanupResponse {
@@ -54,6 +57,11 @@ export interface ApproveCleanupRequest {
   snapshotHash: string;
 }
 
+export interface ConfirmComponentSetsRequest {
+  satisfied: boolean;
+  feedback?: string;
+}
+
 export interface CleanupRunView {
   ok: true;
   runId: string;
@@ -63,6 +71,7 @@ export interface CleanupRunView {
   snapshotHash: string;
   state: CleanupState;
   planReady: boolean;
+  autoApproved: boolean;
   planSummary?: CleanupPlanSummaryV2;
   startedAt: string;
   endedAt?: string;
@@ -104,7 +113,9 @@ export interface CleanupExecutionResult {
 }
 
 export interface CleanupExecutorPort {
+  /** Applies hierarchy cleanup only; ComponentSets must remain gated by final satisfaction. */
   execute(request: CleanupExecutorRequest): Promise<CleanupExecutionResult>;
+  executeComponentSets(request: CleanupExecutorRequest): Promise<CleanupExecutionResult>;
 }
 
 export class CleanupError extends Error {

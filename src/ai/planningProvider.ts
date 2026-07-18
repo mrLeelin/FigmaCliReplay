@@ -12,8 +12,8 @@ export interface PlanningProvider {
   readonly id: PlanningProviderId;
   readonly label: string;
   readonly command: string;
-  buildArgs(workspace: string, prompt: string): string[];
+  buildArgs(workspace: string, prompt?: string): string[];
+  buildStdin(prompt: string): string;
   extractAssistantText(event: unknown): string;
   isTerminalEvent(event: unknown): "completed" | "failed" | null;
 }
-

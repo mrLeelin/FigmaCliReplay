@@ -457,6 +457,7 @@ async function handlePost(
         sessionId: String(payload.sessionId || ""),
         providerId: cleanupProviderId(payload.providerId),
         snapshot: payload.snapshot as CleanupSnapshotV1,
+        autoApprove: payload.autoApprove === true,
       });
       jsonResponse(response, 200, result);
     } catch (error) {
@@ -464,11 +465,18 @@ async function handlePost(
     }
     return;
   }
-  const cleanupAction = pathname.match(/^\/cleanup\/runs\/([^/]+)\/(approve|cancel)$/);
+  const cleanupAction = pathname.match(/^\/cleanup\/runs\/([^/]+)\/(approve|cancel|confirm-component-sets)$/);
   if (cleanupAction) {
     respondWithCleanupAction(response, () => {
       const token = cleanupCapability(request);
       if (cleanupAction[2] === "cancel") return cleanupRuntime.controller.cancel(cleanupAction[1], token);
+      if (cleanupAction[2] === "confirm-component-sets") {
+        if (!isRecord(payload)) throw new CleanupError("CLEANUP_REQUEST_INVALID", "ComponentSet confirmation body must be an object");
+        return cleanupRuntime.controller.confirmComponentSets(cleanupAction[1], token, {
+          satisfied: payload.satisfied === true,
+          ...(typeof payload.feedback === "string" ? { feedback: payload.feedback } : {}),
+        });
+      }
       if (!isRecord(payload)) throw new CleanupError("CLEANUP_REQUEST_INVALID", "approval body must be an object");
       return cleanupRuntime.controller.approve(cleanupAction[1], token, {
         approval: payload.approval === true,

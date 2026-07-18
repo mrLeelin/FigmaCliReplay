@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { buildCleanupApplyProcess } from "../dist/cleanup/cleanupExecutor.js";
+import { buildCleanupPipelineProcess } from "../dist/cleanup/cleanupExecutor.js";
 
 test("generic local AI runner no longer owns cleanup planning or approval state", () => {
   const source = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
@@ -24,30 +24,51 @@ test("legacy cleanup HTTP entrypoint forwards into the single V2 controller", ()
   assert.doesNotMatch(genericActions, /cleanupRuntime\.controller\.(approve|cancel)/);
 });
 
-test("approved cleanup invokes only the exact transaction adapter", () => {
-  const process = buildCleanupApplyProcess({
+test("direct cleanup invokes the hierarchy skill pipeline without premature ComponentSets", () => {
+  const process = buildCleanupPipelineProcess({
     pluginRoot: "E:\\relay",
     sessionId: "figma-session",
-    planPath: "E:\\run\\cleanup-transaction-plan.json",
-    outputPath: "E:\\run\\cleanup-apply-report.json",
+    rootNodeId: "10:20",
+    fileKey: "figma-file",
+    workDir: "E:\\run\\pipeline",
+    outputPath: "E:\\run\\cleanup-pipeline-report.json",
   });
   const command = [process.command, ...process.args].join(" ");
-  assert.match(command, /apply_cleanup_plan\.py/);
-  assert.doesNotMatch(command, /run_cleanup_pipeline|auto-component|auto-nested/i);
+  assert.match(command, /run_cleanup_pipeline\.py/);
+  assert.match(command, /--apply-confirmed/);
+  assert.match(command, /--auto-nested-generic/);
+  assert.match(command, /--no-auto-component-sets/);
+  assert.doesNotMatch(command, /--auto-component-sets(?:\s|$)/);
+  assert.match(command, /--session-id figma-session/);
 });
 
-test("cleanup UI approval is state-based and has no component-candidate preview", () => {
+test("confirmed satisfaction invokes the ComponentSet-only skill stage", () => {
+  const process = buildCleanupPipelineProcess({
+    pluginRoot: "E:\\relay",
+    sessionId: "figma-session",
+    rootNodeId: "10:20",
+    workDir: "E:\\run\\component-sets",
+    outputPath: "E:\\run\\cleanup-component-sets-report.json",
+    stage: "component-sets",
+  });
+  const command = [process.command, ...process.args].join(" ");
+  assert.match(command, /--auto-component-sets-only/);
+  assert.doesNotMatch(command, /--auto-nested-generic/);
+});
+
+test("cleanup UI treats the initiating click as authorization and keeps final feedback in-page", () => {
   const source = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
   const previewStart = source.indexOf("function renderCleanupPlanPreview");
   const previewEnd = source.indexOf("function invalidateTerminalCleanupRun", previewStart);
   const preview = source.slice(previewStart, previewEnd);
-  assert.match(preview, /planSummary\.operations/);
+  assert.match(preview, /skill pipeline/i);
+  assert.doesNotMatch(preview, /planSummary\.operations/);
   assert.doesNotMatch(preview, /componentCandidate/i);
 
-  const approvalStart = source.indexOf("async function continueAiCleanup");
-  const approvalEnd = source.indexOf("async function stopActiveAiCleanup", approvalStart);
-  const approval = source.slice(approvalStart, approvalEnd);
-  assert.match(approval, /run\.state !== "review"/);
-  assert.match(approval, /approval:\s*true,\s*snapshotHash/);
-  assert.doesNotMatch(approval.split("if \(!isCleanupApproval")[0], /sessionAvailable|cliSessionId/);
+  assert.match(source, /autoApprove:\s*true/);
+  assert.match(source, /id="aiCleanupSatisfaction"/);
+  assert.match(source, /confirm-component-sets/);
+  assert.match(source, /awaiting_component_confirmation/);
+  assert.doesNotMatch(source, /cleanupRunDialog/);
+  assert.doesNotMatch(source, /approval:\s*true,\s*snapshotHash/);
 });

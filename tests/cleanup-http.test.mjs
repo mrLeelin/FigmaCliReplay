@@ -40,6 +40,10 @@ async function withServer(callback) {
       calls.push(["approve", runId, token, request]);
       return runView("applying");
     },
+    confirmComponentSets(runId, token, request) {
+      calls.push(["confirmComponentSets", runId, token, request]);
+      return runView(request.satisfied ? "applying" : "succeeded");
+    },
     cancel(runId, token) {
       calls.push(["cancel", runId, token]);
       return runView("cancelled");
@@ -105,6 +109,14 @@ test("HTTP exposes provider discovery and dedicated cleanup actions", async () =
     assert.equal(approved.status, 200);
     assert.equal((await approved.json()).state, "applying");
 
+    const confirmed = await fetch(`${baseUrl}/cleanup/runs/cleanup-1/confirm-component-sets`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-ai-run-capability": "secret" },
+      body: JSON.stringify({ satisfied: true }),
+    });
+    assert.equal(confirmed.status, 200);
+    assert.equal((await confirmed.json()).state, "applying");
+
     const cancelled = await fetch(`${baseUrl}/cleanup/runs/cleanup-1/cancel`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-ai-run-capability": "secret" },
@@ -112,7 +124,7 @@ test("HTTP exposes provider discovery and dedicated cleanup actions", async () =
     });
     assert.equal(cancelled.status, 200);
     assert.equal((await cancelled.json()).state, "cancelled");
-    assert.deepEqual(calls.map((call) => call[0]), ["start", "get", "approve", "cancel"]);
+    assert.deepEqual(calls.map((call) => call[0]), ["start", "get", "approve", "confirmComponentSets", "cancel"]);
   });
 });
 

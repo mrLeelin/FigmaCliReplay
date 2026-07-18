@@ -1,12 +1,35 @@
 import { isRecord } from "../utils.js";
+import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type { PlanningProvider } from "./planningProvider.js";
+
+const logger = getLoggingRuntime().logger("claude-code-cli-provider");
 
 export const claudeCodeCliProvider: PlanningProvider = {
   id: "claude-code",
   label: "Claude Code",
   command: "claude",
-  buildArgs(_workspace: string, prompt: string): string[] {
-    return ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", prompt];
+  buildArgs(_workspace: string, prompt?: string): string[] {
+    const args = [
+      "-p",
+      ...(prompt === undefined ? ["--input-format", "stream-json"] : []),
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--dangerously-skip-permissions",
+    ];
+    if (prompt !== undefined) args.push(prompt);
+    logger.debug("已构建 Claude Code CLI 安全参数", {
+      step: "cli-spawn",
+      argumentCount: args.length,
+      promptViaStdin: prompt === undefined
+    });
+    return args;
+  },
+  buildStdin(prompt: string): string {
+    return `${JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: prompt }] },
+    })}\n`;
   },
   extractAssistantText(event: unknown): string {
     if (!isRecord(event)) return "";
@@ -24,4 +47,3 @@ export const claudeCodeCliProvider: PlanningProvider = {
     return event.is_error === true || subtype.startsWith("error") ? "failed" : "completed";
   },
 };
-

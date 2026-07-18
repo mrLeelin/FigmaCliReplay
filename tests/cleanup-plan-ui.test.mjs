@@ -15,6 +15,46 @@ test("cleanup requests one compact snapshot and posts it to the dedicated contro
   assert.match(ui.slice(requestStart, requestEnd), /setTimeout/);
 });
 
+test("cleanup polling consumes the V2 cleanup-run view rather than legacy AI-run fields", () => {
+  assert.match(ui, /function applyCleanupRunView\(run, result\)/);
+  const pollStart = ui.indexOf("function pollAiCleanupRun()");
+  const pollEnd = ui.indexOf("async function continueAiCleanup", pollStart);
+  const poll = ui.slice(pollStart, pollEnd);
+  assert.match(poll, /\/cleanup\/runs\//);
+  assert.match(poll, /applyCleanupRunView\(currentRun, result\)/);
+  assert.doesNotMatch(poll, /currentRun\.status = result\.status/);
+  assert.doesNotMatch(ui, /\/ai-runner\/run-cleanup/);
+});
+
+test("relay cleanup snapshot jobs return their result instead of entering the manual cleanup flow", () => {
+  const handlerStart = ui.indexOf("function handleCleanupSnapshotResult(message)");
+  const handlerEnd = ui.indexOf("//", handlerStart);
+  const handler = ui.slice(handlerStart, handlerEnd);
+  assert.match(handler, /message\.requestId === executingRequestId && executingJobType === "QUERY_CLEANUP_SNAPSHOT"/);
+  assert.match(handler, /postResult\(message\.requestId, result\)/);
+  assert.match(handler, /processRelaySocketQueue\(\)/);
+});
+
+test("websocket jobs remain executing until the Figma main-thread result arrives", () => {
+  assert.doesNotMatch(
+    ui,
+    /executeJob\(payload\)[\s\S]*?\.then\(function \(\) \{\s*clearExecutionWatchdog\(\);\s*isExecuting = false;/,
+  );
+  assert.match(
+    ui,
+    /message\.type && message\.type\.endsWith\("_RESULT"\)[\s\S]*?isExecuting = false;\s*clearExecutionWatchdog\(\);/,
+  );
+});
+
+test("relay watchdog closes the logged operation and clears the timed-out execution identity", () => {
+  const watchdogStart = ui.indexOf("function startExecutionWatchdog(");
+  const watchdogEnd = ui.indexOf("async function postResult", watchdogStart);
+  const watchdog = ui.slice(watchdogStart, watchdogEnd);
+  assert.match(watchdog, /finishUiRelayOperation\(requestId, result\)/);
+  assert.match(watchdog, /executingRequestId = ""/);
+  assert.match(watchdog, /executingJobType = ""/);
+});
+
 test("cleanup action falls back to the visually selected template card", () => {
   assert.match(ui, /function currentAiPromptTemplate\(\)/);
   assert.match(ui, /\.template-card\.selected/);
@@ -24,20 +64,19 @@ test("cleanup action falls back to the visually selected template card", () => {
   assert.match(ui.slice(requestStart, requestEnd), /var requestedTemplate = currentAiPromptTemplate\(\)/);
 });
 
-test("execution UI renders structured cleanup phases and plan preview", () => {
-  assert.match(ui, /id="aiCleanupPlanPreview"/);
-  assert.match(ui, /id="cleanupRunPlanPreview"/);
-  for (const state of ["capturing", "planning", "validating", "review", "applying", "verifying", "rolled_back", "recovery_required"]) {
+test("execution UI renders structured cleanup phases without a second approval dialog", () => {
+  assert.match(ui, /id="aiCleanupSatisfaction"/);
+  for (const state of ["capturing", "planning", "validating", "review", "applying", "verifying", "awaiting_component_confirmation", "rolled_back", "recovery_required"]) {
     assert.match(ui, new RegExp(`state === "${state}"`));
   }
-  assert.match(ui, /function renderCleanupPlanPreview/);
-  assert.match(ui, /planSummary\.operations/);
-  assert.match(ui, /operation\.type/);
-  assert.match(ui, /planSummary\.warnings/);
-  assert.doesNotMatch(ui, /planSummary\.componentCandidates/);
+  assert.match(ui, /confirm-component-sets/);
+  assert.match(ui, /awaiting_component_confirmation/);
+  assert.doesNotMatch(ui, /id="cleanupRunDialog"/);
+  assert.doesNotMatch(ui, /function openCleanupRunDialog\(/);
+  assert.doesNotMatch(ui, /确认并执行整理/);
 });
 
-test("cleanup is presented as one AI choice instead of planner and executor controls", () => {
+test("cleanup keeps both AI prompt and cleanup action buttons visible", () => {
   assert.match(ui, /<label for="cleanupProviderSelect">AI<\/label>/);
   assert.match(ui, /<select id="aiRunnerSelect" hidden>/);
   assert.doesNotMatch(ui, />执行器<\/label>/);
@@ -47,41 +86,36 @@ test("cleanup is presented as one AI choice instead of planner and executor cont
   assert.match(ui, /id="aiPromptManualActions"/);
   assert.match(ui, /id="aiPromptSubAgentRow"/);
   assert.match(ui, /id="aiPromptPreviewField"/);
-  assert.match(ui, /aiPromptManualActions\.style\.display = template === "cleanup" \? "none" : ""/);
+  const controlsStart = ui.indexOf("function refreshAiPromptControls()");
+  const controlsEnd = ui.indexOf("function readCurrentFigmaKey", controlsStart);
+  const controls = ui.slice(controlsStart, controlsEnd);
+  assert.doesNotMatch(controls, /aiPromptManualActions\.style\.display = template === "cleanup" \? "none" : ""/);
+  assert.match(controls, /aiPromptManualActions\.style\.display = ""/);
   assert.match(ui, /aiPromptSubAgentRow\.style\.display = template === "cleanup" \? "none" : ""/);
   assert.match(ui, /aiPromptPreviewField\.style\.display = template === "cleanup" \? "none" : ""/);
 });
 
-test("cleanup stays on the prompt page and uses one review progress dialog", () => {
-  for (const id of ["cleanupRunDialog", "cleanupRunDialogStatus", "cleanupRunPlanPreview", "confirmCleanupRunBtn", "cancelCleanupRunBtn", "closeCleanupRunBtn"]) {
-    assert.match(ui, new RegExp(`id="${id}"`));
-  }
-  assert.match(ui, /function openCleanupRunDialog\(\)/);
-  assert.match(ui, /function renderCleanupRunDialog\(run\)/);
-  assert.match(ui, /if \(isCleanup\) openCleanupRunDialog\(\);\s*else switchTab\("ai-execution-tab"\);/);
+test("cleanup enters the AI execution page and records direct authorization", () => {
+  assert.match(ui, /autoApprove:\s*true/);
+  assert.match(ui, /switchTab\("ai-execution-tab"\);/);
   const reopenStart = ui.indexOf("function requestAiRun()");
   const reopenEnd = ui.indexOf("function requestCleanupSnapshot", reopenStart);
-  assert.match(ui.slice(reopenStart, reopenEnd), /openCleanupRunDialog\(\)/);
-  assert.doesNotMatch(ui, /整理计划已通过校验，请在“AI 执行”页/);
-  assert.doesNotMatch(ui, /AI 整理正在执行；详情见“AI 执行”页/);
+  assert.match(ui.slice(reopenStart, reopenEnd), /switchTab\("ai-execution-tab"\)/);
+  assert.doesNotMatch(ui.slice(reopenStart, reopenEnd), /openCleanupRunDialog\(/);
 });
 
-test("cleanup approval is enabled only for a validated review plan and no CLI session", () => {
-  assert.match(ui, /run\.state === "review"/);
-  assert.match(ui, /run\.planReady === true/);
+test("cleanup does not expose a second approval action", () => {
+  assert.match(ui, /state === "review"/);
   const controlsStart = ui.indexOf("function refreshAiExecutionControls()");
   const controlsEnd = ui.indexOf("function formatAiExecutionDuration", controlsStart);
-  assert.doesNotMatch(ui.slice(controlsStart, controlsEnd), /cleanupApprovalReady[\s\S]{0,200}sessionAvailable/);
-  assert.match(ui, /JSON\.stringify\(\{ approval: true, snapshotHash: run\.snapshotHash \}\)/);
-  assert.match(ui, /确认并执行整理/);
+  assert.doesNotMatch(ui.slice(controlsStart, controlsEnd), /cleanupApprovalReady/);
+  assert.doesNotMatch(ui, /JSON\.stringify\(\{ approval: true, snapshotHash: run\.snapshotHash \}\)/);
   assert.match(ui, /JSON\.stringify\(\{ text: text \}\)/);
 });
 
 test("terminal cleanup unlocks restart while transient poll failures keep the same run", () => {
   assert.match(ui, /function invalidateTerminalCleanupRun/);
-  assert.match(ui, /aiExecutionContinueBtn\.hidden = cleanupTerminal/);
-  assert.match(ui, /closeCleanupRunBtn\.hidden = !terminal/);
-  assert.match(ui, /可以关闭本窗口后重新开始/);
+  assert.match(ui, /aiCleanupSatisfaction\.hidden = !cleanupAwaitingConfirmation/);
   assert.match(ui, /aiCleanupBusy = false/);
   const pollStart = ui.indexOf("function pollAiCleanupRun()");
   const pollEnd = ui.indexOf("async function continueAiCleanup", pollStart);
