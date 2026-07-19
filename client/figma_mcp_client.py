@@ -15,6 +15,7 @@ import base64
 import importlib.util
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -25,6 +26,8 @@ from typing import Any, Dict, Optional, Tuple
 DEFAULT_RELAY_URL = "http://localhost:32130"
 DEFAULT_MCP_URL = f"{DEFAULT_RELAY_URL}/mcp"
 DEFAULT_MCP_HTTP_TIMEOUT = 300.0
+MCP_SOCKET_BUFFER_RETRY_ATTEMPTS = 6
+MCP_SOCKET_BUFFER_RETRY_DELAY_SECONDS = 0.35
 RELAY_ROOT = Path(__file__).resolve().parent.parent
 MCP_SERVER_SCRIPT = RELAY_ROOT / "server" / "figma_mcp_companion.py"
 SERVER_DIR = RELAY_ROOT / "server"
@@ -111,6 +114,12 @@ def _mcp_url_from_relay_url(relay_url: str) -> str:
     return f"{value}/mcp"
 
 
+def _is_socket_buffer_exhaustion(error: BaseException) -> bool:
+    """Return whether a local Windows socket allocation failed before sending."""
+    reason = getattr(error, "reason", error)
+    return getattr(reason, "winerror", None) == 10055
+
+
 def _post_http_json(
     url: str,
     payload: Dict[str, Any],
@@ -130,31 +139,42 @@ def _post_http_json(
         headers=headers,
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            next_session_id = response.headers.get("Mcp-Session-Id") or session_id
-            raw = response.read().decode("utf-8-sig")
-            if not raw:
-                return {}, next_session_id
-            payload = json.loads(raw)
-            return payload if isinstance(payload, dict) else {}, next_session_id
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8-sig", errors="replace")
+    for attempt in range(1, MCP_SOCKET_BUFFER_RETRY_ATTEMPTS + 1):
         try:
-            error_payload = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            error_payload = {"error": raw}
-        raise McpToolError(json.dumps({
-            "httpStatus": exc.code,
-            "url": url,
-            "response": error_payload,
-        }, ensure_ascii=False)) from exc
-    except urllib.error.URLError as exc:
-        raise McpToolError(
-            f"Figma MCP Relay companion is not reachable at {url}. "
-            "Start it from the Relay installation root with: "
-            'powershell -ExecutionPolicy Bypass -File "<relay-root>/scripts/start_mcp_companion.ps1" -Mode mcp'
-        ) from exc
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                next_session_id = response.headers.get("Mcp-Session-Id") or session_id
+                raw = response.read().decode("utf-8-sig")
+                if not raw:
+                    return {}, next_session_id
+                payload = json.loads(raw)
+                return payload if isinstance(payload, dict) else {}, next_session_id
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8-sig", errors="replace")
+            try:
+                error_payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                error_payload = {"error": raw}
+            raise McpToolError(json.dumps({
+                "httpStatus": exc.code,
+                "url": url,
+                "response": error_payload,
+            }, ensure_ascii=False)) from exc
+        except urllib.error.URLError as exc:
+            if not _is_socket_buffer_exhaustion(exc) or attempt >= MCP_SOCKET_BUFFER_RETRY_ATTEMPTS:
+                raise McpToolError(
+                    f"Figma MCP Relay companion is not reachable at {url}. "
+                    "Start it from the Relay installation root with: "
+                    'powershell -ExecutionPolicy Bypass -File "<relay-root>/scripts/start_mcp_companion.ps1" -Mode mcp'
+                ) from exc
+            LOGGER.warn("MCP request hit local socket-buffer exhaustion; retrying", data={
+                "url": url,
+                "attempt": attempt,
+                "maxAttempts": MCP_SOCKET_BUFFER_RETRY_ATTEMPTS,
+                "winerror": getattr(exc.reason, "winerror", None),
+            })
+            time.sleep(MCP_SOCKET_BUFFER_RETRY_DELAY_SECONDS * attempt)
+
+    raise RuntimeError("MCP socket retry loop exited unexpectedly")
 
 
 class FigmaEditMcpHttpClient:

@@ -10237,6 +10237,8 @@ async function applyPsdIncrementalUpdate(job, assets) {
   const rollbackRecords = [];
   const rootMetadataBefore = capturePsdRootMetadata(prepared.target);
   const protectedSnapshot = capturePsdProtectedSnapshot(prepared.target);
+  const mutableNodeIds = new Set(prepared.diff.changed.map((pair) => pair.target.nodeId));
+  let finalizedStagingNodeCount = 0;
   try {
     if (prepared.diff.added.length > 0) {
       stagingFrame = findPsdIncrementalStagingFrame(prepared.target);
@@ -10259,7 +10261,7 @@ async function applyPsdIncrementalUpdate(job, assets) {
       const node = pair.target.node;
       rollbackRecords.push(capturePsdContentRollback(node));
       if (pair.target.ownership === "text-content") {
-        node.characters = String(pair.source.chars || "");
+        normalizePsdTextLayout(node, pair.source);
       } else if (pair.target.ownership === "image-content") {
         node.fills = replacePsdOwnedImageHash(node.fills, imagePaints.get(pair.source.layerId));
       } else {
@@ -10268,12 +10270,21 @@ async function applyPsdIncrementalUpdate(job, assets) {
       writeLayerMetadata(node, pair.source, {});
     }
 
-    const verificationErrors = verifyPsdProtectedSnapshot(protectedSnapshot)
+    const verificationErrors = verifyPsdProtectedSnapshot(protectedSnapshot, mutableNodeIds)
       .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints))
       .concat(verifyPsdAddedNodes(createdNodes, prepared.diff.added, stagingFrame, prepared.context));
     if (verificationErrors.length > 0) {
       throw new Error(`增量更新改变了 Figma 所有的结构或布局：${verificationErrors.slice(0, 5).join("；")}`);
     }
+    const stagingFinalization = prepared.stagingFinalization && !prepared.stagingFinalization.error
+      ? prepared.stagingFinalization
+      : buildPsdStagingFinalizationPlan(prepared.target);
+    finalizedStagingNodeCount = await finalizePsdIncrementalStaging(
+      prepared.target,
+      stagingFinalization,
+      prepared.context,
+      prepared.manifest.layers.slice().sort((a, b) => numericOr(a.idx, 0) - numericOr(b.idx, 0))
+    );
     writePsdRootMetadata(prepared.target, job, prepared.manifest);
     if (typeof figma.commitUndo === "function") {
       figma.commitUndo();
@@ -10300,7 +10311,8 @@ async function applyPsdIncrementalUpdate(job, assets) {
   result.updatedCount = prepared.diff.changed.length;
   result.addedCount = prepared.diff.added.length;
   result.retainedMissingCount = prepared.diff.missing.length;
-  result.stagingFrameId = stagingFrame ? stagingFrame.id : "";
+  result.stagingFrameId = "";
+  result.finalizedStagingNodeCount = finalizedStagingNodeCount;
   return result;
 }
 
@@ -10322,9 +10334,16 @@ async function preparePsdIncrementalUpdate(job, assets) {
     stats: { image: 0, text: 0, commonInstance: 0, commonFallbackImage: 0, nineSlice: 0, slice: 0 }
   };
   const currentNodes = collectPsdBoundNodes(target);
+  populatePsdIncrementalNodeIndex(currentNodes, context);
   const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
   appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
   appendPsdIncrementalAssetConflicts(diff, context);
+  const stagingFinalization = buildPsdStagingFinalizationPlan(target);
+  if (stagingFinalization && stagingFinalization.error) {
+    diff.conflicts.push(stagingFinalization.error);
+    diff.summary.conflicts = diff.conflicts.length;
+    diff.canApply = false;
+  }
   if (diff.identityWarning) {
     context.warnings.push(diff.identityWarning);
   }
@@ -10333,8 +10352,16 @@ async function preparePsdIncrementalUpdate(job, assets) {
     manifest,
     context,
     diff,
+    stagingFinalization,
     baselineFingerprint: buildPsdIncrementalFingerprint(target, currentNodes, manifest.layers)
   };
+}
+
+function populatePsdIncrementalNodeIndex(currentNodes, context) {
+  for (const record of currentNodes || []) {
+    const index = readSharedPluginData(record.node, "psdLayerIndex");
+    if (index) context.nodeByLayerIdx.set(String(index), record.nodeId);
+  }
 }
 
 async function resolvePsdIncrementalTarget(job) {
@@ -10509,7 +10536,11 @@ function buildPsdIncrementalResult(prepared, status) {
       }))
     },
     warnings: prepared.context.warnings,
-    errors: prepared.context.errors
+    errors: prepared.context.errors,
+    stagingFinalization: prepared.stagingFinalization && !prepared.stagingFinalization.error ? {
+      frameId: prepared.stagingFinalization.frame.id,
+      nodeCount: prepared.stagingFinalization.nodes.length
+    } : null
   };
 }
 
@@ -10533,6 +10564,47 @@ function createPsdIncrementalStagingFrame(target) {
   frame.x = 0;
   frame.y = 0;
   return frame;
+}
+
+function buildPsdStagingFinalizationPlan(target) {
+  const frame = findPsdIncrementalStagingFrame(target);
+  if (!frame) return null;
+  const nodes = frame.children.slice();
+  if (Math.abs(numericOr(frame.x, 0)) > 0.01 || Math.abs(numericOr(frame.y, 0)) > 0.01) {
+    return { error: { kind: "staging-frame-moved", nodeId: frame.id, message: "增量临时容器已被移动，不能安全解包。" } };
+  }
+  const foreignNode = nodes.find((node) => !normalizePsdLayerId(readSharedPluginData(node, "psdLayerId")));
+  if (foreignNode) {
+    return { error: { kind: "staging-frame-has-foreign-child", nodeId: foreignNode.id, message: "增量临时容器包含非 PSD 节点，不能安全解包。" } };
+  }
+  return { frame, nodes };
+}
+
+async function finalizePsdIncrementalStaging(target, plan, context, orderedLayers) {
+  if (!plan || !plan.frame || plan.frame.removed) return 0;
+  const stagingFrame = plan.frame;
+  const nodes = plan.nodes.slice();
+  try {
+    for (const node of nodes) target.appendChild(node);
+    await ensurePsdIndexOrder(target, orderedLayers, context);
+    for (const node of nodes) {
+      if (node.parent !== target) throw new Error(`增量图层 ${node.id} 未移动到导入根节点。`);
+    }
+    stagingFrame.remove();
+    pluginLogger.info("PSD 增量临时容器已解包", {
+      targetNodeId: target.id,
+      stagingFrameId: stagingFrame.id,
+      nodeCount: nodes.length
+    });
+    return nodes.length;
+  } catch (error) {
+    if (!stagingFrame.removed) {
+      for (const node of nodes) {
+        if (node && !node.removed && node.parent !== stagingFrame) stagingFrame.appendChild(node);
+      }
+    }
+    throw error;
+  }
 }
 
 function capturePsdProtectedSnapshot(root) {
@@ -10559,9 +10631,10 @@ function capturePsdProtectedSnapshot(root) {
   return snapshots;
 }
 
-function verifyPsdProtectedSnapshot(snapshots) {
+function verifyPsdProtectedSnapshot(snapshots, mutableNodeIds) {
   const errors = [];
   for (const item of snapshots) {
+    if (mutableNodeIds && mutableNodeIds.has(item.id)) continue;
     const node = item.node;
     if (!node || node.removed) {
       errors.push(`${item.id} 已被删除`);
@@ -10592,6 +10665,9 @@ function verifyPsdAppliedContent(changedPairs, imagePaints) {
     }
     if (pair.target.ownership === "text-content") {
       if (node.characters !== String(pair.source.chars || "")) errors.push(`${node.id} 文本内容不一致`);
+      if (node.textAutoResize !== "WIDTH_AND_HEIGHT" || !node.lineHeight || node.lineHeight.unit !== "AUTO") {
+        errors.push(`${node.id} 文本自动尺寸未修复`);
+      }
     } else {
       const expectedPaint = imagePaints.get(pair.source.layerId);
       const actualPaint = Array.isArray(node.fills)
@@ -10669,6 +10745,14 @@ function capturePsdContentRollback(node) {
     node,
     fills: "fills" in node && Array.isArray(node.fills) ? node.fills.slice() : null,
     characters: node.type === "TEXT" ? node.characters : null,
+    textAutoResize: node.type === "TEXT" ? node.textAutoResize : null,
+    lineHeight: node.type === "TEXT" && node.lineHeight && typeof node.lineHeight === "object" ? Object.assign({}, node.lineHeight) : null,
+    geometry: node.type === "TEXT" ? {
+      x: numericOr(node.x, 0),
+      y: numericOr(node.y, 0),
+      width: numericOr(node.width, 1),
+      height: numericOr(node.height, 1)
+    } : null,
     metadata: {
       rawPsdLayerName: readSharedPluginData(node, "rawPsdLayerName"),
       normalizedLayerName: readSharedPluginData(node, "normalizedLayerName"),
@@ -10698,7 +10782,18 @@ function rollbackPsdIncrementalMutation(records, createdNodes, stagingFrame, cre
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
     try {
-      if (record.characters !== null) record.node.characters = record.characters;
+      if (record.characters !== null) {
+        record.node.characters = record.characters;
+        if (record.lineHeight) record.node.lineHeight = record.lineHeight;
+        if (record.textAutoResize !== null) record.node.textAutoResize = record.textAutoResize;
+        if (record.geometry) {
+          if (record.textAutoResize === "NONE") {
+            record.node.resize(positiveOr(record.geometry.width, 1), positiveOr(record.geometry.height, 1));
+          }
+          record.node.x = record.geometry.x;
+          record.node.y = record.geometry.y;
+        }
+      }
       if (record.fills !== null) record.node.fills = record.fills;
       writePluginData(record.node, record.metadata);
     } catch (error) {
@@ -11043,8 +11138,6 @@ async function createTextLayer(root, layer, context) {
   }
 
   centerNodeOnLayer(text, layer);
-  // 首次导入后冻结当前几何；后续增量只改 characters，不让自动尺寸扰动整理后的布局。
-  text.textAutoResize = "NONE";
   applyLayerCommonState(text, layer);
   writeLayerMetadata(text, layer, {
     fontFamily: fontName.family,
@@ -11599,9 +11692,23 @@ function roundDelta(value) {
 async function buildComponentIndexes(job) {
   const config = Object.assign({ commonRootId: "62:115", imageRootId: "2896:32" }, job && job.componentLibrary || {});
   return {
-    common: await collectComponentIndex(config.commonRootId),
-    image: await collectComponentIndex(config.imageRootId)
+    common: await collectComponentIndexSafely("common", config.commonRootId),
+    image: await collectComponentIndexSafely("image", config.imageRootId)
   };
+}
+
+// 组件库扫描可能触发 Figma 远端页面加载；导入本身必须能在离线时回退为图片层。
+async function collectComponentIndexSafely(libraryName, rootId) {
+  try {
+    return await collectComponentIndex(rootId);
+  } catch (error) {
+    pluginLogger.warn("PSD 组件索引不可用，已回退为图片导入", {
+      libraryName: String(libraryName || ""),
+      rootId: String(rootId || ""),
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return { list: [], byName: {}, byNormalized: {} };
+  }
 }
 
 // 收集某个根节点下的 Component/ComponentSet，用标准化名称建立索引。
@@ -13841,10 +13948,31 @@ function validatePsdOwnedTarget(ownership, sourceMode, nodeType, textAutoResize)
   if (ownership !== expected) return "ownership-mismatch";
   if (expected === "text-content") {
     if (nodeType !== "TEXT") return "unsupported-text-target";
-    if (textAutoResize && textAutoResize !== "NONE") return "unsafe-text-auto-resize";
+    if (textAutoResize && textAutoResize !== "NONE" && textAutoResize !== "WIDTH_AND_HEIGHT") return "unsafe-text-auto-resize";
     return "";
   }
   return nodeType === "RECTANGLE" ? "" : "unsupported-image-target";
+}
+
+function needsPsdTextLayoutRepair(target) {
+  const node = target && target.node;
+  return target && target.ownership === "text-content" && node && node.type === "TEXT"
+    && (node.textAutoResize !== "WIDTH_AND_HEIGHT" || !node.lineHeight || node.lineHeight.unit !== "AUTO");
+}
+
+function normalizePsdTextLayout(node, source) {
+  const centerX = numericOr(node.x, 0) + numericOr(node.width, 0) / 2;
+  const centerY = numericOr(node.y, 0) + numericOr(node.height, 0) / 2;
+  node.characters = String(source.chars || "");
+  node.lineHeight = { unit: "AUTO" };
+  node.textAutoResize = "WIDTH_AND_HEIGHT";
+  node.x = centerX - numericOr(node.width, 0) / 2;
+  node.y = centerY - numericOr(node.height, 0) / 2;
+  pluginLogger.info("PSD 文字自动尺寸已修复", {
+    nodeId: node.id,
+    layerId: normalizePsdLayerId(source.layerId),
+    charactersLength: String(node.characters || "").length
+  });
 }
 
 function measurePsdLayerIdentity(currentNodes, incomingLayers) {
@@ -13945,7 +14073,7 @@ function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
     var targetHash = String(target.contentHash || "");
     var sourceHash = String(sourceLayer.contentHash || "");
     var pair = { source: sourceLayer, target: target };
-    if (targetHash && targetHash === sourceHash) unchanged.push(pair);
+    if (targetHash && targetHash === sourceHash && !needsPsdTextLayoutRepair(target)) unchanged.push(pair);
     else changed.push(pair);
   }
 

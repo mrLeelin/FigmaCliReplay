@@ -4306,10 +4306,37 @@
       }
     }
 
+    const PSD_ASSET_FETCH_CONCURRENCY = 2;
+    const PSD_ASSET_FETCH_MAX_ATTEMPTS = 3;
+    const PSD_ASSET_FETCH_RETRY_DELAY_MS = 250;
+
+    function waitForPsdAssetRetry(delayMs) {
+      return new Promise(function (resolve) { setTimeout(resolve, delayMs); });
+    }
+
     async function fetchAsset(asset) {
       const resp = await fetchWithTimeout(asset.url, { method: "GET", headers: relayRuntimeHeaders() }, 15000);
       if (!resp.ok) throw new Error("资源下载失败 " + asset.id + ": HTTP " + resp.status);
       return { id: asset.id, path: asset.path || "", bytes: await resp.arrayBuffer() };
+    }
+
+    async function fetchAssetWithRetry(asset) {
+      const assetId = String(asset && asset.id || "unknown");
+      let lastError = null;
+      for (let attempt = 1; attempt <= PSD_ASSET_FETCH_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          return await fetchAsset(asset);
+        } catch (error) {
+          lastError = error;
+          const message = error && error.message ? error.message : String(error);
+          if (attempt >= PSD_ASSET_FETCH_MAX_ATTEMPTS) break;
+          const delayMs = PSD_ASSET_FETCH_RETRY_DELAY_MS * attempt;
+          appendLog("PSD 资源下载重试 assetId=" + assetId + "，第 " + attempt + "/" + PSD_ASSET_FETCH_MAX_ATTEMPTS + " 次失败：" + message + "；" + delayMs + "ms 后重试。", true);
+          await waitForPsdAssetRetry(delayMs);
+        }
+      }
+      const message = lastError && lastError.message ? lastError.message : String(lastError || "unknown error");
+      throw new Error("PSD 资源下载失败 assetId=" + assetId + "，已重试 " + PSD_ASSET_FETCH_MAX_ATTEMPTS + " 次：" + message);
     }
 
     async function fetchAssets(assets) {
@@ -4319,10 +4346,10 @@
       async function worker() {
         while (cursor < list.length) {
           const idx = cursor; cursor += 1;
-          results[idx] = await fetchAsset(list[idx]);
+          results[idx] = await fetchAssetWithRetry(list[idx]);
         }
       }
-      const count = Math.min(8, list.length);
+      const count = Math.min(PSD_ASSET_FETCH_CONCURRENCY, list.length);
       const workers = [];
       for (let i = 0; i < count; i++) workers.push(worker());
       await Promise.all(workers);

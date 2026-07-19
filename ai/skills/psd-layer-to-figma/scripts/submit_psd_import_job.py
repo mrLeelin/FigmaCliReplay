@@ -185,7 +185,7 @@ def build_assets(manifest_dir: str, layers: list[dict]) -> tuple[list[dict], dic
     assets: list[dict] = []
     asset_paths: dict[str, str] = {}
     for layer in layers:
-        idx = str(layer.get("idx", 0))
+        idx = str(layer.get("idx", layer.get("index", 0)))
         rel_path = layer.get("path", "")
         png_name = os.path.basename(rel_path) if rel_path else f"{idx}.png"
         abs_path = os.path.abspath(os.path.join(manifest_dir, png_name))
