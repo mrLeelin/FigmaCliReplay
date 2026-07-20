@@ -155,7 +155,7 @@ export async function openLocalAiTerminal(payload: unknown) {
       taskChars: taskContent.length,
     });
 
-    const command = resolveRunnerCommand(config.command);
+    const command = resolveInteractiveRunnerCommand(config.command);
     const script = buildInteractivePowerShellScript(config.workspace, taskFile, pidFile, command);
     const encodedScript = Buffer.from(script, "utf16le").toString("base64");
     operation.step("command-prepared", "已生成 PowerShell 交互启动命令", {
@@ -1274,7 +1274,25 @@ function readConfig(): RunnerConfig { if (!fs.existsSync(CONFIG_PATH)) return pr
 function runnerFrom(value: unknown): RunnerKind { return isRecord(value) && value.runner === "claude" ? "claude" : "codex"; }
 function preset(runner: RunnerKind): RunnerConfig { return runner === "claude" ? { runner, command: "claude", workspace: PLUGIN_ROOT } : { runner, command: "codex", workspace: PLUGIN_ROOT }; }
 function commandAvailable(command: string) { return spawnSync(process.platform === "win32" ? "where.exe" : "which", [command], { windowsHide: true }).status === 0; }
-function resolveRunnerCommand(command: string) { if (process.platform !== "win32" || path.extname(command)) return command; const result = spawnSync("where.exe", [command], { windowsHide: true }); const candidates = result.stdout?.toString().split(/\r?\n/).map((item) => item.trim()).filter(Boolean) || []; return candidates.find((item) => /\.(cmd|exe)$/i.test(item)) || command; }
+function resolveRunnerCommand(command: string) {
+  if (process.platform !== "win32" || path.extname(command)) return command;
+  const result = spawnSync("where.exe", [command], { windowsHide: true });
+  const candidates = result.stdout?.toString().split(/\r?\n/).map((item) => item.trim()).filter(Boolean) || [];
+  return candidates.find((item) => /\.exe$/i.test(item))
+    || candidates.find((item) => /\.cmd$/i.test(item))
+    || command;
+}
+
+export function resolveInteractiveRunnerCommand(command: string): string {
+  const resolved = resolveRunnerCommand(command);
+  if (process.platform !== "win32" || !/\.cmd$/i.test(resolved) || !fs.existsSync(resolved)) return resolved;
+  const shim = fs.readFileSync(resolved, "utf8");
+  const nativeMatch = shim.match(/"([^"\r\n]*\.exe)"\s+%\*/i);
+  if (!nativeMatch) return resolved;
+  const shimRoot = `${path.dirname(resolved)}${path.sep}`;
+  const nativeCommand = path.resolve(nativeMatch[1].replace(/%dp0%/gi, shimRoot));
+  return fs.existsSync(nativeCommand) ? nativeCommand : resolved;
+}
 function cmdQuote(value: string) { return `"${value.replaceAll("\"", "\"\"")}"`; }
 
 export function classifyCleanupFollowup(

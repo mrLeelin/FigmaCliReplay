@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { buildCleanupPipelineProcess } from "../dist/cleanup/cleanupExecutor.js";
@@ -160,6 +162,25 @@ test("interactive terminal launch waits for a real PowerShell hosted by Windows 
   assert.match(runner, /spawn\("wt\.exe", \["-w", "new", "nt"/);
   assert.match(runner, /await waitForTerminalPid\(/);
   assert.doesNotMatch(terminal, /spawn\("powershell\.exe"/);
+});
+
+test("interactive terminal resolves the native executable behind an npm cmd shim", async (context) => {
+  const runner = await import("../dist/localAiRunner.js");
+  assert.equal(typeof runner.resolveInteractiveRunnerCommand, "function");
+
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-relay-ai-shim-"));
+  context.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
+  const nativeCommand = path.join(fixtureDir, "fake-ai.exe");
+  const commandShim = path.join(fixtureDir, "fake-ai.cmd");
+  fs.writeFileSync(nativeCommand, "", "utf8");
+  fs.writeFileSync(commandShim, [
+    "@ECHO off",
+    "SET dp0=%~dp0",
+    '"%dp0%\\fake-ai.exe" %*',
+    "",
+  ].join("\r\n"), "utf8");
+
+  assert.equal(runner.resolveInteractiveRunnerCommand(commandShim), nativeCommand);
 });
 
 test("transient plugin websocket reconnects receive a grace lease before AI cancellation", () => {
