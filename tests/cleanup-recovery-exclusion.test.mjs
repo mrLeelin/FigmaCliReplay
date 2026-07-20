@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { buildPsdIncrementalDiff, isPsdIncrementalCandidate } from "../code/06_psd_incremental.mjs";
+import {
+  buildPsdIncrementalDiff,
+  isPsdIncrementalCandidate,
+  normalizePsdSourceState,
+} from "../code/06_psd_incremental.mjs";
 import { buildCleanupSnapshot, isCleanupRecoveryNode } from "../code/07_cleanup_snapshot.mjs";
 
 function fakeNode(id, name, type = "FRAME") {
@@ -46,9 +50,15 @@ test("PSD incremental matching ignores records under cleanup recovery backups", 
   const backupSource = fakeNode("PSD-A", "Source", "RECTANGLE");
   backup.appendChild(backupSource);
   const recoveryRecord = { layerId: "42", contentHash: "old", node: backupSource };
-  const activeRecord = { layerId: "42", contentHash: "new", node: fakeNode("A", "Active", "RECTANGLE") };
+  const incoming = { layerId: "42", contentHash: "new" };
+  const activeRecord = {
+    layerId: "42",
+    contentHash: "new",
+    sourceState: normalizePsdSourceState(incoming),
+    node: fakeNode("A", "Active", "RECTANGLE"),
+  };
   assert.equal(isPsdIncrementalCandidate(recoveryRecord), false);
-  const diff = buildPsdIncrementalDiff([recoveryRecord, activeRecord], [{ layerId: "42", contentHash: "new" }]);
+  const diff = buildPsdIncrementalDiff([recoveryRecord, activeRecord], [incoming]);
   assert.equal(diff.conflicts.length, 0);
   assert.equal(diff.unchanged.length, 1);
 });
