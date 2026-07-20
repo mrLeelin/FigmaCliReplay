@@ -3636,7 +3636,48 @@ async function importPsdJob(job, assets) {
 // 只读计算 PSD 增量差异；此阶段不得修改 Figma 文档。
 async function previewPsdIncrementalUpdate(job, assets) {
   const prepared = await preparePsdIncrementalUpdate(job, assets);
-  return buildPsdIncrementalResult(prepared, prepared.diff.canApply ? "preview-ready" : "preview-blocked");
+  return buildPsdIncrementalResult(prepared, prepared.diff.status);
+}
+
+// Adopt the current manifest as legacy source truth without changing canvas fields.
+async function adoptPsdIncrementalBaseline(job, assets) {
+  const prepared = await preparePsdIncrementalUpdate(job, assets);
+  const matched = prepared.diff.baselineRequired;
+  if (prepared.diff.conflicts.length > 0 || matched.length === 0) {
+    return buildPsdIncrementalResult(prepared, "baseline-adopt-blocked");
+  }
+  const protectedBefore = capturePsdProtectedSnapshot(prepared.target);
+  const nodeMetadataBefore = matched.map((pair) => ({
+    node: pair.target.node,
+    metadata: capturePsdLayerMetadata(pair.target.node)
+  }));
+  const rootMetadataBefore = capturePsdRootMetadata(prepared.target);
+  try {
+    for (const pair of matched) {
+      writeLayerMetadata(pair.target.node, pair.source, {});
+    }
+    writePsdRootMetadata(prepared.target, job, prepared.manifest);
+    const errors = verifyPsdProtectedSnapshot(protectedBefore);
+    if (errors.length > 0) {
+      throw new Error(errors.join("; "));
+    }
+    if (typeof figma.commitUndo === "function") {
+      figma.commitUndo();
+    }
+    return {
+      status: "baseline-adopted",
+      targetNodeId: prepared.target.id,
+      adoptedCount: matched.length,
+      warnings: prepared.context.warnings,
+      errors: []
+    };
+  } catch (error) {
+    for (const record of nodeMetadataBefore) {
+      writePluginData(record.node, record.metadata);
+    }
+    writePluginData(prepared.target, rootMetadataBefore);
+    throw error;
+  }
 }
 
 // 重新校验预览指纹后，仅替换 PSD 拥有的像素或文字内容。
@@ -3800,6 +3841,7 @@ function collectPsdBoundNodes(root) {
     if (isCleanupRecoveryNode(node)) return;
     const layerId = normalizePsdLayerId(readSharedPluginData(node, "psdLayerId"));
     if (layerId) {
+      const storedSourceState = readStoredPsdSourceState(node);
       found.push({
         layerId,
         nodeId: node.id,
@@ -3808,7 +3850,13 @@ function collectPsdBoundNodes(root) {
         nodeType: node.type,
         contentHash: readSharedPluginData(node, "psdContentHash"),
         ownership: readSharedPluginData(node, "psdOwnership"),
-        liveContentSignature: buildPsdLiveContentSignature(node, readSharedPluginData(node, "psdOwnership"))
+        sourceState: storedSourceState.state,
+        sourceStateHash: readSharedPluginData(node, "psdSourceStateHash"),
+        sourceStateError: storedSourceState.error,
+        parentId: node.parent ? node.parent.id : "",
+        siblingIndex: node.parent && "children" in node.parent ? node.parent.children.indexOf(node) : -1,
+        liveContentSignature: buildPsdLiveContentSignature(node, readSharedPluginData(node, "psdOwnership")),
+        liveWritableFieldSignature: buildPsdLiveWritableFieldSignature(node)
       });
     }
     if ("children" in node) {
@@ -3819,10 +3867,33 @@ function collectPsdBoundNodes(root) {
   return found;
 }
 
+function readStoredPsdSourceState(node) {
+  const raw = readSharedPluginData(node, "psdSourceState");
+  if (!raw) return { state: null, error: "" };
+  try {
+    const parsed = JSON.parse(raw);
+    const state = normalizePsdSourceState({ sourceState: parsed });
+    return state && state.layerId
+      ? { state, error: "" }
+      : { state: null, error: "invalid-stored-source-state" };
+  } catch (error) {
+    return { state: null, error: "invalid-stored-source-state" };
+  }
+}
+
 function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest) {
   const schemaVersion = readSharedPluginData(target, "psdImportSchemaVersion") || readSharedPluginData(target, "psdSchemaVersion");
-  if (schemaVersion !== "2") {
+  if (schemaVersion !== "2" && schemaVersion !== "3") {
     diff.conflicts.push({ kind: "missing-target-metadata", message: "目标不是带增量元数据的 PSD 导入结果。" });
+  }
+  for (const current of currentNodes) {
+    if (current.sourceStateError) {
+      diff.conflicts.push({
+        kind: current.sourceStateError,
+        layerId: current.layerId,
+        nodeId: current.nodeId
+      });
+    }
   }
   const storedWidth = numericOr(readSharedPluginData(target, "psdCanvasWidth"), 0);
   const storedHeight = numericOr(readSharedPluginData(target, "psdCanvasHeight"), 0);
@@ -3871,8 +3942,7 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
       });
     }
   }
-  diff.summary.conflicts = diff.conflicts.length;
-  diff.canApply = diff.conflicts.length === 0;
+  refreshPsdIncrementalDiffStatus(diff);
 }
 
 function appendPsdIncrementalAssetConflicts(diff, context) {
@@ -3892,8 +3962,19 @@ function appendPsdIncrementalAssetConflicts(diff, context) {
       diff.conflicts.push({ kind: "invalid-raster-bytes", layerId: layer.layerId, name: layer.name });
     }
   }
+  refreshPsdIncrementalDiffStatus(diff);
+}
+
+function refreshPsdIncrementalDiffStatus(diff) {
   diff.summary.conflicts = diff.conflicts.length;
-  diff.canApply = diff.conflicts.length === 0;
+  diff.status = diff.conflicts.length > 0
+    ? "preview-blocked"
+    : diff.baselineRequired.length > 0
+      ? "preview-baseline-required"
+      : diff.changed.length === 0 && diff.added.length === 0
+        ? "preview-no-changes"
+        : "preview-ready";
+  diff.canApply = diff.status === "preview-ready";
 }
 
 function buildPsdIncrementalFingerprint(target, currentNodes, incomingLayers) {
@@ -3919,6 +4000,32 @@ function buildPsdLiveContentSignature(node, ownership) {
     return `image:${imageHashes.join(",")}`;
   }
   return "protected";
+}
+
+function buildPsdLiveWritableFieldSignature(node) {
+  const liveState = {
+    geometry: {
+      x: numericOr(node && node.x, 0),
+      y: numericOr(node && node.y, 0),
+      width: numericOr(node && node.width, 0),
+      height: numericOr(node && node.height, 0),
+      rotation: numericOr(node && node.rotation, 0)
+    },
+    display: {
+      visible: !node || node.visible !== false,
+      opacity: numericOr(node && node.opacity, 1),
+      blendMode: String(node && node.blendMode || ""),
+      constraints: node && node.constraints ? node.constraints : {}
+    },
+    text: node && node.type === "TEXT" ? {
+      characters: String(node.characters || ""),
+      fontName: node.fontName,
+      fontSize: node.fontSize,
+      lineHeight: node.lineHeight,
+      textAlignHorizontal: node.textAlignHorizontal
+    } : null
+  };
+  return hashPsdSourceState(liveState);
 }
 
 function buildPsdIncrementalResult(prepared, status) {
@@ -4111,18 +4218,19 @@ function capturePsdContentRollback(node) {
     node,
     fills: "fills" in node && Array.isArray(node.fills) ? node.fills.slice() : null,
     characters: node.type === "TEXT" ? node.characters : null,
-    metadata: {
-      rawPsdLayerName: readSharedPluginData(node, "rawPsdLayerName"),
-      normalizedLayerName: readSharedPluginData(node, "normalizedLayerName"),
-      semanticMode: readSharedPluginData(node, "semanticMode"),
-      normalizationWarnings: readSharedPluginData(node, "normalizationWarnings"),
-      psdLayerIndex: readSharedPluginData(node, "psdLayerIndex"),
-      psdLayerId: readSharedPluginData(node, "psdLayerId"),
-      psdOriginalName: readSharedPluginData(node, "psdOriginalName"),
-      psdContentHash: readSharedPluginData(node, "psdContentHash"),
-      psdOwnership: readSharedPluginData(node, "psdOwnership")
-    }
+    metadata: capturePsdLayerMetadata(node)
   };
+}
+
+function capturePsdLayerMetadata(node) {
+  const keys = [
+    "rawPsdLayerName", "normalizedLayerName", "semanticMode", "normalizationWarnings",
+    "psdLayerIndex", "psdLayerId", "psdOriginalName", "psdContentHash", "psdOwnership",
+    "psdSourceState", "psdSourceStateHash"
+  ];
+  const values = {};
+  for (const key of keys) values[key] = readSharedPluginData(node, key);
+  return values;
 }
 
 function capturePsdRootMetadata(node) {
@@ -4219,6 +4327,8 @@ function normalizeLayer(layer) {
     normalizationWarnings: Array.isArray(layer.normalizationWarnings) ? layer.normalizationWarnings : []
   });
   applyNestedManifestCompatibility(normalized, layer, mode, width, height);
+  normalized.sourceState = normalizePsdSourceState({ ...normalized, sourceState: layer.sourceState });
+  normalized.sourceStateHash = hashPsdSourceState(normalized.sourceState);
   return normalized;
 }
 
@@ -4309,10 +4419,10 @@ async function createRootFrame(job, manifest) {
 function writePsdRootMetadata(root, job, manifest) {
   writePluginData(root, {
     importKind: "psd-layer-to-figma",
-    schemaVersion: String(job.schemaVersion || 2),
+    schemaVersion: "3",
     source: String(job.source || ""),
-    psdSchemaVersion: "2",
-    psdImportSchemaVersion: "2",
+    psdSchemaVersion: "3",
+    psdImportSchemaVersion: "3",
     psdSourceFileName: normalizedPsdSourceFileName(job),
     psdSourceKey: buildPsdSourceKey(job, manifest),
     psdLayerSetFingerprint: hashPsdLayerIds(manifest.layers),
@@ -4813,6 +4923,7 @@ function centerNodeOnLayer(node, layer) {
 
 // 写入 PSD 图层元数据，供后续 Unity 导入或排查问题。
 function writeLayerMetadata(node, layer, extra) {
+  const sourceState = normalizePsdSourceState(layer);
   const metadata = {
     rawPsdLayerName: layer.rawPsdLayerName,
     normalizedLayerName: layer.normalizedLayerName,
@@ -4822,7 +4933,9 @@ function writeLayerMetadata(node, layer, extra) {
     psdLayerId: normalizePsdLayerId(layer.layerId),
     psdOriginalName: String(layer.rawPsdLayerName || layer.name || ""),
     psdContentHash: String(layer.contentHash || ""),
-    psdOwnership: psdOwnershipForMode(layer.mode)
+    psdOwnership: psdOwnershipForMode(layer.mode),
+    psdSourceState: stablePsdSourceStateJson(sourceState),
+    psdSourceStateHash: hashPsdSourceState(sourceState)
   };
   Object.assign(metadata, extra || {});
   writePluginData(node, metadata);

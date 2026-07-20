@@ -254,11 +254,16 @@ async function handleImportPsdJob(message) {
   state.importing = true;
   try {
     const mode = String(message.job && message.job.mode || "initial-import");
-    const result = mode === "incremental-preview"
-      ? await previewPsdIncrementalUpdate(message.job, message.assets || [])
-      : mode === "incremental-apply"
-        ? await applyPsdIncrementalUpdate(message.job, message.assets || [])
-        : await importPsdJob(message.job, message.assets || []);
+    let result;
+    if (mode === "incremental-preview") {
+      result = await previewPsdIncrementalUpdate(message.job, message.assets || []);
+    } else if (mode === "incremental-baseline-adopt") {
+      result = await adoptPsdIncrementalBaseline(message.job, message.assets || []);
+    } else if (mode === "incremental-apply") {
+      result = await applyPsdIncrementalUpdate(message.job, message.assets || []);
+    } else {
+      result = await importPsdJob(message.job, message.assets || []);
+    }
     state.lastResult = result;
     figma.ui.postMessage({
       type: "IMPORT_PSD_RESULT",
@@ -267,6 +272,8 @@ async function handleImportPsdJob(message) {
     });
     if (mode === "incremental-preview") {
       figma.notify(result.canApply ? "PSD 增量差异已生成" : "PSD 增量更新存在冲突", { error: !result.canApply });
+    } else if (mode === "incremental-baseline-adopt") {
+      figma.notify(result.status === "baseline-adopted" ? "PSD 增量基线已采纳" : "PSD 增量基线未采纳", { error: result.status !== "baseline-adopted" });
     } else if (mode === "incremental-apply") {
       figma.notify(result.status === "applied" ? "PSD 增量更新完成" : "PSD 增量更新未执行", { error: result.status !== "applied" });
     } else {
