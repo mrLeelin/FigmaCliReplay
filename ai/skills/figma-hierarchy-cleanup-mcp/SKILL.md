@@ -5,11 +5,19 @@ description: Use when整理 Figma 节点层级、给 Figma 节点打组、生产
 
 # Figma Hierarchy Cleanup MCP Relay
 
-## 插件内“AI 整理节点”V2 边界
+## 插件窗口“AI 整理对话”边界
 
-当任务由 Figma 插件中的“AI 整理节点”按钮启动时，以插件 V2 控制器为唯一入口：Provider 只生成 `CleanupPlanV2`，用户在插件内预览并确认后，由 `apply_cleanup_plan.py` 提交一个精确事务。该流程禁止调用 `run_cleanup_pipeline.py`、自动嵌套发现、自动 Component/ComponentSet/Variant 创建或任何未出现在预览计划中的写操作；也不依赖 Codex/Claude 的恢复会话。
+当任务由 Figma 插件中的“开始 AI 整理对话”启动时，插件窗口就是与用户的多轮对话界面，必须保持同一个 Codex/Claude CLI 会话并完整使用本 Skill。由 Relay 接受任务本身完成服务预检，首轮只允许 `预检 → analyze → plan → 审阅完整目标树`，不得先用 `curl`、`Invoke-WebRequest` 或直接 `/health` 探测；不得写入 Figma；按钮点击不是写入授权。Relay 还会按会话阶段执行服务端写入闸门，提示词不得被当作唯一安全边界。必须在窗口中展示完整最终层级树并等待用户明确确认，才允许调用本 Skill 的 `run_cleanup_pipeline.py --apply-confirmed --no-auto-component-sets` 或等价脚本入口执行层级整理。
 
-本文后续关于 `run_cleanup_pipeline.py`、AutoComponentSet 和多轮人工确认的规则，只适用于用户显式发起的旧版/手动 agent 工作流，不得套用到插件 V2 按钮流程。组件化需求必须作为独立任务、独立计划和独立确认处理。
+层级整理和即时验证完成后，必须在同一窗口询问用户是否满意。用户明确满意后，才进入本 Skill 的 AutoComponentSet/变体阶段；用户提出调整时，重新分析并修订计划，不得沿用旧快照或旧计划。所有 Figma 写入仍只允许通过本地 MCP Relay 脚本，禁止官方/通用 Figma MCP 直写。
+
+旧的 `/cleanup/runs` V2 控制器仅为兼容已有 API 客户端保留；它不是窗口“开始 AI 整理对话”的入口，也不得阻止对话会话使用本 Skill 的分析、确认、写入和验证流程。
+
+## Relay 生命周期边界
+
+- `http://127.0.0.1:32130` 是外部管理的 MCP Relay。执行本 Skill 的 AI 只能作为客户端；插件窗口任务的 Relay 接收状态是权威服务预检，不得独立请求 `curl`、`Invoke-WebRequest` 或直接 `/health`，不得猜测 `localhost:3000` 或其它端口。
+- 禁止启动、重启、停止、结束或重配 Relay；禁止绑定/监听 32130、32131；禁止运行 `start_mcp_companion`、`start_mcp_hidden`、`start_mcp_oneclick`、`npm run dev` 或任何等价服务管理命令。
+- 遇到 WinError 10055、ENOBUFS、WinError 10048、EADDRINUSE、超时或连接错误时，必须回报原始错误为“本机 TCP 资源压力导致客户端无法建立连接”，并停止当前回合；不得声称 Relay 已停止或要求启动 Relay，也不得通过重启服务、抢占端口、杀进程或反复探测端口来恢复。
 
 ## Hypothesis-Action-Verification Loop
 
@@ -28,7 +36,7 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
 ## Fast MCP Execution Contract
 
 - 【强制】Figma 层级整理的标准入口是 `scripts/run_cleanup_pipeline.py` 和 `scripts/figma_hierarchy_cleanup_mcp_client.py`（脚本内部调用 MCP Relay）。脚本会构建完整 job payload，避免 MCP tool 参数截断问题。
-- `figmaMcpRelay.figma_health`、`figma_query_selection`、`figma_query_node_children` 等轻量只读查询可直接用 MCP tools。
+- 独立启动的 Skill 任务可用 `figmaMcpRelay.figma_health` 做一次轻量预检；由插件窗口启动的 AI 整理对话已经由 Relay 完成权威预检，禁止再次调用 `figma_health`、直接 `/health`、`curl` 或 `Invoke-WebRequest`。`figma_query_selection`、`figma_query_node_children` 等目标化只读查询仍可按需使用。
 - Figma plugin/runtime traffic may still use local HTTP/WebSocket internally. That is companion-to-plugin transport, not the agent-facing API. Do not hand-write `/jobs`, `/figma/pending`, `/figma/result`, or `/assets/...` calls.
 - Script stdout must be treated as compact status only. Read the `[SUMMARY_JSON]` block and the file paths it reports; full analysis/apply/pipeline JSON stays on disk.
 - Never read full `analysis_result.json`, `apply_result.json`, or `pipeline_result.json` into LLM context for normal decisions. Use `figma_analyze_reader.py`, `cleanup_plan_diagnostic.md`, pipeline summary fields, and targeted child queries.
@@ -38,7 +46,7 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
 - If root grouping already succeeded and only a nested wrapper chain remains, use `run_cleanup_pipeline.py --skip-root-apply --wrapper-root-node-id <live-id> --wrapper-root-name "[ListRoot]" ...`（脚本内部调用 MCP Relay）。禁用 MCP tool 直连 `figma_submit_job` 提交 `FIGMA_HIERARCHY_WRAP_CHAIN`。不要重新执行根打组或复用根打组前的直接子节点 id。
 - Every wrapper apply must pass a local stale-plan preflight first: `plan.target.nodeId` must match the current analysis root and `childNodeIds` must exactly equal the current direct children in order. A `planNodeSetMismatch` from the plugin means this local gate was skipped or the plan is stale.
 - Fail fast on command failure. Do not treat `python ... | Tee-Object ...` as proof of success unless the child process exit code is explicitly checked; prefer `run_cleanup_pipeline.py` or Python `subprocess.run(check=True)` for timed multi-step runs.
-- If a CLI wrapper receives a stale plugin `sessionId`, first prove it from live `figma_health`: compare requested `sessionId`, `activeSessionId`, online `sessions`, and requested `fileKey`. When exactly one online session matches the requested `fileKey`, refresh the wrapper target to that current session and record `preflightSessionRefresh`; otherwise fail with the full session diagnostic. Do not silently ignore the stale session and do not guess a target.
+- If a CLI wrapper reports a stale plugin `sessionId`, the wrapper may use its own bounded Relay session diagnostic and record `preflightSessionRefresh`; the AI must not add an independent health/port probing loop. When exactly one online session matches the requested `fileKey`, the wrapper may refresh to that session; otherwise fail with the full session diagnostic. Do not silently ignore the stale session and do not guess a target.
 - When verifying a nested list cleanup whose current target is already `[Content]`, `[Viewport]`, `[ScrollView]`, or `[ListRoot]`, `[Item_*]` children satisfy the list-depth gate. Do not require another nested list container inside that target.
 - For wrapper chains, do not re-run full `FIGMA_HIERARCHY_CLEANUP_ANALYZE` after every wrapper apply when the previous apply already returned the newly created wrapper id and `originalNodesAfter`. Synthesize the next before-analysis from that apply result, write it to disk, mark it with `syntheticBeforeAnalysis`, then immediately apply and verify the next layer.
 - Final screenshots should use `FIGMA_EXPORT_NODE_SCREENSHOT` unless a fresh hierarchy tree is also needed for validation. Do not run a full hierarchy analyze just to get a PNG screenshot.
@@ -71,7 +79,7 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
 ## MCP 接入优先级
 
 - 【强制】标准入口是 `scripts/run_cleanup_pipeline.py` 和 `scripts/figma_hierarchy_cleanup_mcp_client.py`（内部调用 MCP Relay）。
-- `figmaMcpRelay.figma_health`、`figma_query_selection`、`figma_query_node_children` 等轻量只读查询可直接用 MCP tools。**所有写入操作（apply/wrap/reorder）必须走脚本，禁止直用 `figma_submit_job` 提交写入 job。**
+- 独立 Skill 任务可用 `figmaMcpRelay.figma_health` 做一次轻量预检；插件窗口 AI 整理对话不得重复探测 health。`figma_query_selection`、`figma_query_node_children` 等目标化只读查询可直接用 MCP tools。**所有写入操作（apply/wrap/reorder）必须走脚本，禁止直用 `figma_submit_job` 提交写入 job。**
 - `figma_hierarchy_cleanup_mcp_client.py` 和 `run_cleanup_pipeline.py` 是标准入口（内部通过 MCP Relay 做 JSON-RPC `tools/call`），不是旧业务 HTTP 协议。
 - `/figma/pending`、`/figma/result`、`/assets/...` 是 MCP server 与 Figma 插件之间的 runtime relay；AI 不应直接 POST 或轮询这些 endpoint。
 - MCP 默认 endpoint 是 `http://127.0.0.1:32130/mcp`，插件 URL 默认是 `http://localhost:32130`。如果当前 relay 使用其它端口，必须读取当前 MCP 配置或显式传入 `--relay-url`，不要硬猜端口。
@@ -120,7 +128,7 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
 ## 标准流程
 
 1. 读取仓库规则、AI入口、任务路由和 `Doc/ReportError/` 中 Figma/MCP Relay 相关错误。
-2. 检查 MCP Relay：直接调用 `figmaMcpRelay.figma_health`（轻量查询走 MCP tool 即可，不需要脚本）。
+2. 检查 MCP Relay：独立启动本 Skill 时只调用一次 `figmaMcpRelay.figma_health`；插件窗口 AI 整理对话跳过此步，以 Relay 已接受任务和随任务提供的 authoritative cleanup snapshot 为预检证据，禁止额外 health/端口探测。
 3. 只读分析目标节点：
    ```powershell
    python scripts/figma_hierarchy_cleanup_mcp_client.py analyze --figma-url "https://www.figma.com/design/FILE/NAME?node-id=1-2" --include-hidden
@@ -164,12 +172,30 @@ For hierarchy cleanup, ComponentSet and grouping candidates must pass geometry, 
 
 一次完整整理任务按固定阶段推进，禁止在第一轮规划或层级写入后直接结束：
 
-1. `PlanReview`：只读 analyze，给出完整最终层级树、节点移动计划和预计自动创建的 ComponentSet 变体候选，不写入 Figma。必须询问用户完整计划是否满意；“满意了”“可以执行了”“整理完毕了”“可以了”“确认”及明确同义表达都视为一次执行授权。用户不满意时根据反馈重新 analyze 和修订计划。
-2. `HierarchyCleanup`：收到 `PlanReview` 的一次授权后，执行层级整理、打组、必要的重排和逐步验证，不再要求第二次确认。
-3. `AutoComponentSet`：层级验证通过后立即继续，对当前最新结构中可明确识别的重复节点创建 `ComponentSet` 变体并把原节点替换为对应 Instance，原节点备份。`PlanReview` 的同一次授权同时覆盖本阶段，不再询问“是否要做 ComponentSet”，也不得要求用户重复说“打组变体”；如果重复节点范围、变体属性、替换数量或父级结构存在歧义，必须阻塞并说明缺少的信息。使用 `run_cleanup_pipeline.py` 时该阶段默认开启，除非用户明确要求跳过。
-4. `ComponentSetReview`：层级整理和自动 ComponentSet 全部完成后，统一展示验证结果并询问用户是否满意；用户不满意时，根据反馈重新 analyze 并修正；用户满意后进入自定义成组阶段。
-5. `CustomGroupingLoop`：询问用户是否还有自定义成组需求。若用户说“把我选择的节点打组变体”“把我选中的节点打组变体”或同义表达，立即按当前 Figma 选择执行手动选择或跨父级节点组 ComponentSet 流程；每次完成后继续询问。只有已经进入本阶段后，“整理完毕了”“结束”“没有了”或同义表达才表示结束整个任务；这些词在 `PlanReview` 阶段表示确认并执行。
-6. `Done`：只有用户在自定义成组阶段明确结束，才输出最终通知；最终通知必须包含层级整理验证、自动 ComponentSet 结果、自定义成组结果和剩余 warnings。
+1. `PlanReview`：只读 analyze，给出完整最终层级树、节点移动计划和预计自动创建的 ComponentSet 变体候选，不写入 Figma。必须询问用户是否确认执行层级计划；“确认”“确认执行”“可以执行了”“按此执行”“执行计划”“可以”“同意”及明确同义表达只授权下一阶段。用户不满意时根据反馈重新 analyze 和修订计划。
+2. `HierarchyCleanup`：收到 `PlanReview` 的一次授权后，只执行层级整理、打组、必要的重排和逐步验证；此阶段禁止创建 Component、ComponentSet、Variant 或替换 Instance。
+3. `SatisfactionReview`：层级验证通过后立即停止写入，在同一窗口询问用户是否满意。只有“满意”“满意了”“确认满意”“效果满意”“可以了”及明确同义表达才授权 AutoComponentSet；调整反馈会回到新的只读 `PlanReview`，不得复用旧计划。
+4. `AutoComponentSet`：收到 `SatisfactionReview` 的明确满意后，对当前最新结构中可明确识别的重复节点创建 `ComponentSet` 变体并把原节点替换为对应 Instance，原节点备份。若重复节点范围、变体属性、替换数量或父级结构存在歧义，必须阻塞并说明缺少的信息。
+5. `ComponentSetReview`：自动 ComponentSet 完成后展示验证结果；用户提出问题时按最新结构重新分析，不得回退到层级计划授权。
+6. `CustomGroupingLoop`：询问用户是否还有自定义成组需求。若用户说“把我选择的节点打组变体”“把我选中的节点打组变体”或同义表达，立即按当前 Figma 选择执行手动选择或跨父级节点组 ComponentSet 流程；每次完成后继续询问。
+7. `Done`：只有用户明确结束，才输出最终通知；最终通知必须包含层级整理验证、自动 ComponentSet 结果、自定义成组结果和剩余 warnings。
+
+## 确认前全量节点映射门禁
+
+`PlanReview` 询问用户确认以前，必须完成以下机器可校验门禁；仅写“全部节点都会处理”不算通过：
+
+1. 从当前 authoritative snapshot / includeHidden analyze 中提取 root 的全部原始直接子节点，按原始 sibling 顺序建立 before 清单。每项必须包含原始 `ID + name`，并显式记录唯一目标父级和目标 sibling 顺序。
+2. 每个原始直接子节点必须恰好出现一次。若原始直接子节点本身是九宫、Frame 或其它容器，只分配这个直接子容器并整体保留其后代；不得把后代误列为 root 直接子节点，也不得拆散 `__slice_` / `jiugong` / `nine-slice`。
+3. 禁止用省略号、区间、`其余节点随对应图片移动`、`同类节点一起移动`、`剩余节点同上` 或任何叙述替代显式映射。计划正文较长也不能省略节点。
+4. 插件窗口对话中，AI 只允许写 Relay 为当前任务指定的机器可读精简语义决策 `cleanup-plan-decision.json` 绝对路径，禁止 AI 手写 `cleanup-plan-for-confirmation.json`，也不得写到仓库根目录或用其它草稿替代。精简决策只包含 `schemaVersion: 1`、`rootNodeId`、`groups`、`componentCandidates`、`warnings`；每个 `groups[]` 只包含 `name`、`count`、`startNodeId`、`endNodeId` 和可选 `subgroups`。count 表示从当前权威 sibling 游标开始的连续节点数量，首尾锚点必须精确等于该连续区间在 authoritative snapshot 中的首尾节点，顶层 count 总和必须等于 root 直接子节点总数。
+5. 每个精简决策组至少包含 2 个节点。含 12 个及以上节点的组必须提供至少两个 `subgroups`，每个子组仍只写 `name`、`count`、`startNodeId`、`endNodeId` 和可选嵌套子组；子组 count 总和必须精确等于父组 count，每个子组锚点必须等于父区间内对应连续切片的首尾节点，仍有 12 个及以上节点的子组必须继续展开。禁止提交按语义交错抽取 ID 的子组，因为这会破坏原 sibling / Z 轴顺序。
+6. AI 回合结束后，Relay 必须根据 authoritative snapshot 确定性生成唯一允许进入确认阶段的 `cleanup-plan-for-confirmation.json`：自动填入每组的权威 `parentNodeId`、连续 `sourceNodeIds`、`preserveSiblingOrder: true`，以及每个直接子节点完全一致的 `nodeId`、`nodeName`、`targetParent`、`targetSiblingIndex`。AI 自己的计数、手抄完整 ID 方案、报告或“校验通过”陈述只作参考，不能推进阶段。
+7. Relay 独立校验摘要必须明确输出 `beforeCount`、`assignedCount`、`missing = []`、`duplicate = []`、`extra = []`、`groupCount`；只有数量相等且三个集合均为空，才证明 before 直接子节点 ID 集合与计划分配 ID 集合完全相等。顺序不一致时日志必须包含首个错位 index、expected ID、actual ID 和两侧长度。
+8. 每个待创建分组必须至少包含 2 个有效直接子节点；出现单子节点分组、目标父级不是当前直接父级、父子层级混用、节点名称与快照不一致、无效目标 sibling 顺序时，计划必须阻塞。
+9. 若 Relay 校验失败，它会把具体错误自动回传到同一个 CLI 会话。此时必须保持只读，重新读取 authoritative snapshot，只重写 `cleanup-plan-decision.json` 并等待 Relay 再次确定性展开和独立校验；不得手写完整确认产物，不得把任务提示、按钮点击或 AI 自己的话误认成用户确认。
+10. 若校验失败或计划仍有 `largeGroups`、`sparseGroups`、`nonContiguousGroups`、未展开的大语义组，必须留在只读分析阶段修复并重新校验；不得询问确认，不得把未验证计划交给用户，更不得 apply。
+
+用户可读计划允许在全量映射之外增加摘要，但不得省略映射本身，也不得用自然语言承诺替代机器可读计划和本地校验结果。
 
 ## 快速流水线
 
@@ -208,7 +234,7 @@ python scripts/run_cleanup_pipeline.py --figma-url "https://www.figma.com/design
 - 最后一次 apply 默认截图；只有用户明确允许跳过最终截图时才使用 `--no-final-screenshot`。
 - `pipeline_result.json` 必须包含每步耗时、产物路径、验证结果和最终截图预期。
 - 自动生成的根计划仍需人工审阅；流水线只减少执行往返，不替代计划质量判断。
-- `run_cleanup_pipeline.py` 在 `--apply-confirmed` 后默认执行 `AutoComponentSet`：重新 analyze 最新 root，运行 `plan_auto_component_sets.py` 的通用重复 sibling FRAME 检测，生成 ComponentSet 计划并逐个执行 `FIGMA_CREATE_COMPONENT_SET_FROM_NODE_GROUPS`。只有用户明确要求跳过时才传 `--no-auto-component-sets`。
+- 插件对话的 `HierarchyCleanup` 阶段调用 `run_cleanup_pipeline.py --apply-confirmed --no-auto-component-sets`，确保层级验证后先进入 `SatisfactionReview`。用户明确满意后，才调用 `run_cleanup_pipeline.py --apply-confirmed --auto-component-sets-only` 创建 ComponentSet 变体。
 - AutoComponentSet 只能基于通用规则：同父级、直接子节点、`FRAME`、数量不少于 2、名称符合 `[Name_数字_State]` / `[Name_数字]` 这类 indexed sibling 模式；不得使用 PSD 名、页面名、nodeId、固定 child count 或具体界面坐标。
 - 目标直接子节点已经是 `INSTANCE` 时必须记录 `skippedAlreadyInstance`，不得再次生成 ComponentSet、组件库或备份帧。
 
@@ -226,7 +252,7 @@ python scripts/run_cleanup_pipeline.py --figma-url "https://www.figma.com/design
 
 1. 先对当前目标节点重新 analyze，并确认目标直接子节点仍是原始 `FRAME` 成员，而不是已经替换过的 `INSTANCE`。
 2. 手工编写 `component_set_plan.json`，明确 `target.nodeId`、`componentSetName`、`replaceOriginalsWithInstances`、`createBackup` 和每个变体来源节点。
-3. 如果是用户直接要求 ComponentSet、手动选择 ComponentSet 或跨父级节点组 ComponentSet，必须向用户展示计划摘要并获得明确确认后才允许执行；如果是 `PlanReview` 阶段用户回复任一确认语后进入的自动流程，该次确认同时授权 `HierarchyCleanup` 和 `AutoComponentSet`，计划无歧义且通过门禁时必须连续执行并通知结果。
+3. 如果是用户直接要求 ComponentSet、手动选择 ComponentSet 或跨父级节点组 ComponentSet，必须向用户展示计划摘要并获得明确确认后才允许执行；如果来自插件整理对话，只有 `SatisfactionReview` 阶段的明确满意才授权 `AutoComponentSet`，`PlanReview` 确认不得复用为变体授权。
 4. 默认 `createBackup=true`，原始成员会移动到隐藏备份 Frame，禁止删除原节点。
 5. 禁止 flatten、detach instance、拆散 `__slice_` / `jiugong` / `nine-slice` 节点。
 6. 同一目标不要重复执行 `component-set`；如果目标直接子节点已经是 `INSTANCE`，应停止并报告“已组件化”。
@@ -670,12 +696,13 @@ node "<relay-root>\scripts\hierarchy_repeat_cluster_validator.js" --fixture 7day
 
 每次整理、打组或 ComponentSet 变体替换执行完毕后，必须按阶段询问用户，而不是只发送一次泛泛提示：
 
-1. 完整计划生成后询问：`完整整理计划是否满意？不满意请指出要调整的位置；满意可回复“满意了”“可以执行了”或“整理完毕了”。确认后我会连续完成层级打组、验证和自动 ComponentSet 变体替换，不需要你再次说明。`
-2. 收到确认后必须连续执行层级整理和 AutoComponentSet；除非出现歧义、验证失败或重复组件化风险，否则中间禁止再次询问是否执行变体。
-3. 自动 ComponentSet 变体替换完成后询问：`层级整理和 ComponentSet 变体替换是否满意？不满意请指出要调整的节点或变体；满意后我会继续询问是否还有自定义成组。`
-4. ComponentSet 满意后询问：`是否还有自定义成组？如果有，请在 Figma 中选择节点并说明“把我选择的节点打组变体”；如果没有，请回复“整理完毕了”。`
-5. 用户提出自定义成组后，执行 `query-selection`，回显选中节点并按对应手动选择或跨父级节点组 ComponentSet 流程处理；每轮完成后继续询问第 4 步，直到用户明确结束。
-6. 用户在 `CustomGroupingLoop` 阶段回复“整理完毕了”“结束”“没有了”或同义表达后，停止循环并输出最终通知。
+1. 完整计划生成后询问：`完整层级整理计划是否确认执行？需要调整请指出位置；确认可回复“确认执行”或“按此执行”。本次确认只授权层级整理，不授权 ComponentSet/变体。`
+2. 收到计划确认后只执行层级整理、必要重排和即时验证；此阶段禁止创建 Component、ComponentSet、Variant 或替换 Instance。
+3. 层级验证通过后必须停止写入并询问：`层级整理已完成并通过验证，效果是否满意？需要调整请指出节点；只有回复“满意”或明确同义表达后，才会开始自动 ComponentSet/变体。`
+4. 收到明确满意后执行 AutoComponentSet/变体和验证，完成后询问：`ComponentSet 变体替换是否满意？不满意请指出节点或变体；满意后我会继续询问是否还有自定义成组。`
+5. ComponentSet 满意后询问：`是否还有自定义成组？如果有，请在 Figma 中选择节点并说明“把我选择的节点打组变体”；如果没有，请回复“整理完毕了”。`
+6. 用户提出自定义成组后，执行 `query-selection`，回显选中节点并按对应手动选择或跨父级节点组 ComponentSet 流程处理；每轮完成后继续询问第 5 步，直到用户明确结束。
+7. 用户在 `CustomGroupingLoop` 阶段回复“整理完毕了”“结束”“没有了”或同义表达后，停止循环并输出最终通知。
 
 最终通知前仍必须提醒用户：
 
@@ -709,7 +736,7 @@ node "<relay-root>\scripts\hierarchy_repeat_cluster_validator.js" --fixture 7day
 
 ## 常见错误
 
-- MCP Relay / `figmaMcpRelay` 未启动：先运行 `figma_health` 确认（轻量只读查询，直接 MCP tool 即可）。如果失败再排查插件/companion 状态。不要 fallback 到官方/通用 Figma MCP 直写。
+- MCP Relay / `figmaMcpRelay` 连接失败：独立 Skill 任务只允许一次 `figma_health` 预检；插件窗口 AI 整理对话不得追加 health/端口探测，必须保留并报告脚本返回的原始连接错误。不要 fallback 到官方/通用 Figma MCP 直写。
 - Figma 当前页面不一致：插件执行前必须通过节点切换到所属 Page。
 - 忘记 includeHidden：隐藏 ImportBounds、占位、遮罩等节点仍属于原始结构，遗漏会导致节点集合校验不完整。
 - 复用旧分析结果：二级整理必须重新 analyze 当前子节点，否则会按过期层级生成错误计划。
@@ -720,7 +747,7 @@ node "<relay-root>\scripts\hierarchy_repeat_cluster_validator.js" --fixture 7day
 - 为了修 sibling 顺序重新导入 PSD：会产生新 root、浪费时间并可能引入新差异；应使用 `FIGMA_HIERARCHY_REORDER_CHILDREN` 全量重排当前 root 直接子节点。
 - 重排只给局部节点：会导致节点集合校验不完整；重排计划必须包含当前父节点的全部直接子节点。
 - 重复执行 ComponentSet：目标直接子节点已经是 `INSTANCE` 时再次执行会创建重复组件库和备份。必须先重新 analyze 当前目标，确认不是已组件化状态。
-- 确认后漏跑 ComponentSet：用户在 `PlanReview` 阶段确认后，`[TabBar]`、`[Content]` 或其它 indexed sibling FRAME 已经成组但仍是 `FRAME` 时，不能直接宣称整理完成或再次询问是否打组变体；必须进入默认 `AutoComponentSet`，或报告没有可安全组件化的原因。
+- 越过满意确认创建 ComponentSet：`PlanReview` 的确认只授权层级整理。即使 `[TabBar]`、`[Content]` 或其它 indexed sibling FRAME 已经成组，也必须先完成层级验证并进入 `SatisfactionReview`；只有用户明确满意后才允许进入 `AutoComponentSet`。
 - 自动组件化写死界面：允许保留 `[ScrollView]` / `[Viewport]` / `[Content]`、`[ListRoot]`、`[TabBar]`、`[ProgressSection]` 等通用容器名，但 ComponentSet 检测必须靠同父级重复结构和 indexed sibling 命名，不得写死 `7日任务`、固定数量、坐标范围或 PSD 文件名。
 - ComponentSet 未备份原节点：默认必须设置 `createBackup=true`，除非用户明确要求不保留原始成员。
 - ComponentSet 计划变体缺漏：`variants` 必须覆盖目标中所有要替换的重复成员，执行后核对 `variantCount`、`replacedInstanceCount` 和 `contentChildCountPreserved`。

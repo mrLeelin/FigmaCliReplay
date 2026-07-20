@@ -48,6 +48,19 @@ class ApplyCleanupPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "component"):
             validate_transaction_plan({**valid_plan(), "componentCandidates": []})
 
+    def test_validation_accepts_v3_compiled_transaction(self) -> None:
+        plan = {
+            **valid_plan(),
+            "schemaVersion": 3,
+            "operations": [
+                {"id": "op-001", "type": "CREATE_GROUP", "parentNodeId": "R", "name": "[Screen]", "childNodeIds": ["A", "B"]},
+                {"id": "op-002", "type": "CREATE_GROUP", "parentOperationId": "op-001", "name": "[Header]", "childNodeIds": ["A", "B"]},
+            ],
+        }
+        job = build_transaction_job(plan, "figma-session")
+        self.assertEqual(job["schemaVersion"], 3)
+        self.assertEqual(job["plan"]["operations"][1]["parentOperationId"], "op-001")
+
     def test_normalizes_success_and_rollback_reports(self) -> None:
         succeeded = normalize_transaction_report({"result": {"status": "completed", "state": "succeeded", "checks": {"ok": True}}})
         self.assertEqual(succeeded["state"], "succeeded")

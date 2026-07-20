@@ -42,36 +42,36 @@ test("one AI selector keeps the generic runner compatible behind the scenes", ()
   assert.match(ui, /function runnerIdForCleanupProvider\(providerId\)/);
   assert.match(ui, /providerId === "claude-code" \? "claude" : "codex"/);
   assert.match(ui, /function syncAiRunnerToCleanupProvider\(\)/);
-  assert.match(ui, /aiRunnerSelect\.value = runnerIdForCleanupProvider\(cleanupProviderSelect\.value\)/);
+  assert.match(ui, /targetRunner = runnerIdForCleanupProvider\(providerId\)/);
+  assert.match(ui, /aiRunnerSelect\.value = targetRunner/);
   assert.match(ui, /syncAiRunnerToCleanupProvider\(\)/);
 });
 
 test("provider discovery retries after the Relay WebSocket reconnects", () => {
-  const onOpenStart = ui.indexOf("relaySocket.onopen = function");
-  const onOpenEnd = ui.indexOf("relaySocket.onmessage = function", onOpenStart);
+  const onOpenStart = ui.indexOf("socket.onopen = function");
+  const onOpenEnd = ui.indexOf("socket.onmessage = function", onOpenStart);
   assert.ok(onOpenStart >= 0 && onOpenEnd > onOpenStart);
   assert.match(ui.slice(onOpenStart, onOpenEnd), /refreshCleanupProviders\(\)/);
 });
 
-test("overlapping provider syncs serialize and apply the latest selection once", async () => {
+test("cleanup provider sync pins the per-request runner without a global config write", async () => {
   const calls = [];
-  const resolvers = [];
   const context = {
     aiProviderSyncing: false,
     aiProviderSyncPromise: null,
     aiProviderSyncTargetRunner: "",
+    relaySessionId: "test-session",
     aiRunnerSelect: { value: "" },
+    aiRunnerStatusEl: { textContent: "" },
     cleanupProviderSelect: { value: "codex" },
     cleanupProviderStatusEl: { textContent: "" },
+    uiLogger: { startOperation() { return { succeed(message, data) { calls.push({ message, data }); } }; } },
     refreshAiPromptControls() {},
     renderCleanupProviderStatus() {},
     runnerIdForCleanupProvider(providerId) {
       return providerId === "claude-code" ? "claude" : "codex";
     },
-    selectAiRunner() {
-      calls.push(context.aiRunnerSelect.value);
-      return new Promise((resolve) => resolvers.push(resolve));
-    },
+    selectAiRunner() { throw new Error("global AI config must not be written during provider selection"); },
   };
   vm.createContext(context);
   vm.runInContext(
@@ -79,20 +79,11 @@ test("overlapping provider syncs serialize and apply the latest selection once",
     context,
   );
 
-  const first = context.syncProvider();
-  const duplicate = context.syncProvider();
+  assert.equal(await context.syncProvider(), true);
+  assert.equal(context.aiRunnerSelect.value, "codex");
   context.cleanupProviderSelect.value = "claude-code";
-  const latest = context.syncProvider();
-
-  assert.deepEqual(calls, ["codex"], "duplicate triggers must share the active config request");
-  resolvers.shift()(true);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ["codex", "claude"], "only the latest changed selection should run next");
-
-  resolvers.shift()(true);
-  assert.equal(await first, true);
-  assert.equal(await duplicate, true);
-  assert.equal(await latest, true);
-  assert.deepEqual(calls, ["codex", "claude"]);
+  assert.equal(await context.syncProvider(), true);
+  assert.equal(context.aiRunnerSelect.value, "claude");
+  assert.equal(calls.length, 2);
   assert.equal(context.aiProviderSyncing, false);
 });

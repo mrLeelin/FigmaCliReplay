@@ -1,5 +1,9 @@
 请将当前 Figma 节点快速直接导入 Unity。
 
+使用项目导入技能：$figma-to-prefab。
+
+不要使用 `Skill()` 或 `ToolSearch` 查找该技能。直接读取项目中的 `ai/skills/figma-to-prefab/SKILL.md`，并使用标准入口 `ai/skills/figma-to-prefab/scripts/figma_to_prefab_mcp_client.py` 与 `ai/skills/figma-to-prefab/scripts/run_full_import.py`。此技能为项目自定义技能，不在 `.claude/skills/` 中。
+
 这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。
 
 figma 路径:
@@ -21,7 +25,7 @@ figma 路径:
 
 禁止项：
 - 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。
-- 不要调用 `Skill`、`ToolSearch`、`Glob`、`Grep`、`Read`，不要手工拆开 MCP、图片处理、uLoop 或验证命令。
+- 不要调用 `Skill`、`ToolSearch`、`Glob` 或 `Grep`。唯一允许的直接读取是上面指定的 `ai/skills/figma-to-prefab/SKILL.md`；不要手工拆开 MCP、图片处理、uLoop 或验证命令。
 - 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。
 - 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。
 

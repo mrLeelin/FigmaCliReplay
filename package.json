@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "npm run build:ui && tsc -p tsconfig.json",
-    "build:ui": "node scripts/build_ui.mjs",
+    "build:ui": "python scripts/build.py",
     "dev": "tsx src/index.ts",
     "doctor": "powershell -ExecutionPolicy Bypass -File scripts/doctor_mcp.ps1",
     "smoke": "powershell -ExecutionPolicy Bypass -File scripts/smoke_mcp.ps1",

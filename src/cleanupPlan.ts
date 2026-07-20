@@ -76,6 +76,38 @@ export interface CleanupPlanV2 {
   warnings: string[];
 }
 
+export type CleanupOperationV3 =
+  | {
+      id: string;
+      type: "CREATE_GROUP";
+      name: string;
+      childNodeIds: string[];
+      parentNodeId?: string;
+      parentOperationId?: string;
+    }
+  | {
+      id: string;
+      type: "REORDER_CHILDREN";
+      childNodeIds: string[];
+      parentNodeId?: string;
+      parentOperationId?: string;
+    };
+
+/**
+ * V3 lets an exact transaction nest groups by referring to a parent group
+ * created by an earlier operation. The planner, not the AI provider, owns all
+ * source node identifiers and their order.
+ */
+export interface CleanupPlanV3 {
+  schemaVersion: 3;
+  rootNodeId: string;
+  snapshotHash: string;
+  operations: CleanupOperationV3[];
+  preconditions: CleanupPreconditionV2[];
+  verification: { preserveAbsoluteBoundsTolerance: number };
+  warnings: string[];
+}
+
 const ForbiddenPlanFields = new Set(["applied", "commands", "toolCalls", "mutationResult"]);
 
 export function extractCleanupPlan(text: string): unknown {
@@ -292,10 +324,125 @@ export function validateCleanupPlanV2(planValue: unknown, snapshotValue: unknown
   return { schemaVersion: 2, rootNodeId, snapshotHash, operations, preconditions, verification, warnings };
 }
 
+export function validateCleanupPlanV3(planValue: unknown, snapshotValue: unknown): CleanupPlanV3 {
+  rejectForbiddenCleanupV2Fields(planValue);
+  const snapshot = normalizeSnapshot(snapshotValue);
+  if (!isRecord(planValue)) throw new Error("清理计划必须是一个对象");
+  if (planValue.schemaVersion !== 3) throw new Error("清理计划 schemaVersion 必须为 3");
+  const rootNodeId = requiredString(planValue.rootNodeId, "清理计划 rootNodeId");
+  if (rootNodeId !== snapshot.rootNodeId) throw new Error("清理计划 rootNodeId 必须与快照根节点匹配");
+  const snapshotHash = requiredString(planValue.snapshotHash, "清理计划 snapshotHash");
+  if (snapshotHash !== computeCleanupSnapshotHash(snapshot)) throw new Error("清理计划快照哈希与当前快照不匹配");
+  if (!Array.isArray(planValue.operations)) throw new Error("清理计划操作必须是数组");
+
+  const nodeById = new Map(snapshot.nodes.map((node) => [node.id, node]));
+  const sourceIdsByParent = new Map<string, string[]>();
+  for (const node of snapshot.nodes) {
+    const key = `node:${node.parentId}`;
+    const values = sourceIdsByParent.get(key) || [];
+    values.push(node.id);
+    sourceIdsByParent.set(key, values);
+  }
+  for (const [key, sourceIds] of sourceIdsByParent) {
+    sourceIds.sort((left, right) => nodeById.get(left)!.siblingIndex - nodeById.get(right)!.siblingIndex);
+    sourceIdsByParent.set(key, sourceIds);
+  }
+
+  const operationIds = new Set<string>();
+  const groupedIdsByParent = new Map<string, Set<string>>();
+  const flattenedIdsByParent = new Map<string, string[]>();
+  const sourceIdsByOperation = new Map<string, string[]>();
+  const rootGroupIds: string[] = [];
+  const operations = planValue.operations.map((operation, index) => {
+    if (!isRecord(operation)) throw new Error(`清理操作 ${index} 必须是一个对象`);
+    const id = requiredString(operation.id, `清理操作 ${index} id`);
+    if (operationIds.has(id)) throw new Error(`重复的清理操作 id ${id}`);
+    operationIds.add(id);
+    const type = requiredString(operation.type, `清理操作 ${index} type`);
+    if (type !== "CREATE_GROUP" && type !== "REORDER_CHILDREN") throw new Error(`不支持的清理操作 ${type}`);
+
+    const parentNodeId = typeof operation.parentNodeId === "string" && operation.parentNodeId.trim()
+      ? requiredExistingNodeId(operation.parentNodeId, nodeById, `清理操作 ${id} parentNodeId`)
+      : undefined;
+    const parentOperationId = typeof operation.parentOperationId === "string" && operation.parentOperationId.trim()
+      ? requiredString(operation.parentOperationId, `清理操作 ${id} parentOperationId`)
+      : undefined;
+    if ((parentNodeId ? 1 : 0) + (parentOperationId ? 1 : 0) !== 1) {
+      throw new Error(`清理操作 ${id} 必须且只能指定 parentNodeId 或 parentOperationId`);
+    }
+    const parentKey = parentNodeId ? `node:${parentNodeId}` : `operation:${parentOperationId}`;
+    const sourceIds = sourceIdsByParent.get(parentKey);
+    if (!sourceIds) throw new Error(`清理操作 ${id} 引用了尚未创建的父分组 ${parentOperationId}`);
+    const childNodeIds = stringArray(operation.childNodeIds, `清理操作 ${id} childNodeIds`);
+
+    if (type === "CREATE_GROUP" && childNodeIds.length < 2) {
+      throw new Error(`清理操作 ${id} 不允许单子节点分组`);
+    }
+    const usedIds = groupedIdsByParent.get(parentKey) || new Set<string>();
+    let previousSourceIndex = -1;
+    for (const childNodeId of childNodeIds) {
+      const sourceIndex = sourceIds.indexOf(childNodeId);
+      if (sourceIndex < 0) throw new Error(`节点 ${childNodeId} 不是 ${parentNodeId || parentOperationId} 的直接子节点`);
+      if (usedIds.has(childNodeId) && type === "CREATE_GROUP") throw new Error(`节点 ${childNodeId} 出现在多个清理分组中`);
+      if (sourceIndex <= previousSourceIndex) throw new Error("清理分组 childNodeIds 必须保持兄弟节点顺序");
+      previousSourceIndex = sourceIndex;
+    }
+
+    if (type === "REORDER_CHILDREN") {
+      if (!sameStringSets(childNodeIds, sourceIds)) throw new Error(`清理操作 ${id} 必须恰好重排所有直接子节点一次`);
+      return parentNodeId
+        ? { id, type, parentNodeId, childNodeIds } as CleanupOperationV3
+        : { id, type, parentOperationId: parentOperationId!, childNodeIds } as CleanupOperationV3;
+    }
+
+    childNodeIds.forEach((childNodeId) => usedIds.add(childNodeId));
+    groupedIdsByParent.set(parentKey, usedIds);
+    const flattened = flattenedIdsByParent.get(parentKey) || [];
+    flattened.push(...childNodeIds);
+    flattenedIdsByParent.set(parentKey, flattened);
+    sourceIdsByParent.set(`operation:${id}`, childNodeIds);
+    sourceIdsByOperation.set(id, childNodeIds);
+    if (parentNodeId === rootNodeId) rootGroupIds.push(...childNodeIds);
+    const name = requiredString(operation.name, `清理操作 ${id} name`);
+    return parentNodeId
+      ? { id, type, parentNodeId, name, childNodeIds } as CleanupOperationV3
+      : { id, type, parentOperationId: parentOperationId!, name, childNodeIds } as CleanupOperationV3;
+  });
+
+  const rootChildren = sourceIdsByParent.get(`node:${rootNodeId}`) || [];
+  if (rootGroupIds.length > 0 && !sameStrings(rootGroupIds, rootChildren)) {
+    throw new Error("清理操作的分组必须完整覆盖根节点的所有直接子节点");
+  }
+  for (const [operationId, sourceIds] of sourceIdsByOperation) {
+    const nestedIds = flattenedIdsByParent.get(`operation:${operationId}`);
+    if (nestedIds && !sameStrings(nestedIds, sourceIds)) {
+      throw new Error(`清理操作 ${operationId} 的子分组必须完整覆盖该分组的所有直接子节点`);
+    }
+  }
+  if (operations.length === 0) {
+    if (rootChildren.length === 0 || !rootChildren.every((nodeId) => semanticContainerName(nodeById.get(nodeId)!.name))) {
+      throw new Error("no-op cleanup is allowed only for an already organized root");
+    }
+  }
+
+  const preconditions = normalizeCleanupPreconditions(planValue.preconditions, nodeById);
+  if (!isRecord(planValue.verification)) throw new Error("清理计划验证配置必须是一个对象");
+  const verification = {
+    preserveAbsoluteBoundsTolerance: nonNegativeNumber(
+      planValue.verification.preserveAbsoluteBoundsTolerance,
+      "清理计划验证配置 preserveAbsoluteBoundsTolerance",
+    ),
+  };
+  const warnings = stringArray(planValue.warnings, "清理计划警告", true);
+  return { schemaVersion: 3, rootNodeId, snapshotHash, operations, preconditions, verification, warnings };
+}
+
 export function toFigmaCleanupTransactionPlan(planValue: unknown, snapshotValue: unknown): object {
-  const plan = validateCleanupPlanV2(planValue, snapshotValue);
+  const plan = isRecord(planValue) && planValue.schemaVersion === 3
+    ? validateCleanupPlanV3(planValue, snapshotValue)
+    : validateCleanupPlanV2(planValue, snapshotValue);
   return {
-    schemaVersion: 2,
+    schemaVersion: plan.schemaVersion,
     operation: "figma-hierarchy-cleanup-transaction",
     target: { nodeId: plan.rootNodeId, snapshotHash: plan.snapshotHash },
     operations: plan.operations,
@@ -343,6 +490,21 @@ function normalizeComponentCandidates(value: unknown, nodeById: Map<string, Clea
     }
     const reason = typeof candidate.reason === "string" && candidate.reason.trim() ? candidate.reason.trim() : undefined;
     return reason ? { name, sourceNodeIds, reason } : { name, sourceNodeIds };
+  });
+}
+
+function normalizeCleanupPreconditions(
+  value: unknown,
+  nodeById: Map<string, CleanupSnapshotNodeV1>,
+): CleanupPreconditionV2[] {
+  if (!Array.isArray(value)) throw new Error("清理计划前置条件必须是数组");
+  return value.map((precondition, index) => {
+    if (!isRecord(precondition)) throw new Error(`清理前置条件 ${index} 必须是一个对象`);
+    return {
+      nodeId: requiredExistingNodeId(precondition.nodeId, nodeById, `清理前置条件 ${index} nodeId`),
+      parentNodeId: typeof precondition.parentNodeId === "string" ? precondition.parentNodeId : "",
+      siblingIndex: finiteInteger(precondition.siblingIndex, `清理前置条件 ${index} siblingIndex`),
+    };
   });
 }
 

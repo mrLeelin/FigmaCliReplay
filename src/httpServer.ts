@@ -447,7 +447,7 @@ async function handlePost(
 ): Promise<void> {
   const pathname = requestUrl.pathname;
   if (pathname === "/cleanup/runs") {
-    if (!isRecord(payload) || (!isFigmaPluginRequest(request) && !relay.hasLivePluginSession(payload.sessionId))) {
+    if (!isRecord(payload) || !relay.hasLivePluginSession(payload.sessionId)) {
       jsonResponse(response, 403, { ok: false, error: "Cleanup actions require a live local Figma plugin session." });
       return;
     }
@@ -637,7 +637,7 @@ async function handlePost(
       }
       return;
     }
-    if (!isRecord(payload) || (!isFigmaPluginRequest(request) && !relay.hasLivePluginSession(payload.sessionId))) {
+    if (!isRecord(payload) || !relay.hasLivePluginSession(payload.sessionId)) {
       jsonResponse(response, 403, { ok: false, error: "AI runner actions require a live local Figma plugin session." });
       return;
     }

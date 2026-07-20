@@ -76,7 +76,7 @@ test("rollback restores original parents, indices, and names", async () => {
   assert.equal(group.removed, true);
 });
 
-test("transaction source implements every V2 operation and recovery states", () => {
+test("transaction source implements V2/V3 operations, nested-parent resolution, and recovery states", () => {
   const source = fs.readFileSync(new URL("../code/08_cleanup_transaction.mjs", import.meta.url), "utf8");
   for (const type of ["CREATE_GROUP", "RENAME_NODE", "MOVE_NODE", "REORDER_CHILDREN", "SET_AUTO_LAYOUT"]) {
     assert.match(source, new RegExp(`case ["']${type}["']`));
@@ -84,4 +84,7 @@ test("transaction source implements every V2 operation and recovery states", () 
   assert.match(source, /__cleanup_backup__/);
   assert.match(source, /state:\s*"rolled_back"/);
   assert.match(source, /state:\s*"recovery_required"/);
+  assert.match(source, /parentOperationId/);
+  assert.match(source, /cleanupResolveOperationParent/);
+  assert.match(source, /createdNodeIds\.set/);
 });

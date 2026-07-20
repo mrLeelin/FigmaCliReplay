@@ -44,7 +44,8 @@ export function corsHeaders(headers: Record<string, string> = {}): Record<string
     ...headers,
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Figma-Mcp-Relay-Token, X-Figma-Mcp-Relay-Internal, X-Operation-Id, X-AI-Run-Capability, Mcp-Session-Id, MCP-Protocol-Version",
-    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS"
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+    "Access-Control-Max-Age": "600"
   };
 }
 

@@ -6,7 +6,7 @@ import { logInfo, logWarn } from "./utils/logger.js";
 import type { RelayJob, PluginGatewayStatus, PluginSessionStatus, PluginSessionTarget } from "./types.js";
 import { isAllowedLocalRequest, isRecord } from "./utils.js";
 
-const HEARTBEAT_TIMEOUT_MS = 30_000;
+const HEARTBEAT_TIMEOUT_MS = 120_000;
 const DEFAULT_ACK_TIMEOUT_MS = 3_000;
 
 interface PluginSession {
@@ -22,6 +22,17 @@ interface PluginSession {
   lastHeartbeatAt?: number;
 }
 
+export interface RelayClientRequest {
+  requestId: string;
+  action: string;
+  payload: Record<string, unknown>;
+  capabilityToken: string;
+  sessionId: string;
+  fileKey?: string;
+}
+
+type RelayClientRequestHandler = (request: RelayClientRequest) => Promise<unknown> | unknown;
+
 export class WebSocketGateway {
   private readonly server: WebSocketServer;
   private readonly sessions = new Map<WebSocket, PluginSession>();
@@ -30,6 +41,7 @@ export class WebSocketGateway {
   private onJobReceived?: (requestId: string, operationId?: string) => void;
   private onJobUndelivered?: (requestId: string, reason: string) => void;
   private onSessionDisconnected?: (sessionId: string, reason: string) => void;
+  private onRelayClientRequest?: RelayClientRequestHandler;
   private readonly ackTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(private readonly ingestLogEvents?: (events: unknown[]) => unknown) {
@@ -77,6 +89,10 @@ export class WebSocketGateway {
 
   onDisconnected(callback: (sessionId: string, reason: string) => void): void {
     this.onSessionDisconnected = callback;
+  }
+
+  onClientRequest(callback: RelayClientRequestHandler): void {
+    this.onRelayClientRequest = callback;
   }
 
   sendJob(job: RelayJob, ackTimeoutMs = DEFAULT_ACK_TIMEOUT_MS): boolean {
@@ -217,6 +233,10 @@ export class WebSocketGateway {
       });
       return;
     }
+    if (type === "relay.request") {
+      void this.handleRelayClientRequest(socket, message);
+      return;
+    }
     if (type === "log.events") {
       const session = this.sessions.get(socket);
       if (!session?.authenticated || !Array.isArray(message.events)) {
@@ -283,6 +303,89 @@ export class WebSocketGateway {
     }
   }
 
+  private async handleRelayClientRequest(socket: WebSocket, message: Record<string, unknown>): Promise<void> {
+    const requestId = typeof message.requestId === "string" ? message.requestId.trim() : "";
+    const action = typeof message.action === "string" ? message.action.trim() : "";
+    const payload = isRecord(message.payload) ? message.payload : {};
+    const capabilityToken = typeof message.capabilityToken === "string" ? message.capabilityToken : "";
+    const session = this.sessions.get(socket);
+    if (!session?.authenticated || !session.sessionId || !requestId || !action) {
+      logWarn("Figma plugin relay request rejected", {
+        requestId: requestId || undefined,
+        action: action || undefined,
+        authenticated: Boolean(session?.authenticated),
+        hasSessionId: Boolean(session?.sessionId),
+        reason: "missing authenticated session, requestId, or action"
+      });
+      this.sendRelayClientResponse(socket, requestId, false, undefined, "Invalid Relay request.");
+      return;
+    }
+    if (!this.onRelayClientRequest) {
+      logWarn("Figma plugin relay request rejected", {
+        requestId,
+        action,
+        sessionId: session.sessionId,
+        fileKey: session.fileKey,
+        reason: "request handler unavailable"
+      });
+      this.sendRelayClientResponse(socket, requestId, false, undefined, "Relay control handler is unavailable.");
+      return;
+    }
+    const request: RelayClientRequest = {
+      requestId,
+      action,
+      payload,
+      capabilityToken,
+      sessionId: session.sessionId,
+      fileKey: session.fileKey
+    };
+    logInfo("Figma plugin relay request received", {
+      requestId,
+      action,
+      sessionId: session.sessionId,
+      fileKey: session.fileKey
+    });
+    try {
+      const result = await this.onRelayClientRequest(request);
+      this.sendRelayClientResponse(socket, requestId, true, result);
+      logInfo("Figma plugin relay request completed", {
+        requestId,
+        action,
+        sessionId: session.sessionId,
+        fileKey: session.fileKey
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.sendRelayClientResponse(socket, requestId, false, undefined, errorMessage);
+      logWarn("Figma plugin relay request failed", {
+        requestId,
+        action,
+        sessionId: session.sessionId,
+        fileKey: session.fileKey,
+        error: errorMessage
+      });
+    }
+  }
+
+  private sendRelayClientResponse(socket: WebSocket, requestId: string, ok: boolean, result?: unknown, error?: string): void {
+    if (socket.readyState !== socket.OPEN) return;
+    try {
+      socket.send(JSON.stringify({ type: "relay.response", requestId, ok, ...(ok ? { result } : { error }) }), (sendError) => {
+        if (sendError) {
+          logWarn("Figma plugin relay response send failed", {
+            requestId,
+            error: sendError.message || "websocket send failed"
+          });
+        }
+      });
+    } catch (sendError) {
+      logWarn("Figma plugin relay response send failed", {
+        requestId,
+        error: sendError instanceof Error ? sendError.message : String(sendError)
+      });
+    }
+  }
+
   private pruneStaleSession(): void {
     for (const session of this.sessions.values()) {
       if (!session.lastHeartbeatAt) {
@@ -297,7 +400,11 @@ export class WebSocketGateway {
         logWarn("Figma plugin WebSocket heartbeat timeout", {
           sessionId: session.sessionId,
           fileKey: session.fileKey,
-          pending: session.pending.size
+          pending: session.pending.size,
+          lastHeartbeatAt: new Date(session.lastHeartbeatAt).toISOString(),
+          heartbeatAgeMs: Date.now() - session.lastHeartbeatAt,
+          heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
+          recovery: "close-stale-socket-and-let-plugin-reconnect"
         });
         if (this.activeSocket === session.socket) {
           this.activeSocket = this.liveSessions().at(-1)?.socket;

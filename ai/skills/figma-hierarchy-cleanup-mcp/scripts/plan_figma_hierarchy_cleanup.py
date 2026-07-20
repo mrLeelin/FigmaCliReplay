@@ -1178,7 +1178,6 @@ def reward_marker_ownership_issues(groups: List[Dict[str, Any]], children: List[
 def semantic_depth_issues(groups: List[Dict[str, Any]], children: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Find groups that still look like unexpanded list/tab structures."""
     issues: List[Dict[str, Any]] = []
-    plan_has_list_rows = has_repeated_group_rows(groups, children)
     issues.extend(reward_marker_ownership_issues(groups, children))
     for group in groups:
         nodes = group_nodes_by_ids(children, group)
@@ -1210,24 +1209,6 @@ def semantic_depth_issues(groups: List[Dict[str, Any]], children: List[Dict[str,
                 **issue,
                 "code": "needsListItemSplit",
                 "requiredStructure": "[ListRoot] > [ScrollView] > [Viewport] > [Content] > [Item_*] or [ListRoot] > [List] > [Item_*]",
-            })
-        elif plan_has_list_rows or has_vertical_repetition(nodes):
-            issues.append({
-                **issue,
-                "code": "needsListItemSplit",
-                "requiredStructure": "[ListRoot] > [ScrollView] > [Viewport] > [Content] > [Item_*] or [ListRoot] > [List] > [Item_*]",
-            })
-        elif has_horizontal_repetition(nodes):
-            issues.append({
-                **issue,
-                "code": "needsTabItemSplit",
-                "requiredStructure": "[TabBar] > [TabItem_*]",
-            })
-        elif count >= 12:
-            issues.append({
-                **issue,
-                "code": "semanticGroupStillCoarse",
-                "requiredStructure": "Split into reusable child units or document why it is static.",
             })
     return issues
 

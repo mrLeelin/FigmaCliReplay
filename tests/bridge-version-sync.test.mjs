@@ -3,25 +3,46 @@ import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 
+import { SERVER_VERSION as compiledRelayVersion } from "../dist/config.js";
+
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const ui = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
 const bridge = fs.readFileSync(new URL("../unity/Assets/Editor/FigmaBridge/FigmaBridgeServer.cs", import.meta.url), "utf8");
+const relayConfig = fs.readFileSync(new URL("../src/config.ts", import.meta.url), "utf8");
 const buildScript = fs.readFileSync(new URL("../scripts/build.py", import.meta.url), "utf8");
+const packageReleaseScript = fs.readFileSync(new URL("../scripts/package_release.ps1", import.meta.url), "utf8");
 
-test("package version is synchronized to the UI and Unity Bridge", () => {
+test("package version is synchronized to the UI, Unity Bridge, and MCP relay", () => {
   const uiMatch = ui.match(/<!-- BEGIN_RELEASE_VERSION -->v([^<]+)<!-- END_RELEASE_VERSION -->/);
   const bridgeMatch = bridge.match(/\/\/ BEGIN_RELEASE_VERSION\s+private const string Version = "([^"]+)";\s+\/\/ END_RELEASE_VERSION/);
 
   assert.ok(uiMatch, "UI release marker should exist exactly once");
   assert.ok(bridgeMatch, "Bridge release marker should exist exactly once");
+  const relayMatch = relayConfig.match(/\/\/ BEGIN_RELEASE_VERSION\s+export const SERVER_VERSION = "([^\"]+)";\s+\/\/ END_RELEASE_VERSION/);
+  assert.ok(relayMatch, "MCP relay release marker should exist exactly once");
   assert.equal(ui.match(/BEGIN_RELEASE_VERSION/g)?.length, 1);
   assert.equal(bridge.match(/BEGIN_RELEASE_VERSION/g)?.length, 1);
+  assert.equal(relayConfig.match(/BEGIN_RELEASE_VERSION/g)?.length, 1);
   assert.equal(uiMatch[1], packageJson.version);
   assert.equal(bridgeMatch[1], packageJson.version);
+  assert.equal(relayMatch[1], packageJson.version);
+  assert.equal(compiledRelayVersion, packageJson.version, "compiled MCP relay should expose the package release version");
   assert.match(buildScript, /BRIDGE_SERVER\s*=/);
   assert.match(buildScript, /BRIDGE_RELEASE_VERSION_MARKER\s*=/);
+  assert.match(buildScript, /RELAY_CONFIG\s*=/);
+  assert.match(buildScript, /RELAY_RELEASE_VERSION_MARKER\s*=/);
   assert.match(buildScript, /sync_marked_release_version\(UI_HTML/);
   assert.match(buildScript, /sync_marked_release_version\(BRIDGE_SERVER/);
+  assert.match(buildScript, /sync_marked_release_version\(RELAY_CONFIG/);
+});
+
+test("release package synchronizes source versions before compiling the relay", () => {
+  const syncIndex = packageReleaseScript.indexOf('scripts/build.py", "--sync-release-version');
+  const compileIndex = packageReleaseScript.indexOf('Invoke-Checked -FilePath "npm" -Arguments @("run", "build")');
+
+  assert.ok(syncIndex >= 0, "release packaging should run the release-version sync command");
+  assert.ok(compileIndex >= 0, "release packaging should compile the relay");
+  assert.ok(syncIndex < compileIndex, "the compiled MCP server must receive the synchronized release version");
 });
 
 test("Bridge version comparison requires an exact reported release version", () => {

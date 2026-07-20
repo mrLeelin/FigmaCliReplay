@@ -1,4 +1,4 @@
-import { computeCleanupSnapshotHash, type CleanupPlanV2, validateCleanupPlanV2 } from "../cleanupPlan.js";
+import { computeCleanupSnapshotHash, type CleanupPlanV3, validateCleanupPlanV3 } from "../cleanupPlan.js";
 import type { PlanningProviderId } from "../ai/planningProvider.js";
 import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type { OperationScope } from "../logging/operationScope.js";
@@ -91,13 +91,13 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
       .then((result) => {
         if (run.state === "cancelled") return;
         transition(run, ["planning", "validating"], "validating");
-        run.plan = validateCleanupPlanV2(result.plan, run.snapshot);
+        run.plan = validateCleanupPlanV3(result.plan, run.snapshot);
         run.planSummary = result.summary;
         run.planReady = true;
-        operation.step("planning", "Cleanup 计划生成并校验完成", {
+        operation.step("planning", "Cleanup 精确事务计划生成并校验完成", {
           operationCount: result.summary.operationCount
         });
-        store.addOutput(run, "system", `Cleanup plan validated: ${result.summary.operationCount} operations.`);
+        store.addOutput(run, "system", `Exact cleanup transaction plan validated: ${result.summary.operationCount} operations.`);
         if (result.summary.operationCount === 0 && !run.autoApproved) {
           store.addOutput(run, "system", "Cleanup found no changes to apply; the selected root is already organized.");
           store.finish(run, "succeeded");
@@ -106,7 +106,7 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
           return;
         }
         if (result.summary.operationCount === 0) {
-          store.addOutput(run, "system", "The preliminary AI plan found no root change; continuing the authorized skill pipeline to re-analyze and run AutoComponentSet.");
+          store.addOutput(run, "system", "The exact cleanup transaction contains no hierarchy writes; it will be verified before final satisfaction.");
         }
         transition(run, ["validating"], "review");
         if (run.autoApproved) {
@@ -118,21 +118,21 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
         if (run.state === "cancelled") return;
         if (run.autoApproved) {
           const message = error instanceof Error ? error.message : String(error);
-          run.plan = directSkillPipelineAuditPlan(run);
           run.planSummary = {
             operationCount: 0,
             operations: [],
             warningCount: 1,
-            warnings: ["The preliminary AI plan was rejected; the live hierarchy skill pipeline will re-analyze the selection."],
+            warnings: ["The preliminary AI plan was rejected; no unverified cleanup transaction was applied."],
           };
           run.planReady = false;
-          transition(run, ["planning", "validating"], "review");
-          operation.step("planning-fallback", "AI 预检查计划未通过；改由完整技能流水线重新分析实时结构", {
+          operation.step("planning-rejected", "AI 精确事务计划未通过校验，已阻止任何未验证写入", {
             error: message,
           }, "warn");
           store.addOutput(run, "stderr", `Preliminary AI plan was rejected: ${message}`);
-          store.addOutput(run, "system", "Direct cleanup continues with the live hierarchy skill pipeline; no preliminary plan will be applied.");
-          startExecution(run, "direct cleanup authorization");
+          store.addOutput(run, "system", "No unverified cleanup transaction was applied. Fix the reported plan issue and start a new cleanup run.");
+          store.finish(run, "failed");
+          operation.fail(error, "Cleanup 精确事务计划生成失败");
+          operations.delete(run.runId);
           return;
         }
         run.planReady = false;
@@ -170,10 +170,10 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
       authorization,
     });
     transition(run, ["review"], "applying");
-    operations.get(run.runId)?.step("execution", "开始执行完整层级整理技能流水线", {
-      stages: ["HierarchyCleanup", "FinalSatisfaction", "ComponentSetAfterConfirmation"],
+    operations.get(run.runId)?.step("execution", "开始执行经校验的 Cleanup 精确层级事务", {
+      stages: ["ExactHierarchyTransaction", "FinalSatisfaction", "ComponentSetAfterConfirmation"],
     });
-    store.addOutput(run, "system", `Cleanup skill pipeline started from ${authorization}.`);
+    store.addOutput(run, "system", `Exact cleanup transaction started from ${authorization}.`);
     const task = Promise.resolve().then(() => dependencies.executor.execute({
       runId: run.runId,
       sessionId: run.sessionId,
@@ -352,18 +352,6 @@ function assertCleanupSnapshotHasNoRecoveryNodes(snapshot: StartCleanupRequest["
   if (recoveryNode) {
     throw new CleanupError("CLEANUP_RECOVERY_REQUIRED", "resolve or delete the hidden cleanup recovery backup before starting a new cleanup");
   }
-}
-
-function directSkillPipelineAuditPlan(run: CleanupRunRecord): CleanupPlanV2 {
-  return {
-    schemaVersion: 2,
-    rootNodeId: run.rootNodeId,
-    snapshotHash: run.snapshotHash,
-    operations: [],
-    preconditions: [],
-    verification: { preserveAbsoluteBoundsTolerance: 0.01 },
-    warnings: ["Direct cleanup delegates writes to the live hierarchy skill pipeline."],
-  };
 }
 
 function transition(run: CleanupRunRecord, expected: CleanupRunRecord["state"][], next: CleanupRunRecord["state"]): void {

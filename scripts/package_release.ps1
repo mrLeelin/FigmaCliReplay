@@ -168,6 +168,9 @@ try {
         throw "npm returned an invalid release version: $releaseVersion"
     }
 
+    Write-Step "Synchronizing release version"
+    Invoke-Checked -FilePath "python" -Arguments @("scripts/build.py", "--sync-release-version")
+
     Write-Step "Building Relay"
     Invoke-Checked -FilePath "npm" -Arguments @("run", "build")
     Invoke-Checked -FilePath "python" -Arguments @("scripts/build.py")

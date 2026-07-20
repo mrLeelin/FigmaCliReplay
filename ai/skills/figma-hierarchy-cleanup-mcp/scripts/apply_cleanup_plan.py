@@ -1,4 +1,4 @@
-"""Apply one already-approved CleanupPlanV2 without discovering extra writes."""
+"""Apply one already-approved CleanupPlanV2/V3 without discovering extra writes."""
 
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ def load_json(path: Path) -> Dict[str, Any]:
 
 
 def validate_transaction_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    if plan.get("schemaVersion") != 2:
-        raise ValueError("cleanup transaction plan schemaVersion must be 2")
+    if plan.get("schemaVersion") not in {2, 3}:
+        raise ValueError("cleanup transaction plan schemaVersion must be 2 or 3")
     if plan.get("operation") != "figma-hierarchy-cleanup-transaction":
         raise ValueError("cleanup transaction plan operation is invalid")
     target = plan.get("target")
@@ -71,7 +71,7 @@ def build_transaction_job(plan: Dict[str, Any], session_id: str, job_name: str =
     target = dict(plan["target"])
     target["sessionId"] = session_id
     return {
-        "schemaVersion": 2,
+        "schemaVersion": plan["schemaVersion"],
         "type": "FIGMA_HIERARCHY_CLEANUP_TRANSACTION",
         "name": job_name,
         "sessionId": session_id,
@@ -130,12 +130,13 @@ def main() -> int:
         plan = validate_transaction_plan(load_json(args.plan.resolve()))
         relay_client.configure_target(session_id=args.session_id)
         job = build_transaction_job(plan, args.session_id, args.job_name)
-        emit_progress("applying", "Submitting the approved cleanup transaction.", completed=0, total=len(plan["operations"]))
+        emit_progress("applying", "正在提交已验证的整理事务。", completed=0, total=len(plan["operations"]))
         result_payload = relay_client.submit_job(args.relay_url, job, args.timeout, args.interval)
         report = normalize_transaction_report(result_payload)
         report["elapsedSeconds"] = round(time.perf_counter() - started, 3)
         write_report(args.output.resolve(), report)
-        emit_progress(report["state"], f"Cleanup transaction ended as {report['state']}.")
+        state_text = {"succeeded": "成功", "rolled_back": "已回滚", "recovery_required": "需要恢复"}.get(report["state"], str(report["state"]))
+        emit_progress(report["state"], f"整理事务执行结束：{state_text}。")
         return 0 if report["state"] in {"succeeded", "rolled_back"} else 1
     except Exception as error:
         report = {

@@ -5,6 +5,7 @@
 - 将 prompts/ 目录下的 AI 提示词 Markdown 同步内联到 ui.html。
 - 注入递增构建版本号，确保 Figma 开发者模式每次加载最新 code.js。
 """
+import argparse
 import json
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ CODE_DIR = BASE / "code"
 OUTPUT = BASE / "code.js"
 UI_HTML = BASE / "ui.html"
 BRIDGE_SERVER = BASE / "unity" / "Assets" / "Editor" / "FigmaBridge" / "FigmaBridgeServer.cs"
+RELAY_CONFIG = BASE / "src" / "config.ts"
 PROMPTS_DIR = BASE / "prompts"
 PACKAGE_JSON = BASE / "package.json"
 
@@ -24,6 +26,26 @@ RELEASE_VERSION_MARKER = re.compile(
 BRIDGE_RELEASE_VERSION_MARKER = re.compile(
     r'(// BEGIN_RELEASE_VERSION\s+private const string Version = ")[^"]+(";\s+// END_RELEASE_VERSION)',
 )
+RELAY_RELEASE_VERSION_MARKER = re.compile(
+    r'(// BEGIN_RELEASE_VERSION\s+export const SERVER_VERSION = ")[^"]+(";\s+// END_RELEASE_VERSION)',
+)
+
+
+class ReleaseVersionLogger:
+    """Emit structured lifecycle logs for the release-version synchronization."""
+
+    def __init__(self, operation_id):
+        self.operation_id = operation_id
+
+    def write(self, stage, result, **fields):
+        payload = {
+            "operationId": self.operation_id,
+            "operation": "release_version_sync",
+            "stage": stage,
+            "result": result,
+            **fields,
+        }
+        print("[FIGMA_RELAY_LOG] " + json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 # 构建版本计数器（持久化文件），仅用于破坏 Figma 缓存
 BUILD_VERSION_FILE = BASE / ".build_version"
@@ -126,7 +148,7 @@ def sync_marked_release_version(path, pattern, version, label):
 
 
 def sync_release_version():
-    """将 package.json 的发布版本同步到插件面板和 Unity Bridge。"""
+    """将 package.json 的发布版本同步到所有运行端。"""
     if not PACKAGE_JSON.exists():
         raise FileNotFoundError(f"package.json not found: {PACKAGE_JSON}")
 
@@ -135,9 +157,21 @@ def sync_release_version():
     if not isinstance(version, str) or not RELEASE_VERSION_PATTERN.fullmatch(version):
         raise RuntimeError(f"package.json contains an invalid semantic version: {version!r}")
 
-    sync_marked_release_version(UI_HTML, RELEASE_VERSION_MARKER, f"v{version}", "ui.html")
-    sync_marked_release_version(BRIDGE_SERVER, BRIDGE_RELEASE_VERSION_MARKER, version, "FigmaBridgeServer.cs")
-    print(f"release version {version}: synced ui.html and FigmaBridgeServer.cs from package.json")
+    logger = ReleaseVersionLogger(f"release-version-{version}")
+    targets = ["ui.html", "FigmaBridgeServer.cs", "src/config.ts"]
+    logger.write("started", "started", releaseVersion=version, targetCount=len(targets))
+    try:
+        logger.write("progress", "in_progress", target="ui.html")
+        sync_marked_release_version(UI_HTML, RELEASE_VERSION_MARKER, f"v{version}", "ui.html")
+        logger.write("progress", "in_progress", target="FigmaBridgeServer.cs")
+        sync_marked_release_version(BRIDGE_SERVER, BRIDGE_RELEASE_VERSION_MARKER, version, "FigmaBridgeServer.cs")
+        logger.write("progress", "in_progress", target="src/config.ts")
+        sync_marked_release_version(RELAY_CONFIG, RELAY_RELEASE_VERSION_MARKER, version, "src/config.ts")
+    except Exception as error:
+        logger.write("failed", "failed", errorType=type(error).__name__, errorMessage=str(error)[:500])
+        raise
+
+    logger.write("succeeded", "succeeded", releaseVersion=version, targets=targets)
 
 
 def build():
@@ -209,4 +243,14 @@ def build():
     print()
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description="Build Figma MCP Relay plugin assets.")
+    parser.add_argument(
+        "--sync-release-version",
+        action="store_true",
+        help="Synchronize the package release version without generating code.js.",
+    )
+    args = parser.parse_args()
+    if args.sync_release_version:
+        sync_release_version()
+    else:
+        build()

@@ -118,10 +118,15 @@ export async function applyFigmaHierarchyCleanupTransactionJob(job) {
 
   const journal = captureCleanupRollbackJournal(root);
   const operationResults = [];
+  const createdNodeIds = new Map();
   try {
     if (plan.createBackup !== false) journal.backupNode = cleanupCreateBackup(root, job && job.sessionId);
     for (const operation of plan.operations) {
-      operationResults.push(await cleanupApplyOperation(operation, journal));
+      const operationResult = await cleanupApplyOperation(operation, journal, createdNodeIds);
+      operationResults.push(operationResult);
+      if (operation && operation.type === "CREATE_GROUP") {
+        createdNodeIds.set(String(operation.id || ""), String(operationResult.createdNodeId || ""));
+      }
     }
     const checks = cleanupVerifyTransaction(root, journal, plan, operationResults);
     if (!checks.allPass) throw new CleanupVerificationError(checks);
@@ -346,7 +351,7 @@ class CleanupVerificationError extends Error {
 }
 
 function cleanupValidateTransactionEnvelope(plan, target) {
-  if (!plan || plan.schemaVersion !== 2 || plan.operation !== "figma-hierarchy-cleanup-transaction") {
+  if (!plan || (plan.schemaVersion !== 2 && plan.schemaVersion !== 3) || plan.operation !== "figma-hierarchy-cleanup-transaction") {
     throw new Error("invalid cleanup transaction plan");
   }
   if (!target || !String(target.nodeId || plan.target && plan.target.nodeId || "")) {
@@ -356,11 +361,11 @@ function cleanupValidateTransactionEnvelope(plan, target) {
   if (!plan.verification || typeof plan.verification !== "object") throw new Error("cleanup transaction verification is required");
 }
 
-async function cleanupApplyOperation(operation, journal) {
+async function cleanupApplyOperation(operation, journal, createdNodeIds) {
   if (!operation || !operation.type) throw new Error("cleanup transaction contains an invalid operation");
   switch (operation.type) {
     case "CREATE_GROUP": {
-      const parent = await cleanupRequireContainer(operation.parentNodeId);
+      const parent = await cleanupResolveOperationParent(operation, createdNodeIds);
       const children = [];
       for (const childId of operation.childNodeIds || []) {
         const child = await cleanupGetNodeById(String(childId));
@@ -400,7 +405,7 @@ async function cleanupApplyOperation(operation, journal) {
       return { id: String(operation.id), type: operation.type, nodeId: String(node.id) };
     }
     case "REORDER_CHILDREN": {
-      const parent = await cleanupRequireContainer(operation.parentNodeId);
+      const parent = await cleanupResolveOperationParent(operation, createdNodeIds);
       const expectedIds = (operation.childNodeIds || []).map(String);
       const actualIds = parent.children.map(function (child) { return String(child.id); });
       if (expectedIds.length !== actualIds.length || expectedIds.some(function (id) { return actualIds.indexOf(id) < 0; })) {
@@ -426,6 +431,21 @@ async function cleanupApplyOperation(operation, journal) {
     default:
       throw new Error("unsupported cleanup operation: " + String(operation.type));
   }
+}
+
+async function cleanupResolveOperationParent(operation, createdNodeIds) {
+  const parentOperationId = String(operation && operation.parentOperationId || "").trim();
+  const parentNodeId = String(operation && operation.parentNodeId || "").trim();
+  if (parentOperationId && parentNodeId) {
+    throw new Error("cleanup operation must not specify both parentNodeId and parentOperationId");
+  }
+  if (parentOperationId) {
+    const createdNodeId = createdNodeIds && createdNodeIds.get(parentOperationId);
+    if (!createdNodeId) throw new Error("cleanup operation parent group was not created: " + parentOperationId);
+    return cleanupRequireContainer(createdNodeId);
+  }
+  if (!parentNodeId) throw new Error("cleanup operation parent is missing");
+  return cleanupRequireContainer(parentNodeId);
 }
 
 function cleanupVerifyTransaction(root, journal, plan, operationResults) {

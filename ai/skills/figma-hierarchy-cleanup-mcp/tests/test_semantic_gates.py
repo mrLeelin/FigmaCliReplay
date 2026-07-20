@@ -5,7 +5,7 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from plan_figma_hierarchy_cleanup import reward_marker_ownership_issues
+from plan_figma_hierarchy_cleanup import reward_marker_ownership_issues, semantic_depth_issues
 from verify_figma_hierarchy_cleanup import verify
 
 
@@ -82,3 +82,30 @@ def test_progress_marker_under_track_is_planner_issue():
     issues = reward_marker_ownership_issues(groups, children)
 
     assert [issue["code"] for issue in issues] == ["progressMarkerNotInRewardSlot"]
+
+
+def test_geometry_groups_are_not_misclassified_as_lists_from_another_group():
+    children = []
+    groups = []
+    for group_index, group_name in enumerate(("[Header]", "[List]", "[Content]", "[Actions]")):
+        child_ids = []
+        for index in range(6):
+            node_id = f"{group_index}-{index}"
+            child_ids.append(node_id)
+            children.append({
+                **node(node_id, f"layer_{group_index}_{index}", index + group_index * 10),
+                "bounds": {"x": 0, "y": group_index * 100, "width": 240, "height": 40},
+            })
+        groups.append({"name": group_name, "childNodeIds": child_ids, "sourceIndices": list(range(group_index * 10, group_index * 10 + 6))})
+
+    assert semantic_depth_issues(groups, children) == []
+
+
+def test_explicit_list_root_still_requires_item_structure():
+    children = [
+        {**node(f"item-{index}", f"row_{index}", index), "bounds": {"x": 0, "y": index * 60, "width": 240, "height": 40}}
+        for index in range(6)
+    ]
+    groups = [{"name": "[ListRoot]", "childNodeIds": [item["id"] for item in children], "sourceIndices": list(range(6))}]
+
+    assert [issue["code"] for issue in semantic_depth_issues(groups, children)] == ["needsListItemSplit"]

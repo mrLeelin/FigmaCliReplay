@@ -1,5 +1,5 @@
 import type { PlanningProviderId } from "../ai/planningProvider.js";
-import type { CleanupPlanV2, CleanupSnapshotV1 } from "../cleanupPlan.js";
+import type { CleanupPlanV3, CleanupSnapshotV1 } from "../cleanupPlan.js";
 
 export type CleanupState =
   | "capturing"
@@ -90,7 +90,7 @@ export interface CleanupPlannerRequest {
 }
 
 export interface CleanupPlanningResult {
-  plan: CleanupPlanV2;
+  plan: CleanupPlanV3;
   summary: CleanupPlanSummaryV2;
 }
 
@@ -101,7 +101,7 @@ export interface CleanupPlannerPort {
 export interface CleanupExecutorRequest {
   runId: string;
   sessionId: string;
-  plan: CleanupPlanV2;
+  plan: CleanupPlanV3;
   snapshot: CleanupSnapshotV1;
   signal: AbortSignal;
   onProgress: (progress: CleanupProgress) => void;

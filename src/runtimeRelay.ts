@@ -5,6 +5,7 @@ import path from "node:path";
 import type { GatewayConfig } from "./config.js";
 import { LOCAL_DIR, PLUGIN_ROOT, publicUrl } from "./config.js";
 import { getLoggingRuntime, type LoggingRuntime } from "./logging/loggingRuntime.js";
+import { assertCleanupAiJobAllowed, recordCleanupAiJobResult } from "./cleanupAiWriteGuard.js";
 import type { OperationScope } from "./logging/operationScope.js";
 import type { RelayLogger } from "./logging/relayLogger.js";
 import { logInfo, logWarn } from "./utils/logger.js";
@@ -89,6 +90,7 @@ export class RuntimeRelay {
     try {
       const assetPaths = parseAssetPaths(payload.assetPaths, this.config.assetRoots);
       const target = parseTarget(payload, jobPayload);
+      assertCleanupAiJobAllowed(jobPayload.type, target.sessionId);
       const job: RelayJob = {
         requestId,
         operationId,
@@ -227,6 +229,7 @@ export class RuntimeRelay {
       deliveredBy: job.deliveredBy || "",
       status: String(result.status || result.ok || "")
     });
+    recordCleanupAiJobResult(job.job.type, job.targetSessionId, !isFailedJobResult(result), requestId);
     if (isFailedJobResult(result)) {
       operation?.fail(new Error(String(result.error || result.status || "plugin command failed")), "Relay 任务执行失败", {
         requestId

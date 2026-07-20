@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { PlanningProviderId } from "../ai/planningProvider.js";
-import type { CleanupPlanV2, CleanupSnapshotV1 } from "../cleanupPlan.js";
+import type { CleanupPlanV3, CleanupSnapshotV1 } from "../cleanupPlan.js";
 import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type { RelayLogger } from "../logging/relayLogger.js";
 import {
@@ -23,7 +23,7 @@ export interface CleanupRunRecord {
   state: CleanupState;
   planReady: boolean;
   autoApproved: boolean;
-  plan?: CleanupPlanV2;
+  plan?: CleanupPlanV3;
   planSummary?: CleanupPlanSummaryV2;
   startedAt: string;
   endedAt?: string;

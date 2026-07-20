@@ -1,9 +1,46 @@
 # FigmaMcpRelay Agent Guide
 
+## 版本与发布
+
+- `package.json` 的 `version` 是唯一发布版本源，必须符合 SemVer；不得手工让 UI、MCP Relay 或 Unity Bridge 使用不同的发布版本。
+- 发布版本与开发构建号严格分离：`.build_version` 只用于生成 `code.js` 的递增构建标识和 Figma 开发缓存诊断，不能用于兼容性判断、Bridge 校验或发布命名。
+- `python scripts/build.py --sync-release-version` 必须把 `package.json.version` 同步到以下带标记的目标：
+  - `ui.html` 的发布版本徽标；
+  - `unity/Assets/Editor/FigmaBridge/FigmaBridgeServer.cs` 的 Bridge 版本；
+  - `src/config.ts` 的 `SERVER_VERSION`，供 MCP 初始化响应使用。
+- 同步命令必须通过独立日志类记录同一 `operationId` 的 `started`、逐目标 `progress`、`succeeded` 或 `failed`；失败日志需包含错误类型和经长度限制的错误摘要。
+- 发布打包必须先运行版本同步，再编译 TypeScript；否则 `dist/` 会保留旧 `SERVER_VERSION`。禁止在编译后才修改 TypeScript 源版本。
+- 发布打包默认只提升 patch 版本；minor 用于保持兼容的新能力，major 仅用于不兼容的协议、请求/响应或数据语义变化。是否发布、打 tag、推送由用户明确指示。
+- 每次版本同步或发布前后至少验证：
+  - `ui.html`、Unity Bridge、`src/config.ts` 与 `package.json.version` 完全相同；
+  - 编译后的 `dist/config.js` 与发布版本相同；
+  - `POST /mcp` 的 `initialize` 响应中 `serverInfo.version` 与发布版本相同；
+  - Unity Bridge 连接继续采用精确版本匹配，不接受仅主版本或前缀匹配。
+- 如果完整发布流程受缺失构建脚本、环境或外部服务阻断，必须明确记录为发布阻塞项；不得宣称已经完成可分发发布。
+- `code.js` 是由 `code/` 源片段生成的构建产物。修改插件逻辑必须先改源片段、再运行 `python scripts/build.py`；禁止直接修改 `code.js` 作为最终实现。
+- 修改发布版本后，必须运行 `npx tsc -p tsconfig.json` 重新编译 `dist/` 并重启当前 Relay，再通过 MCP `initialize` 响应核对运行中 `serverInfo.version`；只改源码或只通过静态测试不视为版本已生效。
+- `npm run build` 是发布门禁，`build:ui` 引用的脚本必须存在且构建成功。脚本缺失、构建失败或被跳过时必须阻断发布，禁止以手工复制 `dist/`、跳过 UI 构建或仅运行类型检查替代完整构建。
+- 未经用户明确指示，不得执行 `npm version`、创建 tag、Git 提交或推送；版本同步与本地编译不等于发布。
+- 产品发布版本、MCP 协议版本以及 PSD/清理计划等数据 schema 版本必须分别管理。仅在不兼容的请求、响应或数据语义变化时升级 schema，并提供迁移、明确拒绝或可查询的兼容性日志。
+
 ## 项目目标
 
 本仓库用于连接 AI/MCP、Node.js Relay、Figma 插件以及 Unity Editor Bridge。
 修改前先确认真实调用链，避免只修复某一端而破坏协议兼容性。
+
+## Relay 生命周期归属
+
+- `127.0.0.1:32130` 是外部管理的 Figma MCP Relay 端点；AI 整理、提示词和本地 AI CLI 只能作为客户端调用它，不拥有该服务的生命周期。
+- Figma 插件窗口启动的 AI 任务以 Relay 已接受任务作为服务可用性的权威预检；不得额外运行 `curl`、`Invoke-WebRequest` 或直接 `/health` 探测，也不得臆测或探测 `localhost:3000` 等替代端口。
+- AI 任务不得启动、重启、停止、终止或重配 Relay，不得绑定或监听 `32130`、`32131`，也不得运行 `start_mcp_companion`、`start_mcp_hidden`、`start_mcp_oneclick`、`npm run dev` 或等价的服务管理命令。
+- 出现 `WinError 10055`、`ENOBUFS`、`WinError 10048`、`EADDRINUSE`、超时或连接错误时，AI 必须通过统一日志记录原始错误、当前 `operationId` 和已尝试次数，并标明“本机 TCP 资源压力导致客户端无法建立连接”；不得据此声称 Relay 已停止或要求启动 Relay。然后结束当前轮次交由用户处理；不得重启服务、循环探测端口或增加连接压力。
+
+## AI 整理阶段安全
+
+- Figma 插件“开始 AI 整理对话”必须由 Relay 的会话级写入闸门约束，提示词不是唯一安全边界。
+- 固定阶段为：首轮只读分析 → 明确确认后仅层级整理 → 层级验证后等待满意 → 明确满意后仅 ComponentSet/变体。任何跨阶段写入必须由 Relay 拒绝并记录 `runId`、`sessionId`、阶段和被拒绝的 `jobType`。
+- 计划确认不得授权 ComponentSet/变体；满意确认不得重新授权任意层级或删除操作。调整反馈必须回到只读分析并生成新计划。
+- AI 会话启动必须携带本次 Figma 层级快照、所选 provider/runner 和幂等 `clientRequestId`；同一插件会话不得并发启动两个整理对话。
 
 ## 主要目录
 
@@ -34,6 +71,9 @@
 
 ### 详细日志门禁
 
+- **功能开发即日志开发**：新增或改造任一功能时，必须在实现前列出可追踪的日志点，并随功能代码一并实现；没有覆盖主流程、关键决策、外部依赖、数据校验和失败分支的详细日志，不得视为功能完成。
+- 新功能的日志必须让排障人员仅凭同一个 `operationId` 还原“谁触发、处理了什么目标、走到哪一步、输入/输出摘要、耗时、为何成功或失败”；必要时记录安全的计数、ID、哈希、路径摘要和配置选择，禁止记录敏感原文或大载荷。
+- 功能验收与回归测试必须至少验证一条成功链路和一条失败/拒绝链路的日志可查询性；若无法自动验证，最终说明必须明确列出缺失的日志验证及原因。
 - 每个操作必须按状态机记录：`started` → 一个或多个 `progress` → `succeeded`、`failed` 或 `cancelled`。禁止只有最终结果日志，也禁止静默提前返回。
 - 所有跳过、降级、预检拦截、幂等命中、超时、回滚和取消分支都必须记录原因、影响范围和下一步；例如“组件库不可用，已降级为 PNG 图层”。
 - 跨进程、跨服务或跨端调用必须携带并记录关联字段：`operationId`、`requestId`、`jobId/runId`、`sessionId`、目标文件/节点标识（可公开部分）以及来源模块。不得只依赖自然语言描述定位调用链。

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { PLUGIN_ROOT } from "../config.js";
+import { toFigmaCleanupTransactionPlan } from "../cleanupPlan.js";
 import { getLoggingRuntime } from "../logging/loggingRuntime.js";
 import type { OperationScope } from "../logging/operationScope.js";
 import { isRecord } from "../utils.js";
@@ -106,11 +107,11 @@ export function validateCleanupExecutionReport(value: unknown): CleanupExecution
   if (!isRecord(value)) throw new Error("cleanup transaction report must be a JSON object");
   const state = value.state;
   if (state !== "succeeded" && state !== "rolled_back" && state !== "recovery_required") {
-    throw new Error(`invalid cleanup transaction state: ${String(state || "missing")}`);
+    throw cleanupReportError(`cleanup transaction state is ${String(state || "missing")}`, value);
   }
   const expectedStatus = state === "succeeded" ? "completed" : state;
   if (value.status !== expectedStatus) {
-    throw new Error(`cleanup transaction status is ${String(value.status || "missing")}`);
+    throw cleanupReportError(`cleanup transaction status is ${String(value.status || "missing")}`, value);
   }
   return { state, report: value };
 }
@@ -118,7 +119,7 @@ export function validateCleanupExecutionReport(value: unknown): CleanupExecution
 export function validateCleanupPipelineReport(value: unknown): CleanupExecutionResult {
   if (!isRecord(value)) throw new Error("cleanup skill pipeline report must be a JSON object");
   if (value.status !== "completed") {
-    throw new Error(`cleanup skill pipeline status is ${String(value.status || "missing")}`);
+    throw cleanupReportError(`cleanup skill pipeline status is ${String(value.status || "missing")}`, value);
   }
   const steps = Array.isArray(value.steps) ? value.steps : [];
   if (hasFailedPipelineVerification(steps)) {
@@ -174,27 +175,45 @@ export class CleanupExecutor implements CleanupExecutorPort {
     const runDir = path.join(this.runsRoot, request.runId);
     const planPath = path.join(runDir, "ai-review-plan.json");
     const pipelineDir = path.join(runDir, "skill-pipeline", stage);
-    const outputPath = path.join(runDir, stage === "hierarchy" ? "cleanup-pipeline-report.json" : "cleanup-component-sets-report.json");
+    const transactionPlanPath = path.join(runDir, "cleanup-transaction-plan.json");
+    const outputPath = path.join(runDir, stage === "hierarchy" ? "cleanup-transaction-report.json" : "cleanup-component-sets-report.json");
     try {
       fs.mkdirSync(runDir, { recursive: true });
       fs.writeFileSync(planPath, `${JSON.stringify(request.plan, null, 2)}\n`, "utf8");
-      operation.step("ai-plan-audit", "AI 整理计划已归档，实际写入将由技能流水线重新分析", {
-        operationCount: request.plan.operations.length
-      });
-      const fileKey = typeof request.snapshot.fileKey === "string" ? request.snapshot.fileKey.trim() : "";
-      operation.step("stage", stage === "hierarchy"
-        ? "Executing hierarchy cleanup; ComponentSet creation is disabled until final satisfaction."
-        : "Executing ComponentSet creation after final satisfaction.", { stage });
-      const processSpec = buildCleanupPipelineProcess({
-        pluginRoot: this.pluginRoot,
-        sessionId: request.sessionId,
-        rootNodeId: request.snapshot.rootNodeId,
-        ...(fileKey ? { fileKey } : {}),
-        workDir: pipelineDir,
-        outputPath,
-        stage,
-        timeoutSeconds: Math.ceil(this.timeoutMs / 1000),
-      });
+      const isHierarchyTransaction = stage === "hierarchy";
+      let processSpec: { command: string; args: string[] };
+      let reportValidator: (value: unknown) => CleanupExecutionResult;
+      if (isHierarchyTransaction) {
+        const transactionPlan = toFigmaCleanupTransactionPlan(request.plan, request.snapshot);
+        fs.writeFileSync(transactionPlanPath, `${JSON.stringify(transactionPlan, null, 2)}\n`, "utf8");
+        operation.step("transaction-plan", "AI 整理计划已转换为精确事务，后续写入只执行该计划", {
+          operationCount: request.plan.operations.length,
+          transactionPlanPath,
+        });
+        operation.step("stage", "Executing the approved exact hierarchy cleanup transaction; ComponentSet creation waits for final satisfaction.", { stage });
+        processSpec = buildCleanupApplyProcess({
+          pluginRoot: this.pluginRoot,
+          sessionId: request.sessionId,
+          planPath: transactionPlanPath,
+          outputPath,
+          timeoutSeconds: Math.ceil(this.timeoutMs / 1000),
+        });
+        reportValidator = validateCleanupExecutionReport;
+      } else {
+        const fileKey = typeof request.snapshot.fileKey === "string" ? request.snapshot.fileKey.trim() : "";
+        operation.step("stage", "Executing ComponentSet creation after final satisfaction.", { stage });
+        processSpec = buildCleanupPipelineProcess({
+          pluginRoot: this.pluginRoot,
+          sessionId: request.sessionId,
+          rootNodeId: request.snapshot.rootNodeId,
+          ...(fileKey ? { fileKey } : {}),
+          workDir: pipelineDir,
+          outputPath,
+          stage,
+          timeoutSeconds: Math.ceil(this.timeoutMs / 1000),
+        });
+        reportValidator = validateCleanupPipelineReport;
+      }
       processSpec.command = this.pythonCommand;
       const result = await runCleanupProcess(
         processSpec,
@@ -205,9 +224,13 @@ export class CleanupExecutor implements CleanupExecutorPort {
         this.timeoutMs,
         `${request.runId}:${stage}`,
         operation,
-        validateCleanupPipelineReport,
+        reportValidator,
       );
-      emitPipelineReportProgress(result.report, request.onProgress, operation);
+      if (isHierarchyTransaction) {
+        emitTransactionReportProgress(result.report, request.onProgress, operation);
+      } else {
+        emitPipelineReportProgress(result.report, request.onProgress, operation);
+      }
       if (result.state === "succeeded") {
         operation.step("verification", stage === "hierarchy"
           ? "层级整理报告验证通过，等待最终满意确认。"
@@ -225,6 +248,50 @@ export class CleanupExecutor implements CleanupExecutorPort {
       throw error;
     }
   }
+}
+
+function cleanupReportError(prefix: string, report: Record<string, unknown>): Error {
+  const details = cleanupReportDetails(report);
+  return new Error(details.length > 0 ? `${prefix}: ${details.join("; ")}` : prefix);
+}
+
+function cleanupReportDetails(report: Record<string, unknown>): string[] {
+  const details: string[] = [];
+  const add = (value: string): void => {
+    const trimmed = value.trim();
+    if (trimmed && !details.includes(trimmed) && details.length < 6) details.push(trimmed.slice(0, 600));
+  };
+  if (typeof report.error === "string") add(report.error);
+  for (const value of [report.errors, report.blockingErrors, isRecord(report.root) ? report.root.blockingErrors : undefined]) {
+    if (!Array.isArray(value)) continue;
+    for (const item of value) {
+      if (typeof item === "string") {
+        add(item);
+      } else if (isRecord(item)) {
+        const code = typeof item.code === "string" ? item.code : "cleanupError";
+        const message = typeof item.message === "string" ? item.message : "";
+        const rawDetails = isRecord(item.details) ? item.details : {};
+        const name = typeof rawDetails.name === "string" ? rawDetails.name : "";
+        const count = typeof rawDetails.count === "number" ? ` count=${rawDetails.count}` : "";
+        add(`${code}${name ? ` (${name}${count})` : ""}${message ? `: ${message}` : ""}`);
+      }
+    }
+  }
+  return details;
+}
+
+function emitTransactionReportProgress(
+  report: Record<string, unknown>,
+  onProgress: (progress: CleanupProgress) => void,
+  operation: OperationScope,
+): void {
+  const elapsedSeconds = typeof report.elapsedSeconds === "number" ? report.elapsedSeconds : undefined;
+  const message = `已验证的整理事务已完成${elapsedSeconds === undefined ? "" : `（${Math.round(elapsedSeconds * 1000)}ms）`}。`;
+  onProgress({ message, state: "verifying" });
+  operation.step("transaction-verification", "精确整理事务已完成并返回验证报告", {
+    ...(elapsedSeconds === undefined ? {} : { elapsedMs: Math.round(elapsedSeconds * 1000) }),
+    checkCount: isRecord(report.checks) ? Object.keys(report.checks).length : 0,
+  });
 }
 
 async function runCleanupProcess(

@@ -1037,7 +1037,7 @@
       <div class="row" id="aiPromptManualActions">
         <button id="generateAiPromptBtn">生成提示词</button>
         <button id="copyAiPromptBtn" class="secondary">复制提示词</button>
-        <button id="runAiCleanupBtn" class="export-btn">AI 自动整理节点</button>
+        <button id="runAiCleanupBtn" class="export-btn">开始 AI 整理对话</button>
       </div>
       <div class="mcp-config-panel expanded" id="aiRunnerPanel">
         <div class="mcp-config-head"><div class="mcp-title">AI</div></div>
@@ -1273,11 +1273,15 @@
     let lastResultPayload = null;
     let pollTimer = null;
     let relaySocket = null;
+    let relaySocketRegistered = false;
     let relaySocketHeartbeat = null;
+    let relaySocketReconnectTimer = null;
+    let relaySocketReconnectAttempts = 0;
     let relayLogFlushTimer = null;
     let relaySessionId = "figma-relay-session-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     let relaySocketJobQueue = [];
     let relayOperations = {};
+    let relaySocketRequests = {};
     let mcpConfigRefreshInFlight = false;
     let executingRequestId = "";
     let executingJobType = "";
@@ -1452,6 +1456,8 @@
     let aiPromptTimeoutTimer = null;
     let pendingAiPromptRequestId = "";
     let pendingCleanupSnapshotRequestId = "";
+    let pendingCleanupSnapshotResolve = null;
+    let pendingCleanupSnapshotReject = null;
     let pendingAutoAiTemplate = "";
     let aiCleanupBusy = false;
     let aiCleanupPollTimer = null;
@@ -1459,7 +1465,6 @@
     let activeAiCleanupOperation = null;
     let aiCleanupUnloadStopSent = false;
     let cleanupProviders = [];
-    let cleanupProviderPreferenceLoaded = false;
     let cleanupPreferredProviderId = "";
     let aiProviderSyncing = false;
     let aiProviderSyncPromise = null;
@@ -1655,6 +1660,12 @@
       if (phase === "awaiting-approval") return "等待确认";
       if (phase === "applying") return "应用层级整理";
       if (phase === "verifying") return "验证整理结果";
+      if (phase === "analysis") return "只读分析计划";
+      if (phase === "awaiting_plan_confirmation") return "旧版计划确认（不会用于新整理）";
+      if (phase === "hierarchy") return "执行层级整理";
+      if (phase === "awaiting_satisfaction") return "等待满意确认";
+      if (phase === "variants") return "创建 ComponentSet 变体";
+      if (phase === "finished") return "整理与变体完成";
       return "";
     }
 
@@ -1792,7 +1803,7 @@
     function aiTemplateActionLabel(template) {
       if (template === "unity") return "导入到 Unity";
       if (template === "componentVariants") return "AI 创建组件变体";
-      return "AI 自动整理节点";
+      return "开始 AI 整理对话";
     }
 
     function aiTemplateTaskLabel(template) {
@@ -1801,21 +1812,25 @@
       return "AI 整理";
     }
 
+    function isTransactionCleanupRun(run) {
+      return !!run && run.template === "cleanup" && typeof run.state === "string";
+    }
+
     function refreshAiExecutionControls() {
       var run = activeAiCleanupRun;
       var cleanupInvalidated = invalidateTerminalCleanupRun(run);
-      var isCleanup = !!run && run.template === "cleanup";
+      var isCleanup = isTransactionCleanupRun(run);
       var cleanupTerminal = isCleanup && cleanupRunIsTerminal(run.state);
       var cleanupAwaitingConfirmation = isCleanup && run.state === "awaiting_component_confirmation";
       var cleanupFeedbackEditable = cleanupAwaitingConfirmation && run.satisfactionMode === "adjust" && !run.satisfactionRecorded;
       var running = isCleanup ? cleanupRunCanBeCancelled(run.state) : !!run && (run.status === "starting" || run.status === "running");
-      var resumable = !!run && run.template !== "cleanup" && (run.status === "completed" || run.status === "failed") && run.sessionAvailable === true;
+      var resumable = !!run && !isCleanup && (run.status === "completed" || run.status === "failed") && run.sessionAvailable === true;
       aiExecutionFollowupInput.disabled = isCleanup ? !cleanupFeedbackEditable : !resumable;
       aiExecutionContinueBtn.disabled = isCleanup
         ? !cleanupFeedbackEditable || !aiExecutionFollowupInput.value.trim()
         : !resumable || !aiExecutionFollowupInput.value.trim();
-      aiExecutionContinueBtn.textContent = isCleanup ? "提交调整反馈" : "继续执行";
-      aiExecutionContinueBtn.hidden = isCleanup ? !cleanupFeedbackEditable : cleanupTerminal;
+      aiExecutionContinueBtn.textContent = isCleanup ? "提交调整反馈" : (run && run.template === "cleanup" ? "发送消息" : "继续执行");
+      aiExecutionContinueBtn.hidden = isCleanup ? !cleanupFeedbackEditable : !resumable;
       aiExecutionStopBtn.disabled = !running;
       aiCleanupSatisfaction.hidden = !cleanupAwaitingConfirmation;
       if (cleanupAwaitingConfirmation) {
@@ -2401,7 +2416,9 @@
       cleanupProviderStatusEl.style.display = "";
       aiPromptManualActions.style.display = "";
       aiPromptSubAgentRow.style.display = template === "cleanup" ? "none" : "";
-      aiPromptPreviewField.style.display = template === "cleanup" ? "none" : "";
+      // 整理模板也保留提示词预览：它只展示待提交的初始意图和选区上下文，
+      // Relay 的执行策略仍只在服务端生成，避免出现两套规则。
+      aiPromptPreviewField.style.display = "";
       readFigmaKeyBtn.disabled = !!pendingFigmaKeyRequestId;
       copyFigmaLinkBtn.disabled = !aiPromptFigmaKeyInput.value.trim();
       refreshAiPromptPsdFileControls();
@@ -3401,7 +3418,6 @@
         cleanupProviderSelect.value = selected;
         renderCleanupProviderStatus();
         refreshAiPromptControls();
-        if (cleanupProviderPreferenceLoaded) syncAiRunnerToCleanupProvider();
       } catch (error) {
         cleanupProviders = [];
         cleanupProviderStatusEl.textContent = "读取可用 AI 失败：" + (error.message || error);
@@ -3414,33 +3430,24 @@
     }
 
     function syncAiRunnerToCleanupProvider() {
-      aiRunnerSelect.value = runnerIdForCleanupProvider(cleanupProviderSelect.value);
-      aiProviderSyncTargetRunner = aiRunnerSelect.value;
-      if (aiProviderSyncing && aiProviderSyncPromise) return aiProviderSyncPromise;
-      aiProviderSyncing = true;
-      aiProviderSyncPromise = (async function syncNextRunner() {
-        var targetRunner = aiProviderSyncTargetRunner;
-        aiRunnerSelect.value = targetRunner;
-        var synced = await selectAiRunner();
-        if (targetRunner !== aiProviderSyncTargetRunner) return syncNextRunner();
-        return synced;
-      })().then(function (synced) {
-        aiProviderSyncing = false;
-        aiProviderSyncPromise = null;
-        if (synced && typeof renderCleanupProviderStatus === "function") renderCleanupProviderStatus();
-        else cleanupProviderStatusEl.textContent = "AI 切换失败，请检查本机服务。";
-        refreshAiPromptControls();
-        return synced;
-      }, function (error) {
-        aiProviderSyncing = false;
-        aiProviderSyncPromise = null;
-        cleanupProviderStatusEl.textContent = "AI 切换失败：" + (error.message || error);
-        refreshAiPromptControls();
-        return false;
+      var providerId = cleanupProviderSelect.value;
+      var targetRunner = runnerIdForCleanupProvider(providerId);
+      aiRunnerSelect.value = targetRunner;
+      aiProviderSyncTargetRunner = targetRunner;
+      aiProviderSyncing = false;
+      aiProviderSyncPromise = null;
+      var operation = uiLogger.startOperation("ai.runner-sync", "固定本次任务使用的 AI", {
+        data: { providerId: providerId, targetRunner: targetRunner, sessionId: relaySessionId, trigger: "cleanup-provider", configWriteRequired: false }
       });
-      cleanupProviderStatusEl.textContent = "正在切换 AI...";
+      operation.succeed("AI 已按本次任务固定，无需写入 Relay 全局配置", {
+        providerId: providerId,
+        targetRunner: targetRunner,
+        sessionId: relaySessionId,
+        requestPinning: true
+      });
+      if (typeof renderCleanupProviderStatus === "function") renderCleanupProviderStatus();
       refreshAiPromptControls();
-      return aiProviderSyncPromise;
+      return Promise.resolve(true);
     }
 
     function selectCleanupProvider() {
@@ -3466,36 +3473,211 @@
       } catch (error) { aiRunnerStatusEl.textContent = "读取本机 AI 设置失败：" + (error.message || error); }
     }
 
-    async function selectAiRunner() {
+    async function writeAiRunnerConfigWithLiveSessionRetry(payload, operation) {
+      var maxAttempts = 4;
+      var requestPayload = { runner: payload.runner, sessionId: relaySessionId };
+      var registrationReady = await waitForRelaySocketRegistration(5000);
+      operation.step("plugin-session-registration", registrationReady ? "Figma 插件会话已完成 Relay 注册" : "等待 Figma 插件会话注册超时，将继续有限重试", {
+        runner: requestPayload.runner,
+        sessionId: requestPayload.sessionId,
+        socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
+        socketRegistered: relaySocketRegistered
+      }, registrationReady ? "info" : "warn");
+      for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        operation.step("config-attempt", "提交本机 AI 配置", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          runner: requestPayload.runner,
+          sessionId: requestPayload.sessionId,
+          socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
+          socketRegistered: relaySocketRegistered
+        });
+        var response;
+        try {
+          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestPayload)
+          }, 6000);
+        } catch (networkError) {
+          operation.step("config-network-retry", "提交本机 AI 配置时网络连接失败，将重试同一配置请求", {
+            attempt: attempt,
+            maxAttempts: maxAttempts,
+            runner: requestPayload.runner,
+            sessionId: requestPayload.sessionId,
+            socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
+            socketRegistered: relaySocketRegistered,
+            error: networkError && networkError.message ? networkError.message : String(networkError)
+          }, "warn");
+          if (attempt >= maxAttempts) throw networkError;
+          await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
+          continue;
+        }
+        var result = await response.json().catch(function () { return {}; });
+        if (response.ok && result.ok) return result;
+        var error = new Error(result.error || "本机 AI 请求失败（HTTP " + response.status + "）");
+        error.status = response.status;
+        if (response.status !== 403 || attempt >= maxAttempts) throw error;
+        operation.step("plugin-session-retry", "Figma 插件会话注册尚未生效，稍后重试同一配置请求", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          runner: requestPayload.runner,
+          sessionId: requestPayload.sessionId,
+          status: response.status
+        }, "warn");
+        await new Promise(function (resolve) { setTimeout(resolve, 250); });
+      }
+      throw new Error("本机 AI 配置重试已耗尽");
+    }
+
+    async function postIdempotentAiStartWithRetry(endpoint, payload, operation) {
+      var maxAttempts = 4;
+      var registrationReady = await waitForRelaySocketRegistration(5000);
+      operation.step("plugin-session-registration", registrationReady ? "Figma 插件会话已完成 Relay 注册" : "等待 Figma 插件会话注册超时，将继续有限重试", {
+        endpoint: endpoint,
+        clientRequestId: payload.clientRequestId,
+        sessionId: payload.sessionId,
+        socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
+        socketRegistered: relaySocketRegistered
+      }, registrationReady ? "info" : "warn");
+      if (registrationReady) {
+        operation.step("start-websocket-attempt", "通过已注册 WebSocket 提交 AI 启动请求", {
+          clientRequestId: payload.clientRequestId,
+          sessionId: payload.sessionId,
+          action: "ai.run.start"
+        });
+        try {
+          var socketResult = await sendRelaySocketRequest("ai.run.start", payload, "", 12000);
+          if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket AI 启动失败");
+          operation.step("start-websocket-succeeded", "AI 启动请求已由 Relay WebSocket 接收", {
+            clientRequestId: payload.clientRequestId,
+            runId: socketResult.runId || ""
+          });
+          return socketResult;
+        } catch (socketError) {
+          operation.step("start-websocket-fallback", "WebSocket AI 启动未完成，降级为有限 HTTP 重试", {
+            clientRequestId: payload.clientRequestId,
+            sessionId: payload.sessionId,
+            error: socketError && socketError.message ? socketError.message : String(socketError)
+          }, "warn");
+        }
+      }
+      for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        operation.step("start-attempt", "提交 AI 启动请求", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          clientRequestId: payload.clientRequestId,
+          sessionId: payload.sessionId,
+          providerId: payload.providerId || payload.runner,
+          socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
+          socketRegistered: relaySocketRegistered
+        });
+        var response;
+        try {
+          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }, 8000);
+        } catch (networkError) {
+          operation.step("start-network-retry", "启动 AI 时网络连接失败，将使用同一 clientRequestId 重试", {
+            attempt: attempt,
+            maxAttempts: maxAttempts,
+            clientRequestId: payload.clientRequestId,
+            sessionId: payload.sessionId,
+            socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
+            socketRegistered: relaySocketRegistered,
+            error: networkError && networkError.message ? networkError.message : String(networkError)
+          }, "warn");
+          if (attempt >= maxAttempts) throw networkError;
+          await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
+          continue;
+        }
+        var result = await response.json().catch(function () { return {}; });
+        if (response.ok && result.ok) return result;
+        var error = new Error(result.error || "启动失败（HTTP " + response.status + "）");
+        error.status = response.status;
+        var retryableStatus = response.status === 403 || response.status === 502 || response.status === 503;
+        if (!retryableStatus || attempt >= maxAttempts) throw error;
+        operation.step("start-http-retry", "Relay 暂时无法接受 AI 启动请求，将使用同一 clientRequestId 重试", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          clientRequestId: payload.clientRequestId,
+          sessionId: payload.sessionId,
+          status: response.status,
+          error: error.message
+        }, "warn");
+        await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
+      }
+      throw new Error("AI 启动请求重试已耗尽");
+    }
+
+    async function selectAiRunner(operation) {
+      if (!operation) {
+        operation = uiLogger.startOperation("ai.runner-sync", "同步本机 AI", {
+          data: { targetRunner: aiRunnerSelect.value, sessionId: relaySessionId, trigger: "runner-select" }
+        });
+      }
       try {
         var payload = { runner: aiRunnerSelect.value, sessionId: relaySessionId };
         aiRunnerStatusEl.textContent = "正在切换 AI...";
-        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }, 6000);
-        var result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || "本机 AI 请求失败");
+        operation.step("config-request", "请求更新本机 AI", {
+          runner: payload.runner,
+          sessionId: payload.sessionId
+        });
+        var result = await writeAiRunnerConfigWithLiveSessionRetry(payload, operation);
         aiRunnerSelect.value = result.config.runner || aiRunnerSelect.value;
         aiRunnerStatusEl.textContent = "当前 AI：" + aiRunnerSelect.options[aiRunnerSelect.selectedIndex].text;
-      } catch (error) { aiRunnerStatusEl.textContent = "本机 AI 设置失败：" + (error.message || error); }
+        operation.succeed("本机 AI 已切换", {
+          requestedRunner: payload.runner,
+          activeRunner: aiRunnerSelect.value,
+          sessionId: payload.sessionId
+        });
+        return true;
+      } catch (error) {
+        aiRunnerStatusEl.textContent = "本机 AI 设置失败：" + (error.message || error);
+        operation.fail(error, "本机 AI 切换失败", {
+          runner: aiRunnerSelect.value,
+          sessionId: relaySessionId
+        });
+        return false;
+      }
     }
 
     function startAiRun(template, selection) {
-      var isCleanup = template === "cleanup";
+      pendingAutoAiTemplate = "";
       var taskLabel = aiTemplateTaskLabel(template);
       var cleanupProviderId = cleanupProviderSelect.value;
-      var endpoint = isCleanup ? "/cleanup/runs" : "/ai-runner/run-prompt";
-      var payload = isCleanup
-        ? { snapshot: selection, sessionId: relaySessionId, providerId: cleanupProviderId, autoApprove: true }
-        : { template: template, prompt: aiPromptPreviewEl.value, sessionId: relaySessionId, unityProject: selectedUnityProject };
+      var endpoint = "/ai-runner/run-prompt";
+      var clientRequestId = "ai-run-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      var payload = {
+        template: template,
+        prompt: template === "cleanup"
+          ? readAiPromptTemplate("cleanup").replace("{{selectionBlock}}", "见本次任务附带的 authoritative cleanup snapshot")
+          : (aiPromptPreviewEl.value || readAiPromptTemplate(template)),
+        sessionId: relaySessionId,
+        unityProject: selectedUnityProject,
+        cleanupSnapshot: template === "cleanup" ? selection : undefined,
+        runner: template === "cleanup" ? runnerIdForCleanupProvider(cleanupProviderId) : aiRunnerSelect.value,
+        providerId: template === "cleanup" ? cleanupProviderId : undefined,
+        clientRequestId: clientRequestId
+      };
       setAiPromptStatus("正在启动" + taskLabel + "任务...");
-      fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }, 8000)
-        .then(function (response) { return response.json().then(function (result) { if (!response.ok || !result.ok) throw new Error(result.error || "启动失败"); return result; }); })
+      var startOperation = uiLogger.startOperation("ai.start-request", "提交 AI 启动请求", {
+        data: { template: template, providerId: payload.providerId || payload.runner, runner: payload.runner, sessionId: relaySessionId, clientRequestId: clientRequestId }
+      });
+      postIdempotentAiStartWithRetry(endpoint, payload, startOperation)
         .then(function (result) {
-          activeAiCleanupRun = isCleanup
-            ? { runId: result.runId, capabilityToken: result.capabilityToken, providerId: result.providerId || cleanupProviderId, template: template, state: result.state || "planning", planReady: false, planSummary: null, snapshotHash: "", lastSequence: 0, pollFailures: 0, satisfactionMode: "", satisfactionRecorded: false, startedAt: new Date().toISOString(), lastOutputAt: "" }
-            : { runId: result.runId, capabilityToken: result.capabilityToken, runner: result.runner || aiRunnerSelect.value, template: template, status: "starting", phase: "", planReady: false, planSummary: null, sessionAvailable: false, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "" };
-          activeAiCleanupOperation = uiLogger.startOperation("ai.cleanup", "AI 整理任务已启动", {
+          startOperation.succeed("AI 启动请求已接受", {
+            runId: result.runId,
+            clientRequestId: clientRequestId,
+            runner: result.runner || payload.runner,
+            phase: result.phase || "analysis"
+          });
+          activeAiCleanupRun = { runId: result.runId, capabilityToken: result.capabilityToken, runner: result.runner || aiRunnerSelect.value, template: template, status: "starting", phase: result.phase || "analysis", planReady: false, planSummary: null, sessionAvailable: false, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "", clientRequestId: clientRequestId };
+          activeAiCleanupOperation = uiLogger.startOperation(template === "cleanup" ? "ai.cleanup-conversation" : "ai.run", template === "cleanup" ? "AI 整理对话已启动" : "AI 任务已启动", {
             operationId: result.runId,
-            data: { template: template, providerId: isCleanup ? cleanupProviderId : aiRunnerSelect.value }
+            data: { template: template, providerId: template === "cleanup" ? cleanupProviderId : aiRunnerSelect.value, conversation: template === "cleanup", writeAuthorised: false }
           });
           aiCleanupUnloadStopSent = false;
           aiExecutionLogEl.textContent = "";
@@ -3504,11 +3686,16 @@
           aiExecutionFollowupInput.value = "";
           refreshAiExecutionControls();
           switchTab("ai-execution-tab");
-          setAiPromptStatus(isCleanup ? taskLabel + "任务已启动；正在执行层级整理。整理完成后会询问是否满意，只有确认满意才会自动打组并创建变体。\n" + result.runId : taskLabel + "任务已启动，可在“AI 执行”页查看。\n" + result.runId);
+          setAiPromptStatus(template === "cleanup" ? "AI 整理对话已启动；首轮只会读取和分析。请在“AI 执行”页查看计划并继续对话确认。\n" + result.runId : taskLabel + "任务已启动，可在“AI 执行”页查看。\n" + result.runId);
           appendLog(taskLabel + "任务已启动：" + result.runId);
           scheduleAiCleanupPoll();
         })
         .catch(function (error) {
+          startOperation.fail(error, "AI 启动请求失败", {
+            clientRequestId: clientRequestId,
+            sessionId: relaySessionId,
+            providerId: payload.providerId || payload.runner
+          });
           aiCleanupBusy = false;
           activeAiCleanupRun = null;
           refreshAiPromptControls();
@@ -3518,10 +3705,21 @@
         });
     }
 
-    function scheduleAiCleanupPoll() {
+    function aiCleanupPollRetryDelayMs(failures) {
+      var attempt = Math.max(1, Number(failures) || 1);
+      return Math.min(10000, 2500 * Math.pow(2, Math.min(2, attempt - 1)));
+    }
+
+    function shouldLogAiPollFailure(failures) {
+      var count = Math.max(1, Number(failures) || 1);
+      return count <= 3 || count % 5 === 0;
+    }
+
+    function scheduleAiCleanupPoll(delayMs) {
       clearAiCleanupPollTimer();
       if (!activeAiCleanupRun) return;
-      aiCleanupPollTimer = setTimeout(pollAiCleanupRun, 700);
+      var boundedDelayMs = Math.max(1000, Math.min(10000, Number(delayMs) || 4000));
+      aiCleanupPollTimer = setTimeout(pollAiCleanupRun, boundedDelayMs);
     }
 
     function applyCleanupRunView(run, result) {
@@ -3534,16 +3732,56 @@
       run.endedAt = result.endedAt || run.endedAt;
     }
 
+    function isTerminalAiRunPollError(error) {
+      var status = Number(error && error.status);
+      var message = String(error && (error.message || error) || "");
+      return status === 401 || status === 403 || status === 404 || /unknown run or invalid capability/i.test(message);
+    }
+
+    function getAiRunViewWithSocketFallback(run, isCleanup) {
+      var endpoint = isCleanup ? "/cleanup/runs/" : "/ai-runner/runs/";
+      var action = isCleanup ? "cleanup.run.get" : "ai.run.get";
+      var readOverHttp = function () {
+        return fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint + encodeURIComponent(run.runId) + "?afterSequence=" + run.lastSequence, {
+          headers: { "X-AI-Run-Capability": run.capabilityToken }
+        }, 5000);
+      };
+      if (!relaySocketRegistered || !relaySocket || relaySocket.readyState !== WebSocket.OPEN) return readOverHttp();
+      return sendRelaySocketRequest(action, {
+        runId: run.runId,
+        afterSequence: run.lastSequence
+      }, run.capabilityToken, 6500).then(function (result) {
+        if (!result || !result.ok) throw new Error((result && result.error) || "WebSocket status request failed");
+        return {
+          ok: true,
+          status: 200,
+          json: function () { return Promise.resolve(result); }
+        };
+      }).catch(function (socketError) {
+        activeAiCleanupOperation?.step("poll-websocket-fallback", "WebSocket 状态读取失败，降级为 HTTP 轮询", {
+          runId: run.runId,
+          action: action,
+          error: socketError && socketError.message ? socketError.message : String(socketError)
+        }, "warn");
+        return readOverHttp();
+      });
+    }
+
     function pollAiCleanupRun() {
       if (!activeAiCleanupRun) return;
       var currentRun = activeAiCleanupRun;
       var taskLabel = aiTemplateTaskLabel(currentRun.template);
-      var isCleanup = currentRun.template === "cleanup";
+      var isCleanup = isTransactionCleanupRun(currentRun);
       var endpoint = isCleanup ? "/cleanup/runs/" : "/ai-runner/runs/";
-      fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint + encodeURIComponent(currentRun.runId) + "?afterSequence=" + currentRun.lastSequence, {
-        headers: { "X-AI-Run-Capability": currentRun.capabilityToken }
-      }, 5000)
-        .then(function (response) { return response.json().then(function (result) { if (!response.ok || !result.ok) throw new Error(result.error || "状态读取失败"); return result; }); })
+      getAiRunViewWithSocketFallback(currentRun, isCleanup)
+        .then(function (response) { return response.json().then(function (result) {
+          if (!response.ok || !result.ok) {
+            var error = new Error(result.error || "状态读取失败");
+            error.status = response.status;
+            throw error;
+          }
+          return result;
+        }); })
         .then(function (result) {
           if (!activeAiCleanupRun || activeAiCleanupRun.runId !== currentRun.runId) return;
           currentRun.pollFailures = 0;
@@ -3605,22 +3843,89 @@
               setAiPromptStatus("AI 整理未完成，请查看日志。");
             }
             activeAiCleanupOperation = null;
+          } else if (result.status === "completed" && currentRun.template === "cleanup" && currentRun.phase === "awaiting_satisfaction") {
+            activeAiCleanupOperation?.succeed("Relay 已完成层级整理并等待满意确认", { status: result.status, phase: currentRun.phase });
+            activeAiCleanupOperation = null;
+            setAiPromptStatus("层级整理已完成并验证。请在“AI 执行”页回复“满意”以自动创建 ComponentSet 变体，或直接描述需要调整的内容。");
+          } else if (result.status === "completed" && currentRun.template === "cleanup" && currentRun.phase === "finished") {
+            activeAiCleanupOperation?.succeed("Relay 已完成层级整理与满意确认后的 ComponentSet 变体", { status: result.status, phase: currentRun.phase });
+            activeAiCleanupOperation = null;
+            setAiPromptStatus("层级整理和满意确认后的 ComponentSet 变体已完成。");
           } else if (result.status === "completed") {
-            setAiPromptStatus(currentRun.sessionAvailable ? taskLabel + "已完成；可在“AI 执行”页继续补充要求。" : taskLabel + "已完成，但当前 CLI 没有返回可恢复会话 ID。");
+            activeAiCleanupOperation?.succeed(currentRun.template === "cleanup" ? "AI 整理对话本回合完成，可继续在窗口确认或调整" : taskLabel + "本回合已完成", { status: result.status, sessionAvailable: currentRun.sessionAvailable === true });
+            activeAiCleanupOperation = null;
+            setAiPromptStatus(currentRun.sessionAvailable ? (currentRun.template === "cleanup" ? "AI 整理对话本回合已完成；请在“AI 执行”页继续确认计划、提出调整，或在整理后回答是否满意。" : taskLabel + "已完成；可在“AI 执行”页继续补充要求。") : taskLabel + "已完成，但当前 CLI 没有返回可恢复会话 ID。");
           } else if (result.status === "cancelled") {
+            activeAiCleanupOperation?.cancel(taskLabel + "已停止", { status: result.status });
+            activeAiCleanupOperation = null;
             setAiPromptStatus(taskLabel + "已停止。");
           } else {
+            activeAiCleanupOperation?.fail(new Error("AI turn ended as " + result.status), taskLabel + "本回合失败", { status: result.status });
+            activeAiCleanupOperation = null;
             setAiPromptStatus(taskLabel + "失败，请查看“AI 执行”页日志。");
           }
         })
         .catch(function (error) {
           if (!activeAiCleanupRun || activeAiCleanupRun.runId !== currentRun.runId) return;
+          if (isTerminalAiRunPollError(error)) {
+            var terminalMessage = error.message || String(error);
+            clearAiCleanupPollTimer();
+            aiCleanupBusy = false;
+            activeAiCleanupRun = null;
+            activeAiCleanupOperation?.fail(error, "AI 会话已失效，已停止状态轮询", {
+              runId: currentRun.runId,
+              status: error.status || 0,
+              message: terminalMessage
+            });
+            activeAiCleanupOperation = null;
+            aiExecutionStatusEl.textContent = "AI 会话已失效，已停止轮询：" + terminalMessage;
+            setAiPromptStatus("AI 会话已失效，已停止自动重试。请检查本机 Relay 后重新开始 AI 整理对话。");
+            appendLog("AI 会话已失效，停止状态轮询：" + terminalMessage, true);
+            refreshAiPromptControls();
+            refreshAiExecutionControls();
+            return;
+          }
           currentRun.pollFailures = (currentRun.pollFailures || 0) + 1;
           aiExecutionStatusEl.textContent = "读取任务状态失败（" + currentRun.pollFailures + "）：" + (error.message || error);
-          appendLog("读取" + taskLabel + "状态失败：" + (error.message || error), true);
-          if (isCleanup) activeAiCleanupOperation?.step("poll-retry", "读取 AI 整理状态失败，继续重试", { failures: currentRun.pollFailures }, "warn");
-          scheduleAiCleanupPoll();
+          if (shouldLogAiPollFailure(currentRun.pollFailures)) {
+            appendLog("读取" + taskLabel + "状态失败（累计 " + currentRun.pollFailures + " 次）：" + (error.message || error), true);
+            activeAiCleanupOperation?.step("poll-retry", "读取 AI 任务状态失败，按退避间隔继续重试", {
+              failures: currentRun.pollFailures,
+              nextDelayMs: aiCleanupPollRetryDelayMs(currentRun.pollFailures),
+              transactionCleanup: isCleanup
+            }, "warn");
+          }
+          scheduleAiCleanupPoll(aiCleanupPollRetryDelayMs(currentRun.pollFailures));
         });
+    }
+
+    async function confirmCleanupComponentSetsWithSocketFallback(run, payload, operation) {
+      if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+        try {
+          var socketResult = await sendRelaySocketRequest("cleanup.run.confirm-component-sets", {
+            runId: run.runId,
+            satisfied: payload.satisfied === true,
+            feedback: payload.feedback
+          }, run.capabilityToken, 10000);
+          if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket cleanup confirmation failed");
+          operation?.step("component-confirmation-websocket-succeeded", "最终满意度已通过 Relay WebSocket 提交", {
+            runId: run.runId,
+            satisfied: payload.satisfied === true
+          });
+          return { ok: true, status: 200, json: function () { return Promise.resolve(socketResult); } };
+        } catch (socketError) {
+          operation?.step("component-confirmation-websocket-fallback", "WebSocket 最终满意度提交失败，降级为 HTTP", {
+            runId: run.runId,
+            satisfied: payload.satisfied === true,
+            error: socketError && socketError.message ? socketError.message : String(socketError)
+          }, "warn");
+        }
+      }
+      return fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/cleanup/runs/" + encodeURIComponent(run.runId) + "/confirm-component-sets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
+        body: JSON.stringify(payload)
+      }, 8000);
     }
 
     async function recordCleanupSatisfaction(satisfied) {
@@ -3639,11 +3944,7 @@
       try {
         aiCleanupSatisfiedBtn.disabled = true;
         aiCleanupAdjustBtn.disabled = true;
-        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/cleanup/runs/" + encodeURIComponent(run.runId) + "/confirm-component-sets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-          body: JSON.stringify({ satisfied: true })
-        }, 8000);
+        var response = await confirmCleanupComponentSetsWithSocketFallback(run, { satisfied: true }, operation);
         var result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "确认满意失败");
         run.satisfactionRecorded = true;
@@ -3663,10 +3964,129 @@
       }
     }
 
+    function cleanupFollowupNeedsFreshSnapshot(run, text) {
+      if (!run || run.template !== "cleanup") return false;
+      if (run.phase === "awaiting_satisfaction") {
+        return !/^(满意|满意了|确认满意|效果满意|可以了)[。.!！]?$/.test(text);
+      }
+      return false;
+    }
+
+    function captureCleanupSnapshotForFollowup(run, operation) {
+      return new Promise(function (resolve, reject) {
+        if (pendingCleanupSnapshotRequestId) {
+          reject(new Error("已有层级快照请求正在执行"));
+          return;
+        }
+        clearAiPromptTimeout();
+        pendingCleanupSnapshotRequestId = "cleanup-followup-snapshot-" + Date.now();
+        pendingCleanupSnapshotResolve = resolve;
+        pendingCleanupSnapshotReject = reject;
+        var requestId = pendingCleanupSnapshotRequestId;
+        operation.step("followup-snapshot-request", "调整计划前重新采集 authoritative cleanup snapshot", {
+          requestId: requestId,
+          runId: run.runId,
+          previousPhase: run.phase
+        });
+        aiPromptTimeoutTimer = setTimeout(function () {
+          if (pendingCleanupSnapshotRequestId !== requestId) return;
+          pendingCleanupSnapshotRequestId = "";
+          var timeoutReject = pendingCleanupSnapshotReject;
+          pendingCleanupSnapshotResolve = null;
+          pendingCleanupSnapshotReject = null;
+          if (timeoutReject) timeoutReject(new Error("调整计划前的层级快照采集超时"));
+        }, 8000);
+        parent.postMessage({
+          pluginMessage: {
+            type: "QUERY_CLEANUP_SNAPSHOT",
+            requestId: requestId
+          }
+        }, "*");
+      });
+    }
+
+    async function postIdempotentAiFollowupWithRetry(run, text, clientRequestId, operation, cleanupSnapshot) {
+      var maxAttempts = 4;
+      var endpoint = "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/followup";
+      if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+        operation.step("followup-websocket-attempt", "通过已注册 WebSocket 提交 AI 后续消息", {
+          runId: run.runId,
+          clientRequestId: clientRequestId,
+          inputChars: text.length,
+          action: "ai.run.followup"
+        });
+        try {
+          var socketResult = await sendRelaySocketRequest("ai.run.followup", {
+            runId: run.runId,
+            text: text,
+            clientRequestId: clientRequestId,
+            cleanupSnapshot: cleanupSnapshot
+          }, run.capabilityToken, 12000);
+          if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket AI follow-up failed");
+          operation.step("followup-websocket-succeeded", "AI 后续消息已由 Relay WebSocket 接收", {
+            runId: run.runId,
+            clientRequestId: clientRequestId,
+            status: socketResult.status || ""
+          });
+          return socketResult;
+        } catch (socketError) {
+          operation.step("followup-websocket-fallback", "WebSocket AI 后续消息未完成，降级为有限 HTTP 重试", {
+            runId: run.runId,
+            clientRequestId: clientRequestId,
+            error: socketError && socketError.message ? socketError.message : String(socketError)
+          }, "warn");
+        }
+      }
+      for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        operation.step("followup-attempt", "提交 AI 后续消息", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          runId: run.runId,
+          clientRequestId: clientRequestId,
+          inputChars: text.length
+        });
+        var response;
+        try {
+          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
+            body: JSON.stringify({ text: text, clientRequestId: clientRequestId, cleanupSnapshot: cleanupSnapshot })
+          }, 8000);
+        } catch (networkError) {
+          operation.step("followup-network-retry", "发送 AI 后续消息时网络连接失败，将复用同一请求编号重试", {
+            attempt: attempt,
+            maxAttempts: maxAttempts,
+            runId: run.runId,
+            clientRequestId: clientRequestId,
+            error: networkError && networkError.message ? networkError.message : String(networkError)
+          }, "warn");
+          if (attempt >= maxAttempts) throw networkError;
+          await new Promise(function (resolve) { setTimeout(resolve, 500 * attempt); });
+          continue;
+        }
+        var result = await response.json().catch(function () { return {}; });
+        if (response.ok && result.ok) return result;
+        var error = new Error(result.error || "继续执行失败（HTTP " + response.status + "）");
+        error.status = response.status;
+        var retryableStatus = response.status === 502 || response.status === 503;
+        if (!retryableStatus || attempt >= maxAttempts) throw error;
+        operation.step("followup-http-retry", "Relay 暂时无法接受 AI 后续消息，将复用同一请求编号重试", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          runId: run.runId,
+          clientRequestId: clientRequestId,
+          status: response.status,
+          error: error.message
+        }, "warn");
+        await new Promise(function (resolve) { setTimeout(resolve, 500 * attempt); });
+      }
+      throw new Error("AI 后续消息重试已耗尽");
+    }
+
     async function continueAiCleanup() {
       var run = activeAiCleanupRun;
       var text = aiExecutionFollowupInput.value.trim();
-      var isCleanupFeedback = !!run && run.template === "cleanup";
+      var isCleanupFeedback = isTransactionCleanupRun(run);
       if (!run) return;
       if (isCleanupFeedback) {
         if (run.state !== "awaiting_component_confirmation" || run.satisfactionMode !== "adjust" || !text) return;
@@ -3676,11 +4096,7 @@
         });
         try {
           aiExecutionContinueBtn.disabled = true;
-          var feedbackResponse = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/cleanup/runs/" + encodeURIComponent(run.runId) + "/confirm-component-sets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-            body: JSON.stringify({ satisfied: false, feedback: text })
-          }, 8000);
+          var feedbackResponse = await confirmCleanupComponentSetsWithSocketFallback(run, { satisfied: false, feedback: text }, feedbackOperation);
           var feedbackResult = await feedbackResponse.json();
           if (!feedbackResponse.ok || !feedbackResult.ok) throw new Error(feedbackResult.error || "提交调整反馈失败");
           run.satisfactionRecorded = true;
@@ -3700,18 +4116,32 @@
         }
         return;
       }
-      if (run.status !== "completed" || !run.sessionAvailable || !text) return;
+      if ((run.status !== "completed" && run.status !== "failed") || !run.sessionAvailable || !text) return;
       try {
         aiExecutionContinueBtn.disabled = true;
-        var endpoint = "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/followup";
-        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-          body: JSON.stringify({ text: text })
-        }, 8000);
-        var result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || "继续执行失败");
+        var followupRequestId = run.pendingFollowupRequestId || ("ai-followup-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+        if (run.pendingFollowupText && run.pendingFollowupText !== text) {
+          throw new Error("上一条 AI 消息发送状态仍不确定，请保留原文本重试，避免重复执行不同指令");
+        }
+        run.pendingFollowupRequestId = followupRequestId;
+        run.pendingFollowupText = text;
+        activeAiCleanupOperation = uiLogger.startOperation(run.template === "cleanup" ? "ai.cleanup-conversation-followup" : "ai.followup", run.template === "cleanup" ? "AI 整理对话已发送后续消息" : "AI 后续任务已启动", {
+          operationId: run.runId,
+          data: { template: run.template, inputChars: text.length, conversation: run.template === "cleanup", clientRequestId: followupRequestId }
+        });
+        var cleanupSnapshot;
+        if (cleanupFollowupNeedsFreshSnapshot(run, text)) {
+          cleanupSnapshot = await captureCleanupSnapshotForFollowup(run, activeAiCleanupOperation);
+          activeAiCleanupOperation.step("followup-snapshot-ready", "调整计划使用的最新层级快照已采集", {
+            rootNodeId: cleanupSnapshot.rootNodeId || "",
+            nodeCount: Array.isArray(cleanupSnapshot.nodes) ? cleanupSnapshot.nodes.length : 0,
+            previousPhase: run.phase
+          });
+        }
+        var result = await postIdempotentAiFollowupWithRetry(run, text, followupRequestId, activeAiCleanupOperation, cleanupSnapshot);
         aiExecutionFollowupInput.value = "";
+        run.pendingFollowupRequestId = "";
+        run.pendingFollowupText = "";
         run.status = result.status || "starting";
         run.phase = result.phase || run.phase;
         run.sessionAvailable = false;
@@ -3721,21 +4151,44 @@
         refreshAiExecutionControls();
         scheduleAiCleanupPoll();
       } catch (error) {
+        activeAiCleanupOperation?.fail(error, "发送 AI 后续消息失败");
+        activeAiCleanupOperation = null;
         aiExecutionStatusEl.textContent = "继续执行失败：" + (error.message || error);
+        scheduleAiCleanupPoll(aiCleanupPollRetryDelayMs(1));
         refreshAiExecutionControls();
       }
     }
 
     async function stopActiveAiCleanup() {
       var run = activeAiCleanupRun;
-      var isCleanup = !!run && run.template === "cleanup";
+      var isCleanup = isTransactionCleanupRun(run);
       if (!run || (isCleanup ? !cleanupRunCanBeCancelled(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
       try {
         aiExecutionStopBtn.disabled = true;
         var endpoint = isCleanup
           ? "/cleanup/runs/" + encodeURIComponent(run.runId) + "/cancel"
           : "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/stop";
-        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
+        var response;
+        if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+          try {
+            var socketResult = await sendRelaySocketRequest(isCleanup ? "cleanup.run.cancel" : "ai.run.stop", {
+              runId: run.runId
+            }, run.capabilityToken, 8000);
+            if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket AI stop failed");
+            response = { ok: true, status: 200, json: function () { return Promise.resolve(socketResult); } };
+            activeAiCleanupOperation?.step("stop-websocket-succeeded", "AI 停止请求已由 Relay WebSocket 接收", {
+              runId: run.runId,
+              isCleanup: isCleanup
+            });
+          } catch (socketError) {
+            activeAiCleanupOperation?.step("stop-websocket-fallback", "WebSocket 停止请求失败，降级为 HTTP", {
+              runId: run.runId,
+              isCleanup: isCleanup,
+              error: socketError && socketError.message ? socketError.message : String(socketError)
+            }, "warn");
+          }
+        }
+        if (!response) response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
           body: JSON.stringify({ sessionId: relaySessionId })
@@ -3754,7 +4207,7 @@
 
     function stopAiCleanupOnPanelClose() {
       var run = activeAiCleanupRun;
-      var isCleanup = !!run && run.template === "cleanup";
+      var isCleanup = isTransactionCleanupRun(run);
       if (aiCleanupUnloadStopSent || !run || (isCleanup ? !cleanupRunCanBeCancelled(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
       aiCleanupUnloadStopSent = true;
       try {
@@ -3791,6 +4244,8 @@
       refreshAiPromptControls();
       if (requestedTemplate === "cleanup") {
         switchTab("ai-execution-tab");
+        pendingAutoAiTemplate = requestedTemplate;
+        setAiPromptStatus("正在采集包含隐藏节点的 Figma 层级快照...");
         requestCleanupSnapshot();
         return;
       }
@@ -3801,6 +4256,8 @@
 
     function requestCleanupSnapshot() {
       clearAiPromptTimeout();
+      pendingCleanupSnapshotResolve = null;
+      pendingCleanupSnapshotReject = null;
       pendingCleanupSnapshotRequestId = "cleanup-snapshot-" + Date.now();
       var requestId = pendingCleanupSnapshotRequestId;
       setAiPromptStatus("正在采集层级快照...");
@@ -3845,6 +4302,21 @@
       clearAiPromptTimeout();
       pendingCleanupSnapshotRequestId = "";
       var result = message.result || {};
+      if (pendingCleanupSnapshotResolve || pendingCleanupSnapshotReject) {
+        var followupResolve = pendingCleanupSnapshotResolve;
+        var followupReject = pendingCleanupSnapshotReject;
+        pendingCleanupSnapshotResolve = null;
+        pendingCleanupSnapshotReject = null;
+        if (result.status !== "completed" || !result.snapshot) {
+          var followupError = (result.errors && result.errors[0]) || "调整计划前的层级快照采集失败";
+          appendLog("调整计划前的层级快照采集失败：" + followupError, true);
+          if (followupReject) followupReject(new Error(followupError));
+        } else {
+          appendLog("调整计划前已采集最新层级快照：root=" + (result.snapshot.rootNodeId || "") + "，节点=" + (Array.isArray(result.snapshot.nodes) ? result.snapshot.nodes.length : 0));
+          if (followupResolve) followupResolve(result.snapshot);
+        }
+        return;
+      }
       if (result.status !== "completed" || !result.snapshot) {
         aiCleanupBusy = false;
         refreshAiPromptControls();
@@ -3889,9 +4361,9 @@
 
     // BEGIN_AI_PROMPT_TEMPLATES
     const AiPromptTemplates = {
-      "cleanup": "请使用 $figma-hierarchy-cleanup-mcp 整理 Figma 节点。\n\n目标 Figma：\n- {{selectionBlock}}\n\n目标：\n- 整理一下命名 Image 叫 _Image  按钮 叫 _Btn  之类的\n- 清理无意义的层级和命名，提升导入 Unity 前的结构可读性。\n- 保持视觉效果、尺寸、位置和图片内容不变。\n- 分组和 Z 顺序必须以当前真实 Figma 节点为依据，不要根据名称或经验猜测。\n\n读取与计划要求：\n- 禁止使用 Figma MCP 写入，只能通过 `<relay-root>` 下的本地 MCP Relay 操作当前 Figma 文件。\n- 先检查 MCP Relay health，再 query-selection 回显当前选中节点。\n- 对目标节点执行 analyze，必须 includeHidden，避免漏掉隐藏占位、遮罩或备份节点。\n- 计划前必须输出 before directChildren 顺序表，包含 index、name、type、visible、bounds，说明 Figma sibling 越靠后视觉越在上层。\n- 给出完整最终目标树和整理计划，列出会影响的节点名称、原父级、新父级、原 index、新 index。\n\n分组规则：\n- 只允许新增外层语义分组容器，并把原始节点移动进去；禁止删除、flatten、vectorize、detach instance 或重建原节点。\n- 保序分组优先：进入同一新分组的原始节点必须保持原 sibling 相对顺序。\n- 保视觉栈优先：新增顶层分组的 sibling 顺序必须按视觉遮挡关系排列，背景类组在下层，按钮/Tab/弹窗/前景装饰在上层。\n- 不允许把视觉上不相邻、功能不明确、bounds 区域跨度异常的节点硬塞进同一组。\n- 如果单个分组吞掉 70% 以上直接子节点，或 [ListRoot] / [TabBar] / [ProgressSection] 这类语义组仍可继续拆分却未展开，视为异常计划，必须停下报告，不要 apply。\n- 遇到不确定的分组归属、遮罩归属、九宫归属、隐藏节点用途时，先报错问我，不要猜。\n\nZ 顺序规则：\n- Figma sibling 越靠后视觉越在上层；整理计划必须同时表达语义树和最终视觉栈顺序。\n- 分组后必须保持每个原始节点的相对视觉堆叠关系，不能因为新建 wrapper 导致 [Bg]、[TabBar]、[ListRoot]、[ProgressSection] 等顶层组遮挡错误。\n- 只有同一父节点下 sibling 顺序错误时，才使用 FIGMA_HIERARCHY_REORDER_CHILDREN 修复。\n- reorder 计划必须覆盖该父节点当前全部直接子节点，不要只给局部节点，避免漏节点、重复节点或集合变化。\n- 禁止为了修 Z 顺序重新导入 PSD、重建整棵树、复制节点或移动到错误父级。\n\n执行规则：\n- 等我确认后再执行 apply。\n- 如果需要备份节点，优先通过当前 MCP Relay 选区或 apply 计划设置 `createBackup: true` 自动备份，不要在提示词里暴露节点 id。\n- apply 后必须立即重新 analyze，不要把验证推到最后。\n- apply 后必须输出 after directChildren 顺序表，并和 before/plan 对比。\n- 如果发现只是 sibling 顺序错误，优先生成全量 reorder 计划修复，不要重新整理或重新导入。\n\n验收要求：\n- verify 必须确认节点集合守恒：原始节点全部且仅一次进入计划分组，没有遗漏、重复或新增替代节点。\n- absolute bounds 漂移必须为 0 或不超过工具允许容差；root 尺寸不变。\n- hidden 节点、mask、Instance、__slice_ / jiugong / nine-slice 结构不能丢失或被拆散。\n- root 顶层 directChildren 顺序必须符合计划中的视觉栈顺序。\n- 使用 FIGMA_HIERARCHY_REORDER_CHILDREN 时，必须验证 childSetPreserved、orderMatchesPlan、boundsPreserved、rootSizeUnchanged 全部通过。\n- 如果验证发现遮挡关系异常，必须报告具体节点和 index 差异，先问我确认修复方案。\n- 遇到无法判断的节点请报错说明，不要猜测修改。",
+      "cleanup": "使用 Relay 内置整理技能：$figma-hierarchy-cleanup-mcp。\n\n不要使用 `Skill()` 或 `ToolSearch` 查找该技能。直接读取项目中的 `ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md`，并按技能的 `analyze → plan → apply` 标准流程执行；标准入口脚本为 `ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_hierarchy_cleanup_mcp_client.py`。此技能为项目自定义技能，不在 `.claude/skills/` 中。\n\n整理当前选中的 Figma 节点。\n\n目标选区：\n\n- {{selectionBlock}}\n\nRelay 会在启动 AI 前生成唯一的执行规则和权威快照；此模板只表达用户的初始整理意图，不能再包含执行规则、JSON 示例或确认流程。",
       "componentVariants": "请使用 $figma-hierarchy-cleanup-mcp，根据我当前选中的多个 Figma 节点，规划 ComponentSet 变体。\n\n{{selectionBlock}}\n\n重要前提：\n- 当前选中的节点可以是多个模板节点。\n- 这些节点不一定是根节点，也不一定同父级。\n- 不要假设它们都是同级列表项或同级 Tab 项。\n\n目标：\n- 先 query-selection，回显当前选中节点的 name/type/count/nodePath。\n- 再分析相关父级结构，判断这些选中节点应该作为手动 ComponentSet 的多个变体来源，还是跨父级节点组 ComponentSet 的一组或多组来源。\n- 如果适合手动选择 ComponentSet 流程，请规划 component-set --from-selection；该流程默认只创建 ComponentSet，不删除、不移动、不替换源节点。\n- 如果目标是替换原有重复项，必须先 analyze 相关父级或目标容器，明确哪些同类节点要被替换，再规划 component-set-from-node-groups 或其它合适流程。\n- 如果适合跨父级节点组流程，请规划 component-set-from-node-groups，并显式列出每组节点的名称、类型和 nodePath；实际写入以 MCP Relay 当前选区和分析结果为准。\n- 如果变体值、分组关系或替换范围无法从节点名和结构可靠推断，必须先问我，不要猜。\n\n执行规则：\n- 只先给计划，不要直接执行。\n- 等我确认后再调用 MCP Relay 写入。\n- 只有计划明确要替换原有重复项时，才设置 replaceOriginalsWithInstances=true。\n- 发生替换时默认 createBackup=true，源节点必须备份到隐藏备份 Frame。\n- 禁止删除原节点。\n- 禁止 flatten、detach instance、拆散 __slice_ / jiugong / nine-slice 节点。\n\n验收要求：\n- 执行后验证 ComponentSet 创建成功。\n- 如果计划包含替换，验证原节点已备份、实例替换成功、bounds 不漂移。\n- 如果计划只是 component-set --from-selection，验证源选中节点仍保留且未被移动。\n- 验证九宫切片在变体内被保留。\n- 重新 analyze 目标结构，确认替换后的节点数量、顺序和 Instance 状态符合计划。",
-      "unity": "请将当前 Figma 节点快速直接导入 Unity。\n\n这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。\n\nfigma 路径:\n- {{selectionBlock}}\n\n目标 Unity 工程：{{unityProjectPath}}\n\n执行边界：\n- 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。\n- 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 MCP 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。\n- 默认新建且不覆盖：`{{unityImageTargetFolder}}/FigmaImports/<规范化根节点名>/<规范化根节点名>.prefab`，图片写入同目录的 `Images/`。不得搜索或猜测业务 Prefab 路径。\n- 不整理 Figma 层级、不写回 Figma；直接导出当前节点。不要因为层级不完美而开启 cleanup 流程。\n- 不修改 C#、场景、Addressables、既有 Prefab、既有资源或既有 `.meta`。\n\n固定流水线（必须执行，不要自行拆解或增加检查）：\n1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。\n2. 立即执行唯一的导入命令：`python \"ai/skills/figma-to-prefab/scripts/run_full_import.py\" --unity-project \"{{unityProjectPath}}\" --figma-url \"https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>\" --file-key <fileKey> --infer-formal-names --formal-output-dir \"{{unityImageTargetFolder}}/FigmaImports\" --target-prefab \"Assets/FigmaImports/Pending.prefab\" --target-image-dir \"Assets/FigmaImports/Images\" --yes --wall-clock-report \".tmp/figma_to_prefab_wall_clock.json\"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。\n3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。\n\n禁止项：\n- 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。\n- 不要调用 `Skill`、`ToolSearch`、`Glob`、`Grep`、`Read`，不要手工拆开 MCP、图片处理、uLoop 或验证命令。\n- 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。\n- 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。\n\n完成时只报告：生成的 Prefab/图片路径、导入验证结果、冲突或 blockingErrors（如有）。"
+      "unity": "请将当前 Figma 节点快速直接导入 Unity。\n\n使用项目导入技能：$figma-to-prefab。\n\n不要使用 `Skill()` 或 `ToolSearch` 查找该技能。直接读取项目中的 `ai/skills/figma-to-prefab/SKILL.md`，并使用标准入口 `ai/skills/figma-to-prefab/scripts/figma_to_prefab_mcp_client.py` 与 `ai/skills/figma-to-prefab/scripts/run_full_import.py`。此技能为项目自定义技能，不在 `.claude/skills/` 中。\n\n这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。\n\nfigma 路径:\n- {{selectionBlock}}\n\n目标 Unity 工程：{{unityProjectPath}}\n\n执行边界：\n- 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。\n- 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 MCP 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。\n- 默认新建且不覆盖：`{{unityImageTargetFolder}}/FigmaImports/<规范化根节点名>/<规范化根节点名>.prefab`，图片写入同目录的 `Images/`。不得搜索或猜测业务 Prefab 路径。\n- 不整理 Figma 层级、不写回 Figma；直接导出当前节点。不要因为层级不完美而开启 cleanup 流程。\n- 不修改 C#、场景、Addressables、既有 Prefab、既有资源或既有 `.meta`。\n\n固定流水线（必须执行，不要自行拆解或增加检查）：\n1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。\n2. 立即执行唯一的导入命令：`python \"ai/skills/figma-to-prefab/scripts/run_full_import.py\" --unity-project \"{{unityProjectPath}}\" --figma-url \"https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>\" --file-key <fileKey> --infer-formal-names --formal-output-dir \"{{unityImageTargetFolder}}/FigmaImports\" --target-prefab \"Assets/FigmaImports/Pending.prefab\" --target-image-dir \"Assets/FigmaImports/Images\" --yes --wall-clock-report \".tmp/figma_to_prefab_wall_clock.json\"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。\n3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。\n\n禁止项：\n- 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。\n- 不要调用 `Skill`、`ToolSearch`、`Glob` 或 `Grep`。唯一允许的直接读取是上面指定的 `ai/skills/figma-to-prefab/SKILL.md`；不要手工拆开 MCP、图片处理、uLoop 或验证命令。\n- 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。\n- 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。\n\n完成时只报告：生成的 Prefab/图片路径、导入验证结果、冲突或 blockingErrors（如有）。"
     };
     // END_AI_PROMPT_TEMPLATES
 
@@ -3930,13 +4402,6 @@
         psdFileName: psdFile.name || "未拖入",
         psdFileSize: formatFileSize(psdFile.size || 0)
       });
-      if (template === "cleanup") {
-        rendered += "\n\n单次确认执行规则：\n"
-          + "- 先只读分析并给出包含层级打组和预计 ComponentSet 候选的完整最终计划，不要写入 Figma。\n"
-          + "- 我回复‘满意了’、‘可以执行了’、‘整理完毕了’、‘可以了’、‘确认’或明确同义表达时，视为一次执行授权。\n"
-          + "- 该次授权同时覆盖层级 apply、逐步 verify、AutoComponentSet 变体创建、Instance 替换和最终 verify。\n"
-          + "- 除非存在歧义、验证失败或重复组件化风险，中间不要再次询问是否执行变体，也不要要求我重复说‘打组变体’。";
-      }
       if (template !== "unity" && (!aiPromptSubAgentCheck || aiPromptSubAgentCheck.checked)) {
         rendered = "SubAgent：已启用。遇到可并行分析、验证、实现的子任务时，优先使用 SubAgent 协同处理。\n\n" + rendered;
       }
@@ -3957,6 +4422,7 @@
 
     function readAiPromptTemplate(template) {
       var text = AiPromptTemplates[template] || AiPromptTemplates.cleanup || "";
+      if (template === "cleanup") return text;
       if (template === "unity") {
         text = text.replace(
           '2. 立即执行唯一的导入命令：`python "ai/skills/figma-to-prefab/scripts/run_full_import.py"',
@@ -3964,8 +4430,8 @@
         );
       }
       return text
-        .replaceAll("$figma-hierarchy-cleanup-mcp", "先从 Relay `/health` 的 `gateway.pluginRoot` 获取 `<relay-root>`，再读取并遵守 `<relay-root>/ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md`")
-        .replaceAll("$figma-to-prefab", "先从 Relay `/health` 的 `gateway.pluginRoot` 获取 `<relay-root>`，再读取并遵守 `<relay-root>/ai/skills/figma-to-prefab/SKILL.md`");
+        .replaceAll("$figma-hierarchy-cleanup-mcp", "读取并遵守当前工作区的 `ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md`")
+        .replaceAll("$figma-to-prefab", "项目自定义技能 `$figma-to-prefab`：直接读取 `ai/skills/figma-to-prefab/SKILL.md`，不要调用 Skill() 或 ToolSearch 查找");
     }
 
     function formatFileSize(bytes) {
@@ -4385,6 +4851,13 @@
     }
 
     function closeRelaySocket() {
+      relaySocketRegistered = false;
+      rejectRelaySocketRequests(new Error("Relay WebSocket was closed."));
+      if (relaySocketReconnectTimer) {
+        clearTimeout(relaySocketReconnectTimer);
+        relaySocketReconnectTimer = null;
+      }
+      relaySocketReconnectAttempts = 0;
       if (relaySocketHeartbeat) {
         clearInterval(relaySocketHeartbeat);
         relaySocketHeartbeat = null;
@@ -4397,6 +4870,57 @@
         try { relaySocket.onclose = null; relaySocket.close(); } catch (_) {}
         relaySocket = null;
       }
+    }
+
+    function rejectRelaySocketRequests(error) {
+      Object.keys(relaySocketRequests).forEach(function (requestId) {
+        var request = relaySocketRequests[requestId];
+        if (!request) return;
+        clearTimeout(request.timeout);
+        delete relaySocketRequests[requestId];
+        request.reject(error);
+      });
+    }
+
+    function settleRelaySocketRequest(message) {
+      var requestId = String(message && message.requestId || "");
+      var request = relaySocketRequests[requestId];
+      if (!request) return;
+      clearTimeout(request.timeout);
+      delete relaySocketRequests[requestId];
+      if (message.ok === true) {
+        request.resolve(message.result);
+        return;
+      }
+      request.reject(new Error(String(message.error || "Relay WebSocket request failed")));
+    }
+
+    function sendRelaySocketRequest(action, payload, capabilityToken, timeoutMs) {
+      if (!relaySocketRegistered || !relaySocket || relaySocket.readyState !== WebSocket.OPEN) {
+        return Promise.reject(new Error("Relay WebSocket is not registered."));
+      }
+      var requestId = "relay-control-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      return new Promise(function (resolve, reject) {
+        var timeout = setTimeout(function () {
+          if (!relaySocketRequests[requestId]) return;
+          delete relaySocketRequests[requestId];
+          reject(new Error("Relay WebSocket request timed out: " + action));
+        }, Math.max(1000, Number(timeoutMs) || 8000));
+        relaySocketRequests[requestId] = { resolve: resolve, reject: reject, timeout: timeout, action: action };
+        try {
+          relaySocket.send(JSON.stringify({
+            type: "relay.request",
+            requestId: requestId,
+            action: action,
+            payload: payload || {},
+            capabilityToken: capabilityToken || ""
+          }));
+        } catch (error) {
+          clearTimeout(timeout);
+          delete relaySocketRequests[requestId];
+          reject(error);
+        }
+      });
     }
 
     function registerRelaySocket() {
@@ -4427,16 +4951,65 @@
       }
     }
 
+    function waitForRelaySocketRegistration(timeoutMs) {
+      connectRelaySocket();
+      if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) return Promise.resolve(true);
+      var startedAt = Date.now();
+      var timeout = Math.max(0, Number(timeoutMs) || 0);
+      return new Promise(function (resolve) {
+        function inspectRegistration() {
+          if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+            resolve(true);
+            return;
+          }
+          if (Date.now() - startedAt >= timeout) {
+            resolve(false);
+            return;
+          }
+          setTimeout(inspectRegistration, 100);
+        }
+        inspectRegistration();
+      });
+    }
+
+    function relaySocketReconnectDelayMs(attempts) {
+      var attempt = Math.max(1, Number(attempts) || 1);
+      return Math.min(30000, 1500 * Math.pow(2, Math.min(5, attempt - 1)));
+    }
+
+    function scheduleRelaySocketReconnect(reason) {
+      if (relaySocketReconnectTimer) return;
+      relaySocketReconnectAttempts += 1;
+      var delayMs = relaySocketReconnectDelayMs(relaySocketReconnectAttempts);
+      if (relaySocketReconnectAttempts <= 3 || relaySocketReconnectAttempts % 5 === 0) {
+        appendLog("WebSocket 重连已退避：reason=" + reason + "，attempt=" + relaySocketReconnectAttempts + "，nextDelayMs=" + delayMs, true);
+      }
+      relaySocketReconnectTimer = setTimeout(function () {
+        relaySocketReconnectTimer = null;
+        connectRelaySocket();
+      }, delayMs);
+    }
+
     function connectRelaySocket() {
       if (!("WebSocket" in window)) return;
       if (relaySocket && (relaySocket.readyState === WebSocket.OPEN || relaySocket.readyState === WebSocket.CONNECTING)) return;
+      var socket;
       try {
-        relaySocket = new WebSocket(relayWsEndpoint());
+        socket = new WebSocket(relayWsEndpoint());
+        relaySocket = socket;
+        relaySocketRegistered = false;
       } catch (error) {
         appendLog("WebSocket 连接初始化失败：" + (error.message || error), true);
+        scheduleRelaySocketReconnect("connect-init-failed");
         return;
       }
-      relaySocket.onopen = function () {
+      socket.onopen = function () {
+        if (relaySocket !== socket) return;
+        if (relaySocketReconnectTimer) {
+          clearTimeout(relaySocketReconnectTimer);
+          relaySocketReconnectTimer = null;
+        }
+        relaySocketReconnectAttempts = 0;
         registerRelaySocket();
         sendRelaySocketHeartbeat();
         if (relaySocketHeartbeat) clearInterval(relaySocketHeartbeat);
@@ -4445,20 +5018,33 @@
         relayLogFlushTimer = setInterval(flushRelayLogEvents, 250);
         flushRelayLogEvents();
         appendLog("WebSocket 已连接本地 MCP Companion。");
-        refreshCleanupProviders();
       };
-      relaySocket.onmessage = function (event) {
+      socket.onmessage = function (event) {
+        if (relaySocket !== socket) return;
         var message = {};
         try { message = JSON.parse(event.data || "{}"); } catch (_) { return; }
+        if (message && message.type === "relay.response") {
+          settleRelaySocketRequest(message);
+          return;
+        }
+        if (message && message.type === "plugin.registered" && message.sessionId === relaySessionId) {
+          relaySocketRegistered = true;
+          appendLog("WebSocket 会话已在本地 MCP Companion 完成注册：" + relaySessionId);
+          scheduleNextPoll(relayFallbackPollDelayMs());
+          refreshCleanupProviders();
+          return;
+        }
         if (!message || message.type !== "command.request") return;
         var receivedId = message.requestId || message.id || "";
-        if (receivedId && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-          relaySocket.send(JSON.stringify({ type: "command.received", id: receivedId, requestId: receivedId, operationId: message.operationId || receivedId }));
+        if (receivedId && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "command.received", id: receivedId, requestId: receivedId, operationId: message.operationId || receivedId }));
         }
         relaySocketJobQueue.push(message);
         processRelaySocketQueue();
       };
-      relaySocket.onclose = function () {
+      socket.onclose = function () {
+        if (relaySocket !== socket) return;
+        relaySocketRegistered = false;
         if (relaySocketHeartbeat) {
           clearInterval(relaySocketHeartbeat);
           relaySocketHeartbeat = null;
@@ -4467,10 +5053,12 @@
           clearInterval(relayLogFlushTimer);
           relayLogFlushTimer = null;
         }
+        rejectRelaySocketRequests(new Error("Relay WebSocket closed."));
         relaySocket = null;
-        setTimeout(connectRelaySocket, 1500);
+        scheduleNextPoll(relayFallbackPollDelayMs(1));
+        scheduleRelaySocketReconnect("socket-closed");
       };
-      relaySocket.onerror = function () {};
+      socket.onerror = function () {};
     }
 
     function processRelaySocketQueue() {
@@ -4583,8 +5171,14 @@
       } catch (e) { appendLog("补交结果仍失败：" + (e.message || e)); }
     }
 
+    function relayFallbackPollDelayMs(failures) {
+      if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) return 60000;
+      var count = Math.max(0, Number(failures) || 0);
+      return Math.min(10000, 1500 * Math.pow(2, Math.min(3, count)));
+    }
+
     async function pollOnce() {
-      if (isExecuting) { scheduleNextPoll(1500); return; }
+      if (isExecuting) { scheduleNextPoll(relayFallbackPollDelayMs()); return; }
       try {
         await retryLastResult();
         var pendingQuery = new URLSearchParams();
@@ -4595,7 +5189,7 @@
         consecutiveFailures = 0;
         setAiBadge(true);
         setAiStatus("已连接：等待 AI 任务...");
-        if (resp.status === 204) { scheduleNextPoll(500); return; }
+        if (resp.status === 204) { scheduleNextPoll(relayFallbackPollDelayMs()); return; }
         if (!resp.ok) throw new Error("轮询失败 HTTP " + resp.status);
         isExecuting = true;
         const payload = await resp.json();
@@ -4611,13 +5205,13 @@
         await executeJob(payload);
         clearExecutionWatchdog();
         isExecuting = false;
-        scheduleNextPoll(500);
+        scheduleNextPoll(relayFallbackPollDelayMs());
       } catch (error) {
         consecutiveFailures += 1;
         clearExecutionWatchdog();
         isExecuting = false;
         setAiBadge(false);
-        const delay = consecutiveFailures >= 3 ? 1500 : 500;
+        const delay = relayFallbackPollDelayMs(consecutiveFailures);
         setAiStatus("连接异常：" + (error.message || error) + "\n" + delay + "ms 后重试。");
         scheduleNextPoll(delay);
       }
@@ -6079,7 +6673,6 @@
       }
 
       if (message.type === "GET_CLEANUP_PROVIDER_PREFERENCE_RESULT") {
-        cleanupProviderPreferenceLoaded = true;
         cleanupPreferredProviderId = message.providerId || cleanupProviderSelect.value || "codex";
         cleanupProviderSelect.value = cleanupPreferredProviderId;
         renderCleanupProviderStatus();
@@ -6175,6 +6768,14 @@
 
       // 本地 MCP Companion 的 _RESULT 回传
       if (message.type && message.type.endsWith("_RESULT") && message.type !== "EXPORT_IMAGES_TO_UNITY_RESULT") {
+        if (!executingRequestId || message.requestId !== executingRequestId) {
+          appendLog("收到晚到或非当前任务结果，已回传 Relay 但忽略晚到状态覆盖：" + (message.requestId || "-"), true);
+          (async function () {
+            try { await postResult(message.requestId, message.result || {}); }
+            catch (error) { appendLog("晚到任务结果回传失败：" + (error.message || error), true); }
+          })();
+          return;
+        }
         isExecuting = false;
         clearExecutionWatchdog();
         executingRequestId = "";
