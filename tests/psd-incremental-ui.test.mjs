@@ -21,6 +21,37 @@ test("incremental apply is gated by an explicit modal confirmation", () => {
   assert.match(ui, /Layer ID 重合/);
 });
 
+test("polling stops for every preview terminal state", () => {
+  assert.match(ui, /PSD_PREVIEW_TERMINAL_STATUSES/);
+  for (const status of [
+    "preview-ready", "preview-blocked", "preview-no-changes", "preview-baseline-required",
+  ]) {
+    assert.match(ui, new RegExp(status));
+  }
+});
+
+test("confirmation is enabled only for preview-ready", () => {
+  assert.match(ui, /preview\.status === "preview-ready"/);
+  assert.match(ui, /confirmPsdIncrementalBtn\.disabled = !canApply/);
+  assert.match(ui, /preview-no-changes/);
+  assert.match(ui, /没有可同步的 PSD 变化/);
+});
+
+test("baseline adoption uses a distinct button and endpoint", () => {
+  assert.match(ui, /id="adoptPsdBaselineBtn"/);
+  assert.match(ui, /function adoptPsdIncrementalBaseline/);
+  assert.match(ui, /\/adopt-baseline/);
+});
+
+test("preview renders category totals and before-after field rows", () => {
+  for (const field of ["position", "size", "rotation", "display", "textStyle", "nineSlice"]) {
+    assert.match(ui, new RegExp(field));
+  }
+  assert.match(ui, /change\.before/);
+  assert.match(ui, /change\.after/);
+  assert.match(ui, /change\.delta/);
+});
+
 test("updated plugin UI script remains syntactically valid", () => {
   const script = ui.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
   assert.ok(script.length > 0);

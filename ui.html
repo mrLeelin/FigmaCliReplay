@@ -1138,6 +1138,7 @@
       </details>
       <div class="button-row">
         <button class="secondary" id="cancelPsdIncrementalBtn" type="button">取消</button>
+        <button class="secondary" id="adoptPsdBaselineBtn" type="button" hidden>采用当前 PSD 作为同步基线</button>
         <button id="confirmPsdIncrementalBtn" type="button">确认增量更新</button>
       </div>
     </section>
@@ -1210,9 +1211,11 @@
     const aiPromptPsdDropZone = document.getElementById("aiPromptPsdDropZone");
     const psdWindowDropOverlay = document.getElementById("psdWindowDropOverlay");
     const psdIncrementalDialog = document.getElementById("psdIncrementalDialog");
+    const psdIncrementalDialogTitle = document.getElementById("psdIncrementalDialogTitle");
     const psdIncrementalDialogSummary = document.getElementById("psdIncrementalDialogSummary");
     const psdIncrementalDialogDetails = document.getElementById("psdIncrementalDialogDetails");
     const cancelPsdIncrementalBtn = document.getElementById("cancelPsdIncrementalBtn");
+    const adoptPsdBaselineBtn = document.getElementById("adoptPsdBaselineBtn");
     const confirmPsdIncrementalBtn = document.getElementById("confirmPsdIncrementalBtn");
     const aiPromptPsdFileBox = document.getElementById("aiPromptPsdFileBox");
     const generateAiPromptBtn = document.getElementById("generateAiPromptBtn");
@@ -1491,6 +1494,22 @@
     let pendingPsdImportSelectionResolve = null;
     let pendingPsdImportSelectionReject = null;
     let activePsdIncrementalPreview = null;
+    var PSD_PREVIEW_TERMINAL_STATUSES = new Set([
+      "preview-ready",
+      "preview-blocked",
+      "preview-no-changes",
+      "preview-baseline-required"
+    ]);
+    var PSD_DIFF_CATEGORIES = [
+      ["content", "图像内容"],
+      ["textContent", "文字内容"],
+      ["position", "位置"],
+      ["size", "尺寸"],
+      ["rotation", "旋转"],
+      ["display", "显隐/透明度/混合/约束"],
+      ["textStyle", "文字样式"],
+      ["nineSlice", "九宫切片"]
+    ];
     let prefabImportBusy = false;
     let prefabImportTaskId = "";
     let prefabImportPollTimer = null;
@@ -2848,6 +2867,9 @@
       psdImportQueueActive = true;
       var total = files.length;
       var failed = 0;
+      var noChanges = 0;
+      var baselineAdopted = 0;
+      var cancelled = 0;
       var selection = await querySelectionForPsdImport();
       var dropMode = resolvePsdDropMode(selection);
       if (dropMode.mode === "incremental-preview" && total !== 1) {
@@ -2857,13 +2879,16 @@
       appendLog("PSD 批量导入开始：共 " + total + " 个文件");
       for (var i = 0; i < total; i++) {
         try {
-          await startPsdImportFromDroppedFile(files[i], {
+          var taskResult = await startPsdImportFromDroppedFile(files[i], {
             index: i + 1,
             total: total,
             fileName: files[i].name || "",
             selection: selection,
             dropMode: dropMode
           });
+          if (taskResult && taskResult.status === "preview-no-changes") noChanges += 1;
+          else if (taskResult && taskResult.status === "baseline-adopted") baselineAdopted += 1;
+          else if (taskResult && taskResult.status === "cancelled") cancelled += 1;
         } catch (error) {
           failed += 1;
           var message = error && error.message ? error.message : String(error);
@@ -2874,6 +2899,15 @@
       if (failed > 0) {
         setAiPromptStatus("PSD 批量导入完成，失败 " + failed + "/" + total + "。");
         appendLog("PSD 批量导入完成：成功 " + (total - failed) + "，失败 " + failed);
+      } else if (baselineAdopted > 0) {
+        setAiPromptStatus("PSD 同步基线已保存，Figma 画布内容和布局未发生变化。");
+        appendLog("PSD 同步基线认领完成：" + baselineAdopted + " 个文件，画布未修改。");
+      } else if (noChanges > 0) {
+        setAiPromptStatus("没有可同步的 PSD 变化，Figma 未执行写入。");
+        appendLog("PSD 增量检查完成：" + noChanges + " 个文件没有变化。");
+      } else if (cancelled > 0) {
+        setAiPromptStatus("已取消 PSD 增量操作，Figma 未发生变化。");
+        appendLog("PSD 增量操作已取消：" + cancelled + " 个文件。");
       } else {
         setAiPromptStatus("PSD 批量导入完成：" + total + "/" + total);
         appendLog("PSD 批量导入完成：" + total + "/" + total);
@@ -3043,7 +3077,7 @@
         }
         var task = data.task || {};
         renderPsdImportTaskStatus(task);
-        if (task.status === "preview-ready") {
+        if (PSD_PREVIEW_TERMINAL_STATUSES.has(task.status)) {
           psdImportBusy = false;
           clearPsdImportPollTimer();
           showPsdIncrementalPreview(task.preview, {
@@ -3052,6 +3086,18 @@
             targetName: task.target && task.target.targetName || "",
             targetType: task.target && task.target.targetType || ""
           });
+          if (task.status === "preview-no-changes") {
+            finishPsdImportTaskPromise(null, task);
+          }
+          return;
+        }
+        if (task.status === "baseline-adopted") {
+          psdImportBusy = false;
+          clearPsdImportPollTimer();
+          activePsdIncrementalPreview = null;
+          setAiPromptStatus("PSD 同步基线已保存，Figma 画布内容和布局未发生变化。");
+          appendLog("PSD 同步基线已保存，画布未修改。");
+          finishPsdImportTaskPromise(null, task);
           return;
         }
         if (task.status === "completed" || task.status === "error") {
@@ -3097,8 +3143,10 @@
       var text = "PSD 导入：" + context + "\n" + stage + " (" + percent + "%)";
       if (task.status === "completed") {
         text = "PSD 导入完成：" + context + " (100%)";
-      } else if (task.status === "preview-ready") {
-        text = "PSD 增量差异已生成：" + context + "，等待确认";
+      } else if (PSD_PREVIEW_TERMINAL_STATUSES.has(task.status)) {
+        text = "PSD 增量预览已生成：" + context + "（" + task.status + "）";
+      } else if (task.status === "baseline-adopted") {
+        text = "PSD 同步基线已保存：" + context + "，画布未修改";
       } else if (task.status === "error") {
         text = "PSD 导入失败：" + context + " (" + percent + "%)\n" + (task.error || "unknown error");
       }
@@ -3122,6 +3170,7 @@
       activePsdIncrementalPreview = {
         taskId: String(capturedTarget && capturedTarget.taskId || psdImportTaskId || ""),
         baselineFingerprint: String(preview.baselineFingerprint || ""),
+        status: String(preview.status || "preview-blocked"),
         target: {
           fileName: String(capturedTarget && capturedTarget.fileName || ""),
           name: String(capturedTarget && capturedTarget.targetName || preview.targetName || ""),
@@ -3131,12 +3180,23 @@
       var summaryLines = [
         "PSD：" + activePsdIncrementalPreview.target.fileName,
         "目标：" + (activePsdIncrementalPreview.target.name || "未命名") + "（" + (activePsdIncrementalPreview.target.type || "FRAME/COMPONENT") + "）",
-        "替换 " + Number(summary.changed || 0)
+        "受影响 " + Number(summary.affected || summary.changed || 0)
           + " · 新增 " + Number(summary.added || 0)
           + " · 保留缺失 " + Number(summary.missing || 0)
           + " · 未变化 " + Number(summary.unchanged || 0)
-          + " · 冲突 " + Number(summary.conflicts || 0)
+          + " · 冲突/不支持 " + Number(summary.conflicts || 0)
+          + " · 待认领基线 " + Number(summary.baselineRequired || 0),
+        "同步字段：" + PSD_DIFF_CATEGORIES.map(function (definition) {
+          return definition[1] + " " + Number(summary[definition[0]] || 0);
+        }).join(" · ")
       ];
+      if (preview.status === "preview-no-changes") {
+        summaryLines.push("没有可同步的 PSD 变化，Figma 不会执行写入。");
+      } else if (preview.status === "preview-blocked") {
+        summaryLines.push("存在无法安全同步的字段或结构冲突，本次不会写入 Figma。");
+      } else if (preview.status === "preview-baseline-required") {
+        summaryLines.push("这些旧节点尚无 PSD v3 源状态；可仅保存同步基线，不修改画布内容和布局。");
+      }
       warnings.forEach(function (warning) {
         if (warning && warning.kind === "source-file-renamed") {
           summaryLines.push("⚠ PSD 文件名已变化：" + warning.expected + " → " + warning.actual
@@ -3146,17 +3206,37 @@
       psdIncrementalDialogSummary.textContent = summaryLines.join("\n");
       psdIncrementalDialogDetails.innerHTML = renderPsdIncrementalWarnings(warnings)
         + renderPsdIncrementalGroups(preview.groups || {});
-      confirmPsdIncrementalBtn.disabled = Number(summary.conflicts || 0) > 0 || !activePsdIncrementalPreview.baselineFingerprint;
+      var canApply = preview.status === "preview-ready"
+        && preview.canApply === true
+        && !!activePsdIncrementalPreview.baselineFingerprint;
+      confirmPsdIncrementalBtn.disabled = !canApply;
+      confirmPsdIncrementalBtn.hidden = preview.status !== "preview-ready";
+      adoptPsdBaselineBtn.hidden = preview.status !== "preview-baseline-required";
+      adoptPsdBaselineBtn.disabled = preview.status !== "preview-baseline-required";
+      cancelPsdIncrementalBtn.disabled = false;
+      cancelPsdIncrementalBtn.textContent = preview.status === "preview-ready"
+        || preview.status === "preview-baseline-required" ? "取消" : "关闭";
+      psdIncrementalDialogTitle.textContent = preview.status === "preview-ready"
+        ? "确认 PSD 增量更新"
+        : preview.status === "preview-baseline-required"
+          ? "建立 PSD 同步基线"
+          : preview.status === "preview-no-changes"
+            ? "PSD 已是最新状态"
+            : "PSD 增量预览被阻止";
       psdIncrementalDialog.hidden = false;
       cancelPsdIncrementalBtn.focus();
-      appendLog("PSD 增量预览：替换 " + Number(summary.changed || 0) + "，新增 " + Number(summary.added || 0) + "，冲突 " + Number(summary.conflicts || 0));
+      appendLog("PSD 增量预览：受影响 " + Number(summary.affected || summary.changed || 0)
+        + "，新增 " + Number(summary.added || 0)
+        + "，冲突 " + Number(summary.conflicts || 0)
+        + "，状态 " + String(preview.status || "unknown"));
     }
 
     function renderPsdIncrementalGroups(groups) {
       var definitions = [
-        ["changed", "将替换"],
+        ["changed", "将同步"],
         ["added", "新增待整理"],
         ["missing", "PSD 已缺失但保留"],
+        ["baselineRequired", "待认领同步基线"],
         ["unchanged", "未变化"],
         ["conflicts", "冲突"]
       ];
@@ -3165,10 +3245,42 @@
         if (items.length === 0) return "";
         var rows = items.map(function (item) {
           var label = item.targetName || item.sourceName || item.name || item.message || item.kind || item.layerId || "未命名图层";
-          return "<li>" + escapeHtml(label) + "</li>";
+          var layerId = item.layerId ? " · Layer ID " + item.layerId : "";
+          var changes = Array.isArray(item.changes) ? item.changes : [];
+          var changeRows = changes.map(function (change) {
+            var delta = Number(change.delta);
+            var deltaText = change.delta !== null && Number.isFinite(delta)
+              ? " (delta " + (delta >= 0 ? "+" : "") + formatPsdDiffNumber(delta) + ")"
+              : "";
+            return "<li><code>" + escapeHtml(String(change.path || "unknown")) + "</code>: "
+              + escapeHtml(formatPsdDiffValue(change.before)) + " → "
+              + escapeHtml(formatPsdDiffValue(change.after)) + escapeHtml(deltaText) + "</li>";
+          }).join("");
+          return "<li><span>" + escapeHtml(label + layerId) + "</span>"
+            + (changeRows ? '<ul class="psd-diff-list">' + changeRows + "</ul>" : "")
+            + "</li>";
         }).join("");
         return '<div class="psd-diff-group"><strong>' + escapeHtml(definition[1]) + "（" + items.length + '）</strong><ul class="psd-diff-list">' + rows + "</ul></div>";
       }).join("");
+    }
+
+    function formatPsdDiffNumber(value) {
+      return String(Math.round(Number(value) * 10000) / 10000);
+    }
+
+    function formatPsdDiffValue(value) {
+      if (value === undefined) return "未设置";
+      if (value === null) return "null";
+      if (typeof value === "string") return value || '""';
+      if (typeof value === "number") return formatPsdDiffNumber(value);
+      if (typeof value === "boolean") return value ? "true" : "false";
+      var text;
+      try {
+        text = JSON.stringify(value);
+      } catch (error) {
+        text = String(value);
+      }
+      return text.length > 180 ? text.slice(0, 177) + "..." : text;
     }
 
     function renderPsdIncrementalWarnings(warnings) {
@@ -3189,6 +3301,39 @@
       setAiPromptStatus("已取消 PSD 增量更新，Figma 未发生变化。");
       appendLog("已取消 PSD 增量更新：" + targetName);
       finishPsdImportTaskPromise(null, { status: "cancelled" });
+    }
+
+    async function adoptPsdIncrementalBaseline() {
+      var active = activePsdIncrementalPreview;
+      if (!active || adoptPsdBaselineBtn.disabled) return;
+      adoptPsdBaselineBtn.disabled = true;
+      cancelPsdIncrementalBtn.disabled = true;
+      try {
+        var response = await fetchWithTimeout(
+          relayEndpoint("/psd-to-figma/import/" + encodeURIComponent(active.taskId) + "/adopt-baseline"),
+          {
+            method: "POST",
+            headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ baselineFingerprint: active.baselineFingerprint })
+          },
+          30000
+        );
+        var data = await response.json().catch(function () { return {}; });
+        if (!response.ok || data.ok === false) {
+          throw new Error(data.error || ("HTTP " + response.status));
+        }
+        psdIncrementalDialog.hidden = true;
+        psdImportBusy = true;
+        renderPsdImportTaskStatus(data.task);
+        pollPsdImportTaskStatus();
+      } catch (error) {
+        var message = error && error.message ? error.message : String(error);
+        psdIncrementalDialogSummary.textContent += "\n基线认领失败：" + message;
+        adoptPsdBaselineBtn.disabled = false;
+        appendLog("PSD 同步基线认领失败：" + message, true);
+      } finally {
+        cancelPsdIncrementalBtn.disabled = false;
+      }
     }
 
     async function confirmPsdIncrementalUpdate() {
@@ -7130,6 +7275,7 @@
     document.addEventListener("dragleave", handleAiPromptPsdWindowDragLeave);
     document.addEventListener("drop", handleAiPromptPsdWindowDrop);
     cancelPsdIncrementalBtn.addEventListener("click", cancelPsdIncrementalUpdate);
+    adoptPsdBaselineBtn.addEventListener("click", adoptPsdIncrementalBaseline);
     confirmPsdIncrementalBtn.addEventListener("click", confirmPsdIncrementalUpdate);
     window.addEventListener("pagehide", stopAiCleanupOnPanelClose);
     window.addEventListener("beforeunload", stopAiCleanupOnPanelClose);
