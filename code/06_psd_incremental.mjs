@@ -164,9 +164,26 @@ export function computePsdGeometryTarget(input) {
   };
 }
 
+export function buildPsdLayerMutationPlan(pair) {
+  var categories = Array.from(new Set(pair.changes.map(function (change) {
+    return change.category;
+  }))).sort();
+  return {
+    layerId: normalizePsdLayerId(pair.source.layerId),
+    nodeId: String(pair.target.nodeId || ""),
+    source: pair.source,
+    target: pair.target,
+    categories: categories,
+    changedPaths: pair.changes.map(function (change) { return change.path; }).sort(),
+    baseline: normalizePsdSourceState({ sourceState: pair.target.sourceState }),
+    incoming: normalizePsdSourceState(pair.source),
+  };
+}
+
 export function psdOwnershipForMode(mode) {
   if (mode === "text") return "text-content";
   if (mode === "image") return "image-content";
+  if (mode === "nine-slice") return "nine-slice-content";
   return "protected";
 }
 
@@ -174,6 +191,9 @@ export function validatePsdOwnedTarget(ownership, sourceMode, nodeType, textAuto
   var expected = psdOwnershipForMode(sourceMode);
   if (expected === "protected") return "protected-source-mode";
   if (ownership !== expected) return "ownership-mismatch";
+  if (expected === "nine-slice-content") {
+    return nodeType === "FRAME" ? "" : "unsupported-nine-slice-target";
+  }
   if (expected === "text-content") {
     if (nodeType !== "TEXT") return "unsupported-text-target";
     if (textAutoResize && textAutoResize !== "NONE") return "unsafe-text-auto-resize";

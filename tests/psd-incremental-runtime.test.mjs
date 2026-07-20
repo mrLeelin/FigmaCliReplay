@@ -31,3 +31,37 @@ test("stored baseline parse failure is explicit", () => {
   assert.match(utils, /invalid-stored-source-state/);
   assert.doesNotMatch(utils, /sourceState\s*=\s*buildPsdLiveNodeState/);
 });
+
+test("transaction captures and restores every mutable PSD-owned field", () => {
+  for (const field of [
+    "x", "y", "width", "height", "rotation", "visible", "opacity", "blendMode",
+    "constraints", "characters", "fontName", "fontSize", "lineHeight",
+    "textAlignHorizontal", "fills", "strokes", "strokeWeight", "strokeAlign", "effects",
+  ]) {
+    assert.match(utils, new RegExp("\\b" + field + "\\b"));
+  }
+  assert.match(utils, /capturePsdMutationRollback/);
+  assert.match(utils, /rollbackPsdIncrementalMutation/);
+  assert.match(utils, /verifyPsdAppliedFields/);
+  assert.match(utils, /capturePsdStructuralSnapshot/);
+  assert.match(utils, /verifyPsdStructuralSnapshot/);
+});
+
+test("organized identity and hierarchy are structural invariants", () => {
+  assert.match(utils, /parentId/);
+  assert.match(utils, /siblingIndex/);
+  assert.match(utils, /componentIdentity/);
+  assert.doesNotMatch(utils, /pair\.target\.node\.name\s*=/);
+  assert.doesNotMatch(utils, /appendChild\(pair\.target\.node\)/);
+});
+
+test("added PSD layers verify complete source state before commit", () => {
+  const start = utils.indexOf("function verifyPsdAddedNodes(");
+  const end = utils.indexOf("function clonePsdValue(", start);
+  const verification = utils.slice(start, end);
+
+  assert.match(verification, /normalizePsdSourceState\(item\.source\)/);
+  assert.match(verification, /psdSourceStateHash/);
+  assert.match(verification, /readStoredPsdSourceState\(node\)/);
+  assert.match(verification, /stablePsdSourceStateJson/);
+});

@@ -4,7 +4,9 @@ import test from "node:test";
 
 import {
   buildPsdIncrementalDiff,
+  buildPsdLayerMutationPlan,
   computePsdGeometryTarget,
+  diffPsdSourceStates,
   hashPsdSourceState,
   measurePsdLayerIdentity,
   normalizePsdLayerId,
@@ -181,6 +183,21 @@ test("zero baseline size blocks geometry planning", () => {
   }), /invalid-baseline-size/);
 });
 
+test("mutation plan names every writable category for one layer", () => {
+  const baseline = state();
+  const incoming = state({
+    geometry: { x: 600, y: 1200, width: 726, height: 280, rotation: 10 },
+    display: { ...baseline.display, visible: false, opacity: 0.5 },
+    content: { contentHash: "new" },
+  });
+  const plan = buildPsdLayerMutationPlan({
+    source: { layerId: "406", sourceState: incoming },
+    target: { sourceState: baseline, nodeId: "n" },
+    changes: diffPsdSourceStates(baseline, incoming).changes,
+  });
+  assert.deepEqual(plan.categories, ["content", "display", "position", "rotation", "size"]);
+});
+
 test("duplicate stored layer ids are blocking conflicts", () => {
   const diff = buildPsdIncrementalDiff(
     [{ layerId: "10", nodeId: "a" }, { layerId: "10", nodeId: "b" }],
@@ -230,12 +247,12 @@ test("Figma runtime exposes preview/apply without overwriting organized node ide
 test("ownership is an executable write boundary", () => {
   assert.equal(psdOwnershipForMode("image"), "image-content");
   assert.equal(psdOwnershipForMode("text"), "text-content");
-  assert.equal(psdOwnershipForMode("nine-slice"), "protected");
+  assert.equal(psdOwnershipForMode("nine-slice"), "nine-slice-content");
   assert.equal(validatePsdOwnedTarget("image-content", "image", "RECTANGLE", ""), "");
   assert.equal(validatePsdOwnedTarget("text-content", "text", "TEXT", "NONE"), "");
   assert.equal(validatePsdOwnedTarget("image-content", "text", "TEXT", "NONE"), "ownership-mismatch");
   assert.equal(validatePsdOwnedTarget("text-content", "text", "TEXT", "WIDTH_AND_HEIGHT"), "unsafe-text-auto-resize");
-  assert.equal(validatePsdOwnedTarget("protected", "nine-slice", "FRAME", ""), "protected-source-mode");
+  assert.equal(validatePsdOwnedTarget("nine-slice-content", "nine-slice", "FRAME", ""), "");
 });
 
 test("document identity uses Photoshop layer overlap instead of filename alone", () => {
