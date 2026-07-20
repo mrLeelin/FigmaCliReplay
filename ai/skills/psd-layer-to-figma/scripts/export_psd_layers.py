@@ -83,6 +83,24 @@ TEXT_FONT_FALLBACK_CANDIDATES = [
     {"family": "Fredoka One", "style": "Regular"},
 ]
 DESCRIPTOR_NUMBER_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+FIGMA_BLEND_MODE_BY_PSD_KEY = {
+    "norm": "NORMAL",
+    "mul ": "MULTIPLY",
+    "scrn": "SCREEN",
+    "over": "OVERLAY",
+    "dark": "DARKEN",
+    "lite": "LIGHTEN",
+    "idiv": "COLOR_DODGE",
+    "div ": "COLOR_BURN",
+    "hLit": "HARD_LIGHT",
+    "sLit": "SOFT_LIGHT",
+    "diff": "DIFFERENCE",
+    "smud": "EXCLUSION",
+    "hue ": "HUE",
+    "sat ": "SATURATION",
+    "colr": "COLOR",
+    "lum ": "LUMINOSITY",
+}
 
 
 def _u16(data: bytes, offset: int) -> int:
@@ -649,6 +667,124 @@ def _extract_engine_number(engine_text: str, name: str) -> Optional[float]:
     return _parse_descriptor_float(match.group(1))
 
 
+def _normalize_text_rotation(transform: Optional[Dict[str, Any]]) -> Optional[float]:
+    matrix = transform.get("matrix") if isinstance(transform, dict) else None
+    if not isinstance(matrix, list) or len(matrix) != 6:
+        return None
+    try:
+        xx, xy, yx, yy = (float(matrix[index]) for index in range(4))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (xx, xy, yx, yy)):
+        return None
+    length_x = math.hypot(xx, yx)
+    length_y = math.hypot(xy, yy)
+    if length_x <= 0.0 or length_y <= 0.0:
+        return None
+    normalized_dot = (xx * xy + yx * yy) / (length_x * length_y)
+    if abs(normalized_dot) > 1e-6:
+        return None
+    return round(math.degrees(math.atan2(yx, xx)), 6)
+
+
+def _normalize_opacity(value: object) -> float:
+    try:
+        opacity = float(value or 0)
+    except (TypeError, ValueError):
+        opacity = 0.0
+    if opacity > 1.0:
+        opacity /= 255.0
+    return max(0.0, min(1.0, opacity))
+
+
+def _build_psd_source_state(
+    *,
+    layer: Dict[str, object],
+    mode: str,
+    content_hash: str,
+    constraints: Dict[str, object],
+    text_info: Optional[Dict[str, Any]],
+    nine_slice_info: Optional[Dict[str, Any]],
+) -> Dict[str, object]:
+    blend_key = str(layer.get("blend", "norm"))
+    blend_mode = FIGMA_BLEND_MODE_BY_PSD_KEY.get(blend_key)
+    unsupported: List[Dict[str, object]] = []
+    if blend_mode is None:
+        unsupported.append({"path": "display.blendMode", "value": blend_key})
+
+    text_transform = text_info.get("textTransform") if isinstance(text_info, dict) else None
+    rotation = _normalize_text_rotation(text_transform)
+    if mode == "text" and text_transform and rotation is None:
+        unsupported.append({
+            "path": "geometry.rotation",
+            "value": text_transform.get("matrix"),
+        })
+
+    tag_payloads = layer.get("_tagPayloads", {})
+    if mode != "text" and isinstance(tag_payloads, dict):
+        for tag in ("SoLd", "PlLd", "PlcL"):
+            payload = tag_payloads.get(tag)
+            if isinstance(payload, bytes):
+                unsupported.append({
+                    "path": "geometry.rotation",
+                    "value": {
+                        "tag": tag,
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    },
+                })
+                break
+
+    text_state = None
+    if mode == "text" and text_info:
+        effects = text_info.get("effects") if isinstance(text_info.get("effects"), dict) else {}
+        figma_text = text_info.get("figma") if isinstance(text_info.get("figma"), dict) else {}
+        text_state = {
+            "characters": str(text_info.get("characters", "")),
+            "fontFamily": text_info.get("fontFamily"),
+            "fontFallback": figma_text.get("fontFallbackCandidates", []),
+            "fontSize": text_info.get("fontSize"),
+            "effectiveFontSize": text_info.get("effectiveFontSize"),
+            "leading": text_info.get("leading"),
+            "lineHeightMode": text_info.get("lineHeightMode"),
+            "textAlignHorizontal": text_info.get("textAlignHorizontal"),
+            "fillColor": text_info.get("fillColor"),
+            "stroke": effects.get("stroke"),
+            "dropShadow": effects.get("dropShadow"),
+        }
+
+    nine_slice_state = None
+    if mode == "nine-slice" and nine_slice_info:
+        nine_slice_state = {
+            "contentHash": str(content_hash or ""),
+            "sliceType": nine_slice_info.get("sliceType"),
+            "border": nine_slice_info.get("border", {}),
+            "slices": nine_slice_info.get("slices", []),
+        }
+
+    return {
+        "version": 3,
+        "layerId": str(layer.get("layerId") or ""),
+        "mode": mode,
+        "geometry": {
+            "x": float(layer.get("x", 0)),
+            "y": float(layer.get("y", 0)),
+            "width": float(layer.get("width", 0)),
+            "height": float(layer.get("height", 0)),
+            "rotation": rotation,
+        },
+        "display": {
+            "visible": layer.get("visible", True) is not False,
+            "opacity": _normalize_opacity(layer.get("opacity", 255)),
+            "blendMode": blend_mode,
+            "constraints": constraints,
+        },
+        "content": {"contentHash": str(content_hash or "")},
+        "text": text_state,
+        "nineSlice": nine_slice_state,
+        "unsupported": unsupported,
+    }
+
+
 def _extract_text_transform_from_tysh(payload: bytes) -> Optional[Dict[str, Any]]:
     """读取 TySh 开头的文本变换矩阵，用于还原 Photoshop 中被缩放后的视觉字号。"""
     if len(payload) < 50:
@@ -667,12 +803,14 @@ def _extract_text_transform_from_tysh(payload: bytes) -> Optional[Dict[str, Any]
     scale_y = math.hypot(xy, yy)
     if scale_x <= 0.0 or scale_y <= 0.0:
         return None
-    return {
+    transform = {
         "version": version,
         "matrix": [xx, xy, yx, yy, tx, ty],
         "scaleX": scale_x,
         "scaleY": scale_y,
     }
+    transform["rotation"] = _normalize_text_rotation(transform)
+    return transform
 
 
 def _build_effective_text_size(font_size: Optional[float], transform: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -2169,7 +2307,7 @@ def _parse_layer_records(data: bytes) -> Tuple[Dict[str, int], List[Dict[str, ob
             pos += 12
             payload = data[pos:pos + tag_len]
             tags.append(key)
-            if key in ("TySh", "lfx2", "lfx ", "lyid"):
+            if key in ("TySh", "lfx2", "lfx ", "lyid", "SoLd", "PlLd", "PlcL"):
                 tag_payloads[key] = payload
             if key == "luni" and len(payload) >= 4:
                 char_count = struct.unpack(">I", payload[:4])[0]
@@ -2309,6 +2447,14 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
         for warning in semantic_info["normalizationWarnings"]:
             manifest_warnings.append(f"{layer['index']}:{layer['name']}: {warning}")
 
+        constraints = _infer_constraints(
+            float(layer["x"]),
+            float(layer["y"]),
+            float(width),
+            float(height),
+            float(canvas["width"]),
+            float(canvas["height"]),
+        )
         layer_entry = {
             "index": layer["index"],
             "layerId": layer.get("layerId"),
@@ -2332,16 +2478,17 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
             "path": png_path.as_posix(),
             "bytes": png_path.stat().st_size,
             "contentHash": content_hash,
-            "constraints": _infer_constraints(
-                float(layer["x"]),
-                float(layer["y"]),
-                float(width),
-                float(height),
-                float(canvas["width"]),
-                float(canvas["height"]),
-            ),
+            "constraints": constraints,
             "warnings": layer_warnings,
         }
+        layer_entry["sourceState"] = _build_psd_source_state(
+            layer=layer,
+            mode=mode,
+            content_hash=content_hash,
+            constraints=constraints,
+            text_info=text_info,
+            nine_slice_info=nine_slice_info,
+        )
         if common_component_info:
             layer_entry["common"] = common_component_info
         if component_search_info:
@@ -2643,6 +2790,7 @@ def _generate_summary(
             "idx": idx, "name": layer["name"], "mode": mode,
             "layerId": layer.get("layerId"),
             "contentHash": layer.get("contentHash", ""),
+            "sourceState": layer.get("sourceState"),
             "rawPsdLayerName": layer.get("rawPsdLayerName", layer["name"]),
             "normalizedLayerName": layer.get("normalizedLayerName", layer["name"]),
             "semanticMode": layer.get("semanticMode", mode),

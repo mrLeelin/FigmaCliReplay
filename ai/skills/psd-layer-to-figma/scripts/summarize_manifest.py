@@ -41,6 +41,7 @@ def summarize(manifest_path):
         mode = layer.get("mode", "image")
         base = {
             "idx": layer["index"],
+            "layerId": layer.get("layerId"),
             "name": layer["name"],
             "rawPsdLayerName": layer.get("rawPsdLayerName", layer.get("name", "")),
             "normalizedLayerName": layer.get("normalizedLayerName", layer.get("name", "")),
@@ -53,8 +54,11 @@ def summarize(manifest_path):
             "h": layer.get("height", 0),
             "opacity": layer.get("opacity", 255),
             "visible": layer.get("visible", True),
+            "blend": layer.get("blend", "norm"),
             "path": layer.get("path", ""),
+            "contentHash": layer.get("contentHash", ""),
             "constraints": layer.get("constraints", {}),
+            "sourceState": layer.get("sourceState"),
         }
 
         if mode == "text":
@@ -64,6 +68,7 @@ def summarize(manifest_path):
             shadow = effects.get("dropShadow")
             text_layers.append({
                 **base,
+                "text": txt,
                 "chars": txt.get("characters", ""),
                 "fontSize": txt.get("fontSize", 0),
                 "leading": txt.get("leading", 0),
@@ -81,7 +86,7 @@ def summarize(manifest_path):
                     "enabled": shadow.get("enabled", False),
                 } if shadow else None,
                 "fontFallback": [
-                    f.get("family", "") for f in
+                    fallback.get("family", "") for fallback in
                     txt.get("figma", {}).get("fontFallbackCandidates", [])[:3]
                 ],
             })
@@ -99,6 +104,7 @@ def summarize(manifest_path):
             ns = layer.get("nineSlice", {})
             nine_slice_layers.append({
                 **base,
+                "nineSlice": ns,
                 "border": ns.get("border", {}),
                 "inferredBorder": ns.get("inferredBorder", False),
                 "inferMethod": ns.get("inferMethod", ""),
