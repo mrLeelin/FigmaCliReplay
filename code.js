@@ -1,4 +1,4 @@
-// Figma MCP Relay build #226
+// Figma MCP Relay build #231
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma MCP Relay build #226
+// Figma MCP Relay build #231
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (226 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 226)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "226" });
+// DIAG: 插件启动标记 (231 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 231)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "231" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -430,7 +430,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "226",
+        build: "231",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -530,11 +530,16 @@ async function handleImportPsdJob(message) {
   state.importing = true;
   try {
     const mode = String(message.job && message.job.mode || "initial-import");
-    const result = mode === "incremental-preview"
-      ? await previewPsdIncrementalUpdate(message.job, message.assets || [])
-      : mode === "incremental-apply"
-        ? await applyPsdIncrementalUpdate(message.job, message.assets || [])
-        : await importPsdJob(message.job, message.assets || []);
+    let result;
+    if (mode === "incremental-preview") {
+      result = await previewPsdIncrementalUpdate(message.job, message.assets || []);
+    } else if (mode === "incremental-baseline-adopt") {
+      result = await adoptPsdIncrementalBaseline(message.job, message.assets || []);
+    } else if (mode === "incremental-apply") {
+      result = await applyPsdIncrementalUpdate(message.job, message.assets || []);
+    } else {
+      result = await importPsdJob(message.job, message.assets || []);
+    }
     state.lastResult = result;
     figma.ui.postMessage({
       type: "IMPORT_PSD_RESULT",
@@ -543,6 +548,8 @@ async function handleImportPsdJob(message) {
     });
     if (mode === "incremental-preview") {
       figma.notify(result.canApply ? "PSD 增量差异已生成" : "PSD 增量更新存在冲突", { error: !result.canApply });
+    } else if (mode === "incremental-baseline-adopt") {
+      figma.notify(result.status === "baseline-adopted" ? "PSD 增量基线已采纳" : "PSD 增量基线未采纳", { error: result.status !== "baseline-adopted" });
     } else if (mode === "incremental-apply") {
       figma.notify(result.status === "applied" ? "PSD 增量更新完成" : "PSD 增量更新未执行", { error: result.status !== "applied" });
     } else {
@@ -10194,14 +10201,55 @@ async function importPsdJob(job, assets) {
 // 只读计算 PSD 增量差异；此阶段不得修改 Figma 文档。
 async function previewPsdIncrementalUpdate(job, assets) {
   const prepared = await preparePsdIncrementalUpdate(job, assets);
-  return buildPsdIncrementalResult(prepared, prepared.diff.canApply ? "preview-ready" : "preview-blocked");
+  return buildPsdIncrementalResult(prepared, prepared.diff.status);
+}
+
+// Adopt the current manifest as legacy source truth without changing canvas fields.
+async function adoptPsdIncrementalBaseline(job, assets) {
+  const prepared = await preparePsdIncrementalUpdate(job, assets);
+  const matched = prepared.diff.baselineRequired;
+  if (prepared.diff.conflicts.length > 0 || matched.length === 0) {
+    return buildPsdIncrementalResult(prepared, "baseline-adopt-blocked");
+  }
+  const protectedBefore = capturePsdProtectedSnapshot(prepared.target);
+  const nodeMetadataBefore = matched.map((pair) => ({
+    node: pair.target.node,
+    metadata: capturePsdLayerMetadata(pair.target.node)
+  }));
+  const rootMetadataBefore = capturePsdRootMetadata(prepared.target);
+  try {
+    for (const pair of matched) {
+      writeLayerMetadata(pair.target.node, pair.source, {});
+    }
+    writePsdRootMetadata(prepared.target, job, prepared.manifest);
+    const errors = verifyPsdProtectedSnapshot(protectedBefore);
+    if (errors.length > 0) {
+      throw new Error(errors.join("; "));
+    }
+    if (typeof figma.commitUndo === "function") {
+      figma.commitUndo();
+    }
+    return {
+      status: "baseline-adopted",
+      targetNodeId: prepared.target.id,
+      adoptedCount: matched.length,
+      warnings: prepared.context.warnings,
+      errors: []
+    };
+  } catch (error) {
+    for (const record of nodeMetadataBefore) {
+      writePluginData(record.node, record.metadata);
+    }
+    writePluginData(prepared.target, rootMetadataBefore);
+    throw error;
+  }
 }
 
 // 重新校验预览指纹后，仅替换 PSD 拥有的像素或文字内容。
 async function applyPsdIncrementalUpdate(job, assets) {
   const prepared = await preparePsdIncrementalUpdate(job, assets);
   const expectedFingerprint = String(job && job.baselineFingerprint || "");
-  if (!prepared.diff.canApply) {
+  if (prepared.diff.status !== "preview-ready") {
     return buildPsdIncrementalResult(prepared, "apply-blocked");
   }
   if (!expectedFingerprint || expectedFingerprint !== prepared.baselineFingerprint) {
@@ -10209,98 +10257,53 @@ async function applyPsdIncrementalUpdate(job, assets) {
       kind: "stale-preview",
       message: "Figma 节点或 PSD 内容在确认前发生了变化，请重新预览。"
     });
-    prepared.diff.summary.conflicts = prepared.diff.conflicts.length;
-    prepared.diff.canApply = false;
+    refreshPsdIncrementalDiffStatus(prepared.diff);
     return buildPsdIncrementalResult(prepared, "apply-blocked");
   }
 
-  const imagePaints = new Map();
-  for (const pair of prepared.diff.changed) {
-    if (pair.source.mode === "text") {
-      await figma.loadFontAsync(pair.target.node.fontName);
-    } else {
-      imagePaints.set(pair.source.layerId, await createImagePaint(pair.source, prepared.context, "FILL", null));
-    }
-  }
-  for (const item of prepared.diff.added) {
-    if (item.source.mode === "text") {
-      await loadBestFont(item.source, prepared.context);
-    } else {
-      await createImagePaint(item.source, prepared.context, "FILL", null);
-    }
-  }
-
-  let stagingFrame = null;
-  let createdStagingFrame = false;
-  let stagingExistingChildIds = new Set();
-  const createdNodes = [];
-  const rollbackRecords = [];
-  const rootMetadataBefore = capturePsdRootMetadata(prepared.target);
-  const protectedSnapshot = capturePsdProtectedSnapshot(prepared.target);
+  await preloadPsdMutationAssets(prepared);
+  const structureBefore = capturePsdStructuralSnapshot(prepared.target);
+  const rollbackRecords = prepared.plans.map((plan) => capturePsdMutationRollback(plan.target.node));
+  const addedTransaction = preparePsdAddedLayerTransaction();
+  prepared.rootMetadataBefore = capturePsdRootMetadata(prepared.target);
   try {
-    if (prepared.diff.added.length > 0) {
-      stagingFrame = findPsdIncrementalStagingFrame(prepared.target);
-      if (!stagingFrame) {
-        stagingFrame = createPsdIncrementalStagingFrame(prepared.target);
-        createdStagingFrame = true;
-      } else {
-        stagingExistingChildIds = new Set(stagingFrame.children.map((child) => child.id));
-      }
-      for (const item of prepared.diff.added) {
-        const node = await createLayerNode(stagingFrame, item.source, prepared.context);
-        if (node) {
-          createdNodes.push(node);
-          prepared.context.nodeByLayerIdx.set(String(item.source.idx), node.id);
-        }
-      }
-    }
-
-    for (const pair of prepared.diff.changed) {
-      const node = pair.target.node;
-      rollbackRecords.push(capturePsdContentRollback(node));
-      if (pair.target.ownership === "text-content") {
-        node.characters = String(pair.source.chars || "");
-      } else if (pair.target.ownership === "image-content") {
-        node.fills = replacePsdOwnedImageHash(node.fills, imagePaints.get(pair.source.layerId));
-      } else {
-        throw new Error(`PSD ownership 不允许写入节点 ${node.id}`);
-      }
-      writeLayerMetadata(node, pair.source, {});
-    }
-
-    const verificationErrors = verifyPsdProtectedSnapshot(protectedSnapshot)
-      .concat(verifyPsdAppliedContent(prepared.diff.changed, imagePaints))
-      .concat(verifyPsdAddedNodes(createdNodes, prepared.diff.added, stagingFrame, prepared.context));
+    await applyPsdAddedLayers(prepared, addedTransaction);
+    await applyPsdMutationPlans(prepared);
+    const verificationErrors = verifyPsdStructuralSnapshot(structureBefore, addedTransaction.createdNodeIds)
+      .concat(verifyPsdAppliedFields(prepared.plans))
+      .concat(verifyPsdAddedNodes(
+        addedTransaction.createdNodes,
+        prepared.diff.added,
+        addedTransaction.stagingFrame,
+        prepared.context
+      ));
     if (verificationErrors.length > 0) {
-      throw new Error(`增量更新改变了 Figma 所有的结构或布局：${verificationErrors.slice(0, 5).join("；")}`);
+      throw new Error(`PSD incremental verification failed: ${verificationErrors.slice(0, 8).join("; ")}`);
+    }
+    for (const plan of prepared.plans) {
+      writeLayerMetadata(
+        plan.target.node,
+        plan.source,
+        buildPsdIncrementalMetadataExtra(plan, prepared)
+      );
     }
     writePsdRootMetadata(prepared.target, job, prepared.manifest);
     if (typeof figma.commitUndo === "function") {
       figma.commitUndo();
     }
   } catch (error) {
-    const rollbackErrors = rollbackPsdIncrementalMutation(
-      rollbackRecords,
-      createdNodes,
-      stagingFrame,
-      createdStagingFrame,
-      stagingExistingChildIds
-    );
-    try {
-      writePluginData(prepared.target, rootMetadataBefore);
-    } catch (metadataError) {
-      rollbackErrors.push(metadataError instanceof Error ? metadataError.message : String(metadataError));
-    }
-    rollbackErrors.push(...verifyPsdProtectedSnapshot(protectedSnapshot).map((item) => `回滚后仍有漂移：${item}`));
+    const rollbackErrors = await rollbackPsdIncrementalMutation(rollbackRecords, addedTransaction, prepared);
+    rollbackErrors.push(...verifyPsdStructuralSnapshot(structureBefore, new Set()));
+    rollbackErrors.push(...verifyPsdRollbackRecords(rollbackRecords));
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(rollbackErrors.length > 0 ? `${message}；回滚异常：${rollbackErrors.join("；")}` : message);
+    throw new Error(rollbackErrors.length > 0 ? `${message}; rollback drift: ${rollbackErrors.join("; ")}` : message);
   }
 
   const result = buildPsdIncrementalResult(prepared, "applied");
-  result.updatedCount = prepared.diff.changed.length;
+  result.updatedCount = prepared.plans.length;
   result.addedCount = prepared.diff.added.length;
   result.retainedMissingCount = prepared.diff.missing.length;
-  result.stagingFrameId = stagingFrame ? stagingFrame.id : "";
+  result.stagingFrameId = addedTransaction.stagingFrame ? addedTransaction.stagingFrame.id : "";
   return result;
 }
 
@@ -10325,6 +10328,8 @@ async function preparePsdIncrementalUpdate(job, assets) {
   const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
   appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
   appendPsdIncrementalAssetConflicts(diff, context);
+  const plans = diff.changed.map(buildPsdLayerMutationPlan);
+  appendPsdMutationPreflightConflicts(diff, plans, target);
   if (diff.identityWarning) {
     context.warnings.push(diff.identityWarning);
   }
@@ -10333,8 +10338,79 @@ async function preparePsdIncrementalUpdate(job, assets) {
     manifest,
     context,
     diff,
+    plans,
     baselineFingerprint: buildPsdIncrementalFingerprint(target, currentNodes, manifest.layers)
   };
+}
+
+function appendPsdMutationPreflightConflicts(diff, plans, target) {
+  for (const plan of plans) {
+    const node = plan.target.node;
+    const requiresGeometry = plan.categories.some((category) => (
+      category === "position" || category === "size" || category === "rotation"
+    ));
+    if (!node || node.removed) {
+      diff.conflicts.push({ kind: "missing-target-node", layerId: plan.layerId, nodeId: plan.nodeId });
+      continue;
+    }
+    if (node.type === "INSTANCE" || node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+      diff.conflicts.push({ kind: "unsafe-component-boundary-write", layerId: plan.layerId, nodeId: plan.nodeId });
+      continue;
+    }
+    if (requiresGeometry) {
+      const parent = node.parent;
+      if (!parent || !target.absoluteTransform || !parent.absoluteTransform) {
+        diff.conflicts.push({ kind: "missing-transform-context", layerId: plan.layerId, nodeId: plan.nodeId });
+        continue;
+      }
+      if (parent.layoutMode && parent.layoutMode !== "NONE" && node.layoutPositioning !== "ABSOLUTE") {
+        diff.conflicts.push({ kind: "unsafe-auto-layout-geometry", layerId: plan.layerId, nodeId: plan.nodeId });
+        continue;
+      }
+      if (!("x" in node) || !("y" in node) || typeof node.resize !== "function") {
+        diff.conflicts.push({ kind: "unsupported-geometry-target", layerId: plan.layerId, nodeId: plan.nodeId });
+        continue;
+      }
+      try {
+        plan.expectedGeometry = computePsdGeometryTarget({
+          baseline: plan.baseline.geometry,
+          incoming: plan.incoming.geometry,
+          currentAbsolute: getHierarchyNodeAbsolutePosition(node),
+          currentSize: { width: node.width, height: node.height },
+          currentRotation: numericOr(node.rotation, 0),
+          rootAbsoluteTransform: target.absoluteTransform,
+          parentAbsoluteTransform: parent.absoluteTransform
+        });
+        if (!(plan.expectedGeometry.size.width > 0) || !(plan.expectedGeometry.size.height > 0)) {
+          throw new Error("invalid-target-size");
+        }
+      } catch (error) {
+        diff.conflicts.push({
+          kind: error instanceof Error ? error.message : "invalid-geometry-plan",
+          layerId: plan.layerId,
+          nodeId: plan.nodeId
+        });
+      }
+    }
+    if (plan.categories.includes("display")) {
+      for (const path of plan.changedPaths.filter((value) => value.startsWith("display."))) {
+        const property = path.slice("display.".length);
+        if (!(property in node)) {
+          diff.conflicts.push({ kind: `unsupported-display-${property}`, layerId: plan.layerId, nodeId: plan.nodeId });
+        }
+      }
+    }
+    if ((plan.categories.includes("textContent") || plan.categories.includes("textStyle")) && node.type !== "TEXT") {
+      diff.conflicts.push({ kind: "unsupported-text-target", layerId: plan.layerId, nodeId: plan.nodeId });
+    }
+    if (plan.categories.includes("content") && plan.incoming.mode === "image" && node.type !== "RECTANGLE") {
+      diff.conflicts.push({ kind: "unsupported-image-target", layerId: plan.layerId, nodeId: plan.nodeId });
+    }
+    if (plan.categories.includes("nineSlice") && (node.type !== "FRAME" || !("children" in node))) {
+      diff.conflicts.push({ kind: "unsupported-nine-slice-target", layerId: plan.layerId, nodeId: plan.nodeId });
+    }
+  }
+  refreshPsdIncrementalDiffStatus(diff);
 }
 
 async function resolvePsdIncrementalTarget(job) {
@@ -10358,6 +10434,7 @@ function collectPsdBoundNodes(root) {
     if (isCleanupRecoveryNode(node)) return;
     const layerId = normalizePsdLayerId(readSharedPluginData(node, "psdLayerId"));
     if (layerId) {
+      const storedSourceState = readStoredPsdSourceState(node);
       found.push({
         layerId,
         nodeId: node.id,
@@ -10366,7 +10443,17 @@ function collectPsdBoundNodes(root) {
         nodeType: node.type,
         contentHash: readSharedPluginData(node, "psdContentHash"),
         ownership: readSharedPluginData(node, "psdOwnership"),
-        liveContentSignature: buildPsdLiveContentSignature(node, readSharedPluginData(node, "psdOwnership"))
+        sourceState: storedSourceState.state,
+        sourceStateHash: readSharedPluginData(node, "psdSourceStateHash"),
+        sourceStateError: storedSourceState.error,
+        parentId: node.parent ? node.parent.id : "",
+        siblingIndex: node.parent && "children" in node.parent ? node.parent.children.indexOf(node) : -1,
+        liveContentSignature: buildPsdLiveContentSignature(node, readSharedPluginData(node, "psdOwnership")),
+        liveWritableFieldSignature: buildPsdLiveWritableFieldSignature(node),
+        transformSignature: hashPsdSourceState({
+          absoluteTransform: node.absoluteTransform || null,
+          parentAbsoluteTransform: node.parent && node.parent.absoluteTransform || null
+        })
       });
     }
     if ("children" in node) {
@@ -10377,10 +10464,33 @@ function collectPsdBoundNodes(root) {
   return found;
 }
 
+function readStoredPsdSourceState(node) {
+  const raw = readSharedPluginData(node, "psdSourceState");
+  if (!raw) return { state: null, error: "" };
+  try {
+    const parsed = JSON.parse(raw);
+    const state = normalizePsdSourceState({ sourceState: parsed });
+    return state && state.layerId
+      ? { state, error: "" }
+      : { state: null, error: "invalid-stored-source-state" };
+  } catch (error) {
+    return { state: null, error: "invalid-stored-source-state" };
+  }
+}
+
 function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest) {
   const schemaVersion = readSharedPluginData(target, "psdImportSchemaVersion") || readSharedPluginData(target, "psdSchemaVersion");
-  if (schemaVersion !== "2") {
+  if (schemaVersion !== "2" && schemaVersion !== "3") {
     diff.conflicts.push({ kind: "missing-target-metadata", message: "目标不是带增量元数据的 PSD 导入结果。" });
+  }
+  for (const current of currentNodes) {
+    if (current.sourceStateError) {
+      diff.conflicts.push({
+        kind: current.sourceStateError,
+        layerId: current.layerId,
+        nodeId: current.nodeId
+      });
+    }
   }
   const storedWidth = numericOr(readSharedPluginData(target, "psdCanvasWidth"), 0);
   const storedHeight = numericOr(readSharedPluginData(target, "psdCanvasHeight"), 0);
@@ -10421,16 +10531,21 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
       ? node.fills.filter((paint) => paint && paint.type === "IMAGE").length
       : 0;
     const paintConflict = pair.source.mode === "image" && imagePaintCount !== 1 ? "unsafe-image-fill-structure" : "";
-    if (conflictKind || paintConflict || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
+    const nineSlicePaintCount = node && node.type === "FRAME" && Array.isArray(node.fills)
+      ? node.fills.filter((paint) => paint && paint.type === "IMAGE").length
+      : 0;
+    const nineSlicePaintConflict = pair.source.mode === "nine-slice" && nineSlicePaintCount !== 1
+      ? "unsafe-nine-slice-fill-structure"
+      : "";
+    if (conflictKind || paintConflict || nineSlicePaintConflict || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
       diff.conflicts.push({
-        kind: conflictKind || paintConflict || "unsupported-text-font",
+        kind: conflictKind || paintConflict || nineSlicePaintConflict || "unsupported-text-font",
         layerId: pair.source.layerId,
         nodeId: pair.target.nodeId
       });
     }
   }
-  diff.summary.conflicts = diff.conflicts.length;
-  diff.canApply = diff.conflicts.length === 0;
+  refreshPsdIncrementalDiffStatus(diff);
 }
 
 function appendPsdIncrementalAssetConflicts(diff, context) {
@@ -10450,20 +10565,47 @@ function appendPsdIncrementalAssetConflicts(diff, context) {
       diff.conflicts.push({ kind: "invalid-raster-bytes", layerId: layer.layerId, name: layer.name });
     }
   }
+  refreshPsdIncrementalDiffStatus(diff);
+}
+
+function refreshPsdIncrementalDiffStatus(diff) {
   diff.summary.conflicts = diff.conflicts.length;
-  diff.canApply = diff.conflicts.length === 0;
+  diff.status = diff.conflicts.length > 0
+    ? "preview-blocked"
+    : diff.baselineRequired.length > 0
+      ? "preview-baseline-required"
+      : diff.changed.length === 0 && diff.added.length === 0
+        ? "preview-no-changes"
+        : "preview-ready";
+  diff.canApply = diff.status === "preview-ready";
 }
 
 function buildPsdIncrementalFingerprint(target, currentNodes, incomingLayers) {
   const current = currentNodes
-    .map((item) => `${item.layerId}:${item.nodeId}:${item.contentHash}:${item.ownership}:${item.nodeType}:${item.liveContentSignature}`)
+    .map((item) => [
+      item.layerId,
+      item.nodeId,
+      item.parentId,
+      item.siblingIndex,
+      item.nodeType,
+      item.ownership,
+      item.sourceStateHash,
+      item.liveContentSignature,
+      item.liveWritableFieldSignature,
+      item.transformSignature
+    ].join(":"))
     .sort()
     .join("|");
   const incoming = incomingLayers
-    .map((item) => `${normalizePsdLayerId(item.layerId)}:${item.contentHash}`)
+    .map((item) => `${normalizePsdLayerId(item.layerId)}:${hashPsdSourceState(normalizePsdSourceState(item))}`)
     .sort()
     .join("|");
-  return `${target.id}::${current}::${incoming}`;
+  const currentIds = new Set(currentNodes.map((item) => item.layerId));
+  const incomingIds = new Set(incomingLayers.map((item) => normalizePsdLayerId(item.layerId)).filter(Boolean));
+  const added = Array.from(incomingIds).filter((layerId) => !currentIds.has(layerId)).sort().join(",");
+  const missing = Array.from(currentIds).filter((layerId) => !incomingIds.has(layerId)).sort().join(",");
+  const targetTransform = hashPsdSourceState(target.absoluteTransform || null);
+  return `${target.id}:${targetTransform}::${current}::${incoming}::added=${added}::missing=${missing}`;
 }
 
 function buildPsdLiveContentSignature(node, ownership) {
@@ -10479,12 +10621,45 @@ function buildPsdLiveContentSignature(node, ownership) {
   return "protected";
 }
 
+function buildPsdLiveWritableFieldSignature(node) {
+  const liveState = {
+    geometry: {
+      x: numericOr(node && node.x, 0),
+      y: numericOr(node && node.y, 0),
+      width: numericOr(node && node.width, 0),
+      height: numericOr(node && node.height, 0),
+      rotation: numericOr(node && node.rotation, 0)
+    },
+    display: {
+      visible: !node || node.visible !== false,
+      opacity: numericOr(node && node.opacity, 1),
+      blendMode: String(node && node.blendMode || ""),
+      constraints: node && node.constraints ? node.constraints : {}
+    },
+    text: node && node.type === "TEXT" ? {
+      characters: String(node.characters || ""),
+      fontName: node.fontName,
+      fontSize: node.fontSize,
+      lineHeight: node.lineHeight,
+      textAlignHorizontal: node.textAlignHorizontal
+    } : null
+  };
+  return hashPsdSourceState(liveState);
+}
+
 function buildPsdIncrementalResult(prepared, status) {
   const serializePair = (item) => ({
     layerId: normalizePsdLayerId(item.source && item.source.layerId || item.target && item.target.layerId),
     sourceName: String(item.source && item.source.name || ""),
     targetName: String(item.target && item.target.name || ""),
-    targetNodeId: String(item.target && item.target.nodeId || "")
+    targetNodeId: String(item.target && item.target.nodeId || ""),
+    changes: Array.isArray(item.changes) ? item.changes.map((change) => ({
+      path: String(change.path || ""),
+      category: String(change.category || ""),
+      before: change.before,
+      after: change.after,
+      delta: change.delta
+    })) : []
   });
   return {
     status,
@@ -10498,6 +10673,7 @@ function buildPsdIncrementalResult(prepared, status) {
       unchanged: prepared.diff.unchanged.map(serializePair),
       added: prepared.diff.added.map(serializePair),
       missing: prepared.diff.missing.map(serializePair),
+      baselineRequired: prepared.diff.baselineRequired.map(serializePair),
       conflicts: prepared.diff.conflicts.map((item) => ({
         kind: String(item.kind || "unknown"),
         layerId: normalizePsdLayerId(item.layerId),
@@ -10533,6 +10709,78 @@ function createPsdIncrementalStagingFrame(target) {
   frame.x = 0;
   frame.y = 0;
   return frame;
+}
+
+function isPsdOwnedSliceChild(node) {
+  if (!node) return false;
+  if (readSharedPluginData(node, "psdSliceRole") === "slice") return true;
+  return !!readSharedPluginData(node, "parentLayerIndex")
+    && String(node.name || "").startsWith("__slice");
+}
+
+function buildPsdComponentIdentity(node) {
+  let mainComponentId = "";
+  try {
+    mainComponentId = "mainComponent" in node && node.mainComponent
+      ? String(node.mainComponent.id || "")
+      : "";
+  } catch (error) {
+    mainComponentId = "";
+  }
+  return [String(node.type || ""), String(node.id || ""), mainComponentId].join(":");
+}
+
+function capturePsdStructuralSnapshot(root) {
+  const snapshots = [];
+  const visit = (node) => {
+    if (isPsdOwnedSliceChild(node)) return;
+    snapshots.push({
+      node,
+      id: node.id,
+      name: String(node.name || ""),
+      parentId: node.parent ? node.parent.id : "",
+      siblingIndex: node.parent && "children" in node.parent ? node.parent.children.indexOf(node) : -1,
+      type: String(node.type || ""),
+      componentIdentity: buildPsdComponentIdentity(node),
+      nonPsdChildIds: "children" in node
+        ? node.children.filter((child) => !isPsdOwnedSliceChild(child)).map((child) => child.id)
+        : []
+    });
+    if ("children" in node) {
+      for (const child of node.children) visit(child);
+    }
+  };
+  visit(root);
+  return snapshots;
+}
+
+function verifyPsdStructuralSnapshot(snapshots, allowedAddedNodeIds) {
+  const allowed = allowedAddedNodeIds || new Set();
+  const errors = [];
+  for (const item of snapshots) {
+    const node = item.node;
+    if (!node || node.removed) {
+      errors.push(`${item.id}:removed`);
+      continue;
+    }
+    const parentId = node.parent ? node.parent.id : "";
+    const siblingIndex = node.parent && "children" in node.parent ? node.parent.children.indexOf(node) : -1;
+    const childIds = "children" in node
+      ? node.children
+        .filter((child) => !isPsdOwnedSliceChild(child) && !allowed.has(child.id))
+        .map((child) => child.id)
+      : [];
+    if (node.id !== item.id
+      || String(node.name || "") !== item.name
+      || parentId !== item.parentId
+      || siblingIndex !== item.siblingIndex
+      || String(node.type || "") !== item.type
+      || buildPsdComponentIdentity(node) !== item.componentIdentity
+      || childIds.join("|") !== item.nonPsdChildIds.join("|")) {
+      errors.push(`${item.id}:structural-drift`);
+    }
+  }
+  return errors;
 }
 
 function capturePsdProtectedSnapshot(root) {
@@ -10583,26 +10831,329 @@ function verifyPsdProtectedSnapshot(snapshots) {
   return errors;
 }
 
-function verifyPsdAppliedContent(changedPairs, imagePaints) {
-  const errors = [];
-  for (const pair of changedPairs) {
-    const node = pair.target.node;
-    if (readSharedPluginData(node, "psdContentHash") !== String(pair.source.contentHash || "")) {
-      errors.push(`${node.id} 内容哈希未更新`);
+function applyPsdGeometryPlan(plan, node) {
+  const target = plan.expectedGeometry;
+  if (!target) throw new Error("missing-expected-geometry");
+  if (plan.changedPaths.includes("geometry.width") || plan.changedPaths.includes("geometry.height")) {
+    node.resize(target.size.width, target.size.height);
+  }
+  if (plan.changedPaths.includes("geometry.x") || plan.changedPaths.includes("geometry.y")) {
+    node.x = target.localPosition.x;
+    node.y = target.localPosition.y;
+  }
+  if (plan.changedPaths.includes("geometry.rotation")) node.rotation = target.rotation;
+}
+
+function applyPsdDisplayPlan(plan, node) {
+  const display = plan.incoming.display;
+  if (plan.changedPaths.includes("display.visible")) node.visible = display.visible;
+  if (plan.changedPaths.includes("display.opacity")) node.opacity = display.opacity;
+  if (plan.changedPaths.includes("display.blendMode")) node.blendMode = display.blendMode;
+  if (plan.changedPaths.includes("display.constraints")) node.constraints = clonePsdValue(display.constraints);
+}
+
+function applyPsdTextStroke(node, stroke) {
+  if (!stroke || stroke.enabled !== true) {
+    node.strokes = [];
+    return;
+  }
+  const color = stroke.color || stroke;
+  node.strokes = [solidPaintFromManifest(color, 1)];
+  node.strokeWeight = numericOr(stroke.size, 1);
+  node.strokeAlign = "OUTSIDE";
+}
+
+function applyPsdTextShadow(node, shadow) {
+  const retained = Array.isArray(node.effects)
+    ? node.effects.filter((effect) => !effect || effect.type !== "DROP_SHADOW")
+    : [];
+  if (!shadow || shadow.enabled !== true) {
+    node.effects = retained;
+    return;
+  }
+  const color = shadow.color || {};
+  const angleRadians = numericOr(shadow.angle, 0) * Math.PI / 180;
+  const distance = numericOr(shadow.distance, 0);
+  retained.push({
+    type: "DROP_SHADOW",
+    color: {
+      r: numericOr(color.r, 0),
+      g: numericOr(color.g, 0),
+      b: numericOr(color.b, 0),
+      a: numericOr(shadow.opacity, numericOr(color.a, 1))
+    },
+    offset: {
+      x: Math.cos(angleRadians) * distance,
+      y: -Math.sin(angleRadians) * distance
+    },
+    radius: Math.max(0, numericOr(shadow.blur, 0)),
+    spread: Math.max(0, numericOr(shadow.spread, 0)),
+    visible: true,
+    blendMode: "NORMAL"
+  });
+  node.effects = retained;
+}
+
+async function applyPsdTextPlan(plan, pair, prepared) {
+  const node = pair.target.node;
+  const text = plan.incoming.text || {};
+  if (plan.changedPaths.includes("text.fontFamily") || plan.changedPaths.includes("text.fontFallback")) {
+    const resolvedFont = prepared.resolvedFonts.get(plan.layerId);
+    if (!resolvedFont) throw new Error("missing-resolved-font");
+    node.fontName = resolvedFont;
+  }
+  if (plan.changedPaths.includes("text.characters")) node.characters = String(text.characters || "");
+  if (plan.changedPaths.includes("text.fontSize") || plan.changedPaths.includes("text.effectiveFontSize")) {
+    node.fontSize = positiveOr(text.effectiveFontSize, positiveOr(text.fontSize, node.fontSize));
+  }
+  if (plan.changedPaths.includes("text.leading") || plan.changedPaths.includes("text.lineHeightMode")) {
+    node.lineHeight = text.lineHeightMode === "PIXELS" && Number(text.leading) > 0
+      ? { unit: "PIXELS", value: Number(text.leading) }
+      : { unit: "AUTO" };
+  }
+  if (plan.changedPaths.includes("text.textAlignHorizontal")) {
+    node.textAlignHorizontal = text.textAlignHorizontal;
+  }
+  if (plan.changedPaths.includes("text.fillColor")) {
+    node.fills = [solidPaintFromManifest(text.fillColor || {}, 1)];
+  }
+  if (plan.changedPaths.includes("text.stroke")) applyPsdTextStroke(node, text.stroke);
+  if (plan.changedPaths.includes("text.dropShadow")) applyPsdTextShadow(node, text.dropShadow);
+  node.textAutoResize = "NONE";
+}
+
+async function applyPsdNineSlicePlan(plan, pair, prepared) {
+  const node = pair.target.node;
+  if (!("children" in node)) throw new Error("unsupported-nine-slice-target");
+  const imagePaint = prepared.imagePaints.get(plan.layerId);
+  if (!imagePaint || !imagePaint.imageHash) throw new Error("missing-nine-slice-image");
+  node.fills = replacePsdOwnedImageHash(node.fills, imagePaint);
+  for (const child of node.children.slice().reverse()) {
+    if (isPsdOwnedSliceChild(child)) child.remove();
+  }
+  const nineSlice = plan.incoming.nineSlice || {};
+  const slices = Array.isArray(nineSlice.slices)
+    ? nineSlice.slices
+    : (Array.isArray(pair.source.slices) ? pair.source.slices : []);
+  for (const slice of slices) {
+    const sliceNode = figma.createRectangle();
+    sliceNode.name = String(slice.name || "__slice");
+    node.appendChild(sliceNode);
+    const target = normalizeRectArray(slice.target);
+    sliceNode.x = target[0];
+    sliceNode.y = target[1];
+    sliceNode.resize(positiveOr(target[2], 1), positiveOr(target[3], 1));
+    sliceNode.fills = [createImagePaintFromHash(
+      imagePaint.imageHash,
+      "CROP",
+      buildCropTransform(slice, pair.source),
+      1
+    )];
+    sliceNode.strokes = [];
+    sliceNode.constraints = inferSliceConstraints(sliceNode, node);
+    writePluginData(sliceNode, {
+      sourceRect: JSON.stringify(normalizeRectArray(slice.source)),
+      parentLayerIndex: String(pair.source.idx),
+      psdParentLayerId: plan.layerId,
+      psdSliceRole: "slice"
+    });
+  }
+}
+
+async function applyPsdMutationPlans(prepared) {
+  for (const plan of prepared.plans) {
+    const pair = { source: plan.source, target: plan.target };
+    const node = plan.target.node;
+    if (plan.categories.includes("content") && plan.incoming.mode === "image") {
+      node.fills = replacePsdOwnedImageHash(node.fills, prepared.imagePaints.get(plan.layerId));
     }
-    if (pair.target.ownership === "text-content") {
-      if (node.characters !== String(pair.source.chars || "")) errors.push(`${node.id} 文本内容不一致`);
+    if (plan.categories.includes("textContent") || plan.categories.includes("textStyle")) {
+      await applyPsdTextPlan(plan, pair, prepared);
+    }
+    if (plan.categories.some((category) => (
+      category === "position" || category === "size" || category === "rotation"
+    ))) {
+      applyPsdGeometryPlan(plan, node);
+    }
+    if (plan.categories.includes("display")) applyPsdDisplayPlan(plan, node);
+    if (plan.categories.includes("nineSlice")) await applyPsdNineSlicePlan(plan, pair, prepared);
+  }
+}
+
+async function preloadPsdMutationAssets(prepared) {
+  prepared.imagePaints = new Map();
+  prepared.resolvedFonts = new Map();
+  for (const plan of prepared.plans) {
+    if (plan.target.node.type === "TEXT" && plan.target.node.fontName && typeof plan.target.node.fontName === "object") {
+      await figma.loadFontAsync(plan.target.node.fontName);
+    }
+    if (plan.categories.includes("textContent") || plan.categories.includes("textStyle")) {
+      plan.expectedFontName = await loadBestFont(plan.source, prepared.context);
+      prepared.resolvedFonts.set(plan.layerId, plan.expectedFontName);
+    }
+    if ((plan.incoming.mode === "image" && plan.categories.includes("content"))
+      || plan.categories.includes("nineSlice")) {
+      plan.expectedImagePaint = await createImagePaint(plan.source, prepared.context, "FILL", null);
+      prepared.imagePaints.set(plan.layerId, plan.expectedImagePaint);
+    }
+  }
+  for (const item of prepared.diff.added) {
+    if (item.source.mode === "text") {
+      await loadBestFont(item.source, prepared.context);
     } else {
-      const expectedPaint = imagePaints.get(pair.source.layerId);
-      const actualPaint = Array.isArray(node.fills)
-        ? node.fills.find((paint) => paint && paint.type === "IMAGE")
-        : null;
-      if (!actualPaint || actualPaint.type !== "IMAGE" || actualPaint.imageHash !== expectedPaint.imageHash) {
-        errors.push(`${node.id} 图片内容不一致`);
+      await createImagePaint(item.source, prepared.context, "FILL", null);
+    }
+  }
+}
+
+function preparePsdAddedLayerTransaction() {
+  return {
+    stagingFrame: null,
+    createdStagingFrame: false,
+    existingChildIds: new Set(),
+    createdNodes: [],
+    createdNodeIds: new Set()
+  };
+}
+
+async function applyPsdAddedLayers(prepared, transaction) {
+  if (prepared.diff.added.length === 0) return;
+  transaction.stagingFrame = findPsdIncrementalStagingFrame(prepared.target);
+  if (!transaction.stagingFrame) {
+    transaction.stagingFrame = createPsdIncrementalStagingFrame(prepared.target);
+    transaction.createdStagingFrame = true;
+  } else {
+    transaction.existingChildIds = new Set(transaction.stagingFrame.children.map((child) => child.id));
+  }
+  if (transaction.createdStagingFrame) transaction.createdNodeIds.add(transaction.stagingFrame.id);
+  for (const item of prepared.diff.added) {
+    const node = await createLayerNode(transaction.stagingFrame, item.source, prepared.context);
+    if (!node) continue;
+    transaction.createdNodes.push(node);
+    transaction.createdNodeIds.add(node.id);
+    prepared.context.nodeByLayerIdx.set(String(item.source.idx), node.id);
+  }
+}
+
+function psdNumberMatches(actual, expected) {
+  return Number.isFinite(Number(actual))
+    && Number.isFinite(Number(expected))
+    && Math.abs(Number(actual) - Number(expected)) <= 0.01;
+}
+
+function psdSolidPaintMatches(actual, expectedColor) {
+  return !!actual && actual.type === "SOLID"
+    && psdNumberMatches(actual.color && actual.color.r, expectedColor && expectedColor.r)
+    && psdNumberMatches(actual.color && actual.color.g, expectedColor && expectedColor.g)
+    && psdNumberMatches(actual.color && actual.color.b, expectedColor && expectedColor.b);
+}
+
+function verifyPsdTextStroke(node, stroke) {
+  const strokes = Array.isArray(node.strokes) ? node.strokes : [];
+  if (!stroke || stroke.enabled !== true) return strokes.length === 0;
+  const color = stroke.color || stroke;
+  return strokes.length === 1
+    && psdSolidPaintMatches(strokes[0], color)
+    && psdNumberMatches(node.strokeWeight, numericOr(stroke.size, 1))
+    && node.strokeAlign === "OUTSIDE";
+}
+
+function verifyPsdTextShadow(node, shadow) {
+  const effects = Array.isArray(node.effects)
+    ? node.effects.filter((effect) => effect && effect.type === "DROP_SHADOW")
+    : [];
+  if (!shadow || shadow.enabled !== true) return effects.length === 0;
+  if (effects.length !== 1) return false;
+  const effect = effects[0];
+  const color = shadow.color || {};
+  const angleRadians = numericOr(shadow.angle, 0) * Math.PI / 180;
+  const distance = numericOr(shadow.distance, 0);
+  return psdNumberMatches(effect.color && effect.color.r, numericOr(color.r, 0))
+    && psdNumberMatches(effect.color && effect.color.g, numericOr(color.g, 0))
+    && psdNumberMatches(effect.color && effect.color.b, numericOr(color.b, 0))
+    && psdNumberMatches(effect.color && effect.color.a, numericOr(shadow.opacity, numericOr(color.a, 1)))
+    && psdNumberMatches(effect.offset && effect.offset.x, Math.cos(angleRadians) * distance)
+    && psdNumberMatches(effect.offset && effect.offset.y, -Math.sin(angleRadians) * distance)
+    && psdNumberMatches(effect.radius, Math.max(0, numericOr(shadow.blur, 0)))
+    && psdNumberMatches(effect.spread, Math.max(0, numericOr(shadow.spread, 0)));
+}
+
+function verifyPsdAppliedFields(plans) {
+  const errors = [];
+  for (const plan of plans) {
+    const node = plan.target.node;
+    const geometry = plan.expectedGeometry;
+    const display = plan.incoming.display || {};
+    const text = plan.incoming.text || {};
+    for (const path of plan.changedPaths) {
+      let valid = true;
+      if (path === "geometry.x") valid = geometry && psdNumberMatches(node.x, geometry.localPosition.x);
+      else if (path === "geometry.y") valid = geometry && psdNumberMatches(node.y, geometry.localPosition.y);
+      else if (path === "geometry.width") valid = geometry && psdNumberMatches(node.width, geometry.size.width);
+      else if (path === "geometry.height") valid = geometry && psdNumberMatches(node.height, geometry.size.height);
+      else if (path === "geometry.rotation") valid = geometry && psdNumberMatches(node.rotation, geometry.rotation);
+      else if (path === "display.visible") valid = node.visible === display.visible;
+      else if (path === "display.opacity") valid = psdNumberMatches(node.opacity, display.opacity);
+      else if (path === "display.blendMode") valid = node.blendMode === display.blendMode;
+      else if (path === "display.constraints") {
+        valid = stablePsdSourceStateJson(node.constraints) === stablePsdSourceStateJson(display.constraints);
+      } else if (path === "content.contentHash" && plan.incoming.mode === "image") {
+        const imagePaint = plan.expectedImagePaint;
+        const imageFills = Array.isArray(node.fills)
+          ? node.fills.filter((paint) => paint && paint.type === "IMAGE")
+          : [];
+        valid = !!imagePaint && imageFills.length === 1 && imageFills[0].imageHash === imagePaint.imageHash;
+      } else if (path === "text.characters") valid = node.characters === String(text.characters || "");
+      else if (path === "text.fontFamily" || path === "text.fontFallback") {
+        valid = stablePsdSourceStateJson(node.fontName) === stablePsdSourceStateJson(plan.expectedFontName);
+      } else if (path === "text.fontSize" || path === "text.effectiveFontSize") {
+        valid = psdNumberMatches(node.fontSize, positiveOr(text.effectiveFontSize, text.fontSize));
+      } else if (path === "text.leading" || path === "text.lineHeightMode") {
+        const expectedLineHeight = text.lineHeightMode === "PIXELS" && Number(text.leading) > 0
+          ? { unit: "PIXELS", value: Number(text.leading) }
+          : { unit: "AUTO" };
+        valid = stablePsdSourceStateJson(node.lineHeight) === stablePsdSourceStateJson(expectedLineHeight);
+      } else if (path === "text.textAlignHorizontal") valid = node.textAlignHorizontal === text.textAlignHorizontal;
+      else if (path === "text.fillColor") {
+        valid = Array.isArray(node.fills) && node.fills.length === 1 && psdSolidPaintMatches(node.fills[0], text.fillColor || {});
+      } else if (path === "text.stroke") valid = verifyPsdTextStroke(node, text.stroke);
+      else if (path === "text.dropShadow") valid = verifyPsdTextShadow(node, text.dropShadow);
+      else if (path === "nineSlice") {
+        const slices = "children" in node ? node.children.filter(isPsdOwnedSliceChild) : [];
+        const expectedSlices = plan.incoming.nineSlice && Array.isArray(plan.incoming.nineSlice.slices)
+          ? plan.incoming.nineSlice.slices
+          : [];
+        valid = slices.length === expectedSlices.length
+          && !!plan.expectedImagePaint
+          && hasExpectedNineSliceImageHash(node, plan.expectedImagePaint.imageHash);
       }
+      if (!valid) errors.push(`${plan.layerId}:${path}`);
     }
   }
   return errors;
+}
+
+function buildPsdIncrementalMetadataExtra(plan, prepared) {
+  if (plan.incoming.mode === "nine-slice") {
+    const nineSlice = plan.incoming.nineSlice || {};
+    return {
+      border: JSON.stringify(nineSlice.border || {}),
+      sliceCount: String(Array.isArray(nineSlice.slices) ? nineSlice.slices.length : 0),
+      sourceImageFillIndex: "0",
+      nodeRole: "nineSliceParent"
+    };
+  }
+  if (plan.incoming.mode === "text") {
+    const fontName = prepared.resolvedFonts.get(plan.layerId) || {};
+    const text = plan.incoming.text || {};
+    return {
+      fontFamily: String(fontName.family || ""),
+      fontStyle: String(fontName.style || ""),
+      effectiveFontSize: String(firstDefined(text.effectiveFontSize, text.fontSize)),
+      originalFontSize: String(firstDefined(text.fontSize, ""))
+    };
+  }
+  return {};
 }
 
 function replacePsdOwnedImageHash(fills, decodedPaint) {
@@ -10634,6 +11185,16 @@ function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame, context) {
     if (readSharedPluginData(node, "psdContentHash") !== String(item.source.contentHash || "")) {
       errors.push(`新增 Layer ID ${layerId} 内容哈希不一致`);
     }
+    const expectedSourceState = normalizePsdSourceState(item.source);
+    const expectedSourceStateHash = hashPsdSourceState(expectedSourceState);
+    if (readSharedPluginData(node, "psdSourceStateHash") !== expectedSourceStateHash) {
+      errors.push(`Added Layer ID ${layerId} has invalid PSD source-state hash`);
+    }
+    const storedSourceState = readStoredPsdSourceState(node);
+    if (storedSourceState.error
+      || stablePsdSourceStateJson(storedSourceState.state) !== stablePsdSourceStateJson(expectedSourceState)) {
+      errors.push(`Added Layer ID ${layerId} has invalid PSD source state`);
+    }
     const expectedOwnership = psdOwnershipForMode(item.source.mode);
     if (readSharedPluginData(node, "psdOwnership") !== expectedOwnership) {
       errors.push(`Added Layer ID ${layerId} has invalid PSD ownership`);
@@ -10664,23 +11225,157 @@ function verifyPsdAddedNodes(createdNodes, addedItems, stagingFrame, context) {
   return errors;
 }
 
-function capturePsdContentRollback(node) {
+function clonePsdValue(value) {
+  if (Array.isArray(value)) return value.map(clonePsdValue);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const key of Object.keys(value)) result[key] = clonePsdValue(value[key]);
+  return result;
+}
+
+function capturePsdSliceChildren(node) {
+  if (!("children" in node)) return [];
+  return node.children.filter(isPsdOwnedSliceChild).map((child) => ({
+    index: node.children.indexOf(child),
+    name: String(child.name || ""),
+    x: numericOr(child.x, 0),
+    y: numericOr(child.y, 0),
+    width: positiveOr(child.width, 1),
+    height: positiveOr(child.height, 1),
+    rotation: numericOr(child.rotation, 0),
+    visible: child.visible !== false,
+    opacity: numericOr(child.opacity, 1),
+    fills: "fills" in child ? clonePsdValue(child.fills) : [],
+    strokes: "strokes" in child ? clonePsdValue(child.strokes) : [],
+    effects: "effects" in child ? clonePsdValue(child.effects) : [],
+    constraints: "constraints" in child ? clonePsdValue(child.constraints) : null,
+    metadata: {
+      sourceRect: readSharedPluginData(child, "sourceRect"),
+      parentLayerIndex: readSharedPluginData(child, "parentLayerIndex"),
+      psdParentLayerId: readSharedPluginData(child, "psdParentLayerId"),
+      psdSliceRole: readSharedPluginData(child, "psdSliceRole")
+    }
+  }));
+}
+
+function capturePsdMutationRollback(node) {
   return {
     node,
-    fills: "fills" in node && Array.isArray(node.fills) ? node.fills.slice() : null,
-    characters: node.type === "TEXT" ? node.characters : null,
-    metadata: {
-      rawPsdLayerName: readSharedPluginData(node, "rawPsdLayerName"),
-      normalizedLayerName: readSharedPluginData(node, "normalizedLayerName"),
-      semanticMode: readSharedPluginData(node, "semanticMode"),
-      normalizationWarnings: readSharedPluginData(node, "normalizationWarnings"),
-      psdLayerIndex: readSharedPluginData(node, "psdLayerIndex"),
-      psdLayerId: readSharedPluginData(node, "psdLayerId"),
-      psdOriginalName: readSharedPluginData(node, "psdOriginalName"),
-      psdContentHash: readSharedPluginData(node, "psdContentHash"),
-      psdOwnership: readSharedPluginData(node, "psdOwnership")
-    }
+    x: "x" in node ? node.x : null,
+    y: "y" in node ? node.y : null,
+    width: "width" in node ? node.width : null,
+    height: "height" in node ? node.height : null,
+    rotation: "rotation" in node ? node.rotation : null,
+    visible: "visible" in node ? node.visible : null,
+    opacity: "opacity" in node ? node.opacity : null,
+    blendMode: "blendMode" in node ? node.blendMode : null,
+    constraints: "constraints" in node ? clonePsdValue(node.constraints) : null,
+    characters: "characters" in node ? node.characters : null,
+    fontName: "fontName" in node ? clonePsdValue(node.fontName) : null,
+    fontSize: "fontSize" in node ? node.fontSize : null,
+    lineHeight: "lineHeight" in node ? clonePsdValue(node.lineHeight) : null,
+    textAlignHorizontal: "textAlignHorizontal" in node ? node.textAlignHorizontal : null,
+    textAutoResize: "textAutoResize" in node ? node.textAutoResize : null,
+    fills: "fills" in node ? clonePsdValue(node.fills) : null,
+    strokes: "strokes" in node ? clonePsdValue(node.strokes) : null,
+    strokeWeight: "strokeWeight" in node ? node.strokeWeight : null,
+    strokeAlign: "strokeAlign" in node ? node.strokeAlign : null,
+    effects: "effects" in node ? clonePsdValue(node.effects) : null,
+    sliceChildren: capturePsdSliceChildren(node),
+    metadata: capturePsdLayerMetadata(node)
   };
+}
+
+function restorePsdSliceChildren(node, records) {
+  if (!("children" in node)) return;
+  for (const child of node.children.slice().reverse()) {
+    if (isPsdOwnedSliceChild(child)) child.remove();
+  }
+  for (const record of records.slice().sort((left, right) => left.index - right.index)) {
+    const child = figma.createRectangle();
+    child.name = record.name;
+    const insertIndex = Math.max(0, Math.min(record.index, node.children.length));
+    if (typeof node.insertChild === "function") node.insertChild(insertIndex, child);
+    else node.appendChild(child);
+    child.resize(record.width, record.height);
+    child.x = record.x;
+    child.y = record.y;
+    child.rotation = record.rotation;
+    child.visible = record.visible;
+    child.opacity = record.opacity;
+    child.fills = clonePsdValue(record.fills);
+    child.strokes = clonePsdValue(record.strokes);
+    child.effects = clonePsdValue(record.effects);
+    if (record.constraints) child.constraints = clonePsdValue(record.constraints);
+    writePluginData(child, record.metadata);
+  }
+}
+
+function restorePsdMutationRollback(record) {
+  const node = record.node;
+  if (!node || node.removed) throw new Error("rollback-target-removed");
+  if (record.width !== null && record.height !== null && typeof node.resize === "function") {
+    node.resize(record.width, record.height);
+  }
+  if (record.x !== null) node.x = record.x;
+  if (record.y !== null) node.y = record.y;
+  if (record.rotation !== null) node.rotation = record.rotation;
+  if (record.visible !== null) node.visible = record.visible;
+  if (record.opacity !== null) node.opacity = record.opacity;
+  if (record.blendMode !== null) node.blendMode = record.blendMode;
+  if (record.constraints !== null) node.constraints = clonePsdValue(record.constraints);
+  if (record.fontName !== null) node.fontName = clonePsdValue(record.fontName);
+  if (record.fontSize !== null) node.fontSize = record.fontSize;
+  if (record.lineHeight !== null) node.lineHeight = clonePsdValue(record.lineHeight);
+  if (record.textAlignHorizontal !== null) node.textAlignHorizontal = record.textAlignHorizontal;
+  if (record.textAutoResize !== null) node.textAutoResize = record.textAutoResize;
+  if (record.characters !== null) node.characters = record.characters;
+  if (record.fills !== null) node.fills = clonePsdValue(record.fills);
+  if (record.strokes !== null) node.strokes = clonePsdValue(record.strokes);
+  if (record.strokeWeight !== null) node.strokeWeight = record.strokeWeight;
+  if (record.strokeAlign !== null) node.strokeAlign = record.strokeAlign;
+  if (record.effects !== null) node.effects = clonePsdValue(record.effects);
+  restorePsdSliceChildren(node, record.sliceChildren);
+  writePluginData(node, record.metadata);
+}
+
+function verifyPsdRollbackRecords(records) {
+  const errors = [];
+  const numericFields = ["x", "y", "width", "height", "rotation", "opacity", "fontSize", "strokeWeight"];
+  const exactFields = [
+    "visible", "blendMode", "characters", "textAlignHorizontal", "textAutoResize", "strokeAlign"
+  ];
+  const valueFields = [
+    "constraints", "fontName", "lineHeight", "fills", "strokes", "effects", "sliceChildren", "metadata"
+  ];
+  for (const record of records) {
+    const current = capturePsdMutationRollback(record.node);
+    for (const field of numericFields) {
+      if (record[field] !== null && !psdNumberMatches(current[field], record[field])) {
+        errors.push(`${record.node.id}:rollback-${field}`);
+      }
+    }
+    for (const field of exactFields) {
+      if (current[field] !== record[field]) errors.push(`${record.node.id}:rollback-${field}`);
+    }
+    for (const field of valueFields) {
+      if (stablePsdSourceStateJson(current[field]) !== stablePsdSourceStateJson(record[field])) {
+        errors.push(`${record.node.id}:rollback-${field}`);
+      }
+    }
+  }
+  return errors;
+}
+
+function capturePsdLayerMetadata(node) {
+  const keys = [
+    "rawPsdLayerName", "normalizedLayerName", "semanticMode", "normalizationWarnings",
+    "psdLayerIndex", "psdLayerId", "psdOriginalName", "psdContentHash", "psdOwnership",
+    "psdSourceState", "psdSourceStateHash"
+  ];
+  const values = {};
+  for (const key of keys) values[key] = readSharedPluginData(node, key);
+  return values;
 }
 
 function capturePsdRootMetadata(node) {
@@ -10693,30 +11388,37 @@ function capturePsdRootMetadata(node) {
   return values;
 }
 
-function rollbackPsdIncrementalMutation(records, createdNodes, stagingFrame, createdStagingFrame, stagingExistingChildIds) {
+async function rollbackPsdIncrementalMutation(records, transaction, prepared) {
   const errors = [];
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
     try {
-      if (record.characters !== null) record.node.characters = record.characters;
-      if (record.fills !== null) record.node.fills = record.fills;
-      writePluginData(record.node, record.metadata);
+      restorePsdMutationRollback(record);
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
   }
   try {
-    if (createdStagingFrame && stagingFrame && !stagingFrame.removed) {
-      stagingFrame.remove();
-    } else if (stagingFrame && !stagingFrame.removed) {
-      for (const child of stagingFrame.children.slice().reverse()) {
-        if (!stagingExistingChildIds.has(child.id)) child.remove();
+    if (transaction.createdStagingFrame && transaction.stagingFrame && !transaction.stagingFrame.removed) {
+      transaction.stagingFrame.remove();
+    } else if (transaction.stagingFrame && !transaction.stagingFrame.removed) {
+      for (const child of transaction.stagingFrame.children.slice().reverse()) {
+        if (!transaction.existingChildIds.has(child.id)) child.remove();
       }
     } else {
-      for (let index = createdNodes.length - 1; index >= 0; index -= 1) {
-        const node = createdNodes[index];
+      for (let index = transaction.createdNodes.length - 1; index >= 0; index -= 1) {
+        const node = transaction.createdNodes[index];
         if (node && !node.removed) node.remove();
       }
+    }
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  try {
+    writePluginData(prepared.target, prepared.rootMetadataBefore);
+    if (stablePsdSourceStateJson(capturePsdRootMetadata(prepared.target))
+      !== stablePsdSourceStateJson(prepared.rootMetadataBefore)) {
+      errors.push("rollback-root-metadata");
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
@@ -10777,6 +11479,8 @@ function normalizeLayer(layer) {
     normalizationWarnings: Array.isArray(layer.normalizationWarnings) ? layer.normalizationWarnings : []
   });
   applyNestedManifestCompatibility(normalized, layer, mode, width, height);
+  normalized.sourceState = normalizePsdSourceState({ ...normalized, sourceState: layer.sourceState });
+  normalized.sourceStateHash = hashPsdSourceState(normalized.sourceState);
   return normalized;
 }
 
@@ -10867,10 +11571,10 @@ async function createRootFrame(job, manifest) {
 function writePsdRootMetadata(root, job, manifest) {
   writePluginData(root, {
     importKind: "psd-layer-to-figma",
-    schemaVersion: String(job.schemaVersion || 2),
+    schemaVersion: "3",
     source: String(job.source || ""),
-    psdSchemaVersion: "2",
-    psdImportSchemaVersion: "2",
+    psdSchemaVersion: "3",
+    psdImportSchemaVersion: "3",
     psdSourceFileName: normalizedPsdSourceFileName(job),
     psdSourceKey: buildPsdSourceKey(job, manifest),
     psdLayerSetFingerprint: hashPsdLayerIds(manifest.layers),
@@ -11025,7 +11729,10 @@ async function createTextLayer(root, layer, context) {
   text.characters = String(layer.chars || "");
   const resolvedFontSize = positiveOr(layer.effectiveFontSize, positiveOr(layer.fontSize, Math.max(12, layer.h)));
   text.fontSize = resolvedFontSize;
-  text.lineHeight = { unit: "AUTO" };
+  const sourceText = layer.sourceState && layer.sourceState.text || {};
+  text.lineHeight = sourceText.lineHeightMode === "PIXELS" && Number(sourceText.leading) > 0
+    ? { unit: "PIXELS", value: Number(sourceText.leading) }
+    : { unit: "AUTO" };
   text.textAutoResize = "WIDTH_AND_HEIGHT";
   text.textAlignHorizontal = normalizeTextAlign(layer.textAlign, layer, context.manifest.canvas);
   text.textAlignVertical = "CENTER";
@@ -11041,8 +11748,17 @@ async function createTextLayer(root, layer, context) {
   } else {
     text.strokes = [];
   }
+  applyPsdTextShadow(text, sourceText.dropShadow);
 
   centerNodeOnLayer(text, layer);
+  const sourceGeometry = layer.sourceState && layer.sourceState.geometry || {};
+  if (Number.isFinite(sourceGeometry.rotation)) text.rotation = sourceGeometry.rotation;
+  if ("constraints" in text && layer.constraints) {
+    text.constraints = {
+      horizontal: normalizeConstraint(layer.constraints.horizontal, "MIN"),
+      vertical: normalizeConstraint(layer.constraints.vertical, "MIN")
+    };
+  }
   // 首次导入后冻结当前几何；后续增量只改 characters，不让自动尺寸扰动整理后的布局。
   text.textAutoResize = "NONE";
   applyLayerCommonState(text, layer);
@@ -11103,7 +11819,9 @@ async function createSliceLayer(root, layer, context) {
     sliceNode.constraints = inferSliceConstraints(sliceNode, frame);
     writePluginData(sliceNode, {
       sourceRect: JSON.stringify(normalizeRectArray(slice.source)),
-      parentLayerIndex: String(layer.idx)
+      parentLayerIndex: String(layer.idx),
+      psdParentLayerId: normalizePsdLayerId(layer.layerId),
+      psdSliceRole: "slice"
     });
     context.stats.slice += 1;
   }
@@ -11300,6 +12018,10 @@ function applyLayerGeometry(node, layer) {
       vertical: normalizeConstraint(layer.constraints.vertical, "MIN")
     };
   }
+  const sourceGeometry = layer.sourceState && layer.sourceState.geometry || {};
+  if ("rotation" in node && Number.isFinite(sourceGeometry.rotation)) {
+    node.rotation = sourceGeometry.rotation;
+  }
 }
 
 // 应用 common 组件 Instance 几何属性：保留模板原生尺寸，居中于 PSD 图层位置。
@@ -11357,8 +12079,10 @@ function isCommonPrefabBtnName(value) {
 
 // 应用图层显隐和透明度。
 function applyLayerCommonState(node, layer) {
-  node.visible = layer.visible !== false;
-  node.opacity = clamp01(layer.opacity);
+  const display = layer.sourceState && layer.sourceState.display || {};
+  node.visible = display.visible !== undefined ? display.visible !== false : layer.visible !== false;
+  node.opacity = clamp01(display.opacity !== undefined ? display.opacity : layer.opacity);
+  if ("blendMode" in node && display.blendMode) node.blendMode = display.blendMode;
 }
 
 // 把 Text 按原始 PSD 图层中心点回摆，避免自动尺寸改变后跑位。
@@ -11371,6 +12095,7 @@ function centerNodeOnLayer(node, layer) {
 
 // 写入 PSD 图层元数据，供后续 Unity 导入或排查问题。
 function writeLayerMetadata(node, layer, extra) {
+  const sourceState = normalizePsdSourceState(layer);
   const metadata = {
     rawPsdLayerName: layer.rawPsdLayerName,
     normalizedLayerName: layer.normalizedLayerName,
@@ -11380,7 +12105,9 @@ function writeLayerMetadata(node, layer, extra) {
     psdLayerId: normalizePsdLayerId(layer.layerId),
     psdOriginalName: String(layer.rawPsdLayerName || layer.name || ""),
     psdContentHash: String(layer.contentHash || ""),
-    psdOwnership: psdOwnershipForMode(layer.mode)
+    psdOwnership: psdOwnershipForMode(layer.mode),
+    psdSourceState: stablePsdSourceStateJson(sourceState),
+    psdSourceStateHash: hashPsdSourceState(sourceState)
   };
   Object.assign(metadata, extra || {});
   writePluginData(node, metadata);
@@ -13829,9 +14556,187 @@ function normalizePsdLayerId(value) {
   return /^\d+$/.test(text) && text !== "0" ? text : "";
 }
 
+function canonicalizePsdSourceState(value) {
+  if (Array.isArray(value)) return value.map(canonicalizePsdSourceState);
+  if (!value || typeof value !== "object") return value;
+  var result = {};
+  for (var key of Object.keys(value).sort()) {
+    var child = value[key];
+    if (typeof child !== "undefined") result[key] = canonicalizePsdSourceState(child);
+  }
+  return result;
+}
+
+function stablePsdSourceStateJson(value) {
+  return JSON.stringify(canonicalizePsdSourceState(value));
+}
+
+function hashPsdSourceState(value) {
+  var text = stablePsdSourceStateJson(value);
+  var hash = 2166136261;
+  for (var index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function normalizePsdSourceState(layer) {
+  var sourceLayer = layer || {};
+  var raw = sourceLayer.sourceState && typeof sourceLayer.sourceState === "object"
+    ? sourceLayer.sourceState
+    : sourceLayer;
+  if (!raw || typeof raw !== "object") return null;
+  var geometry = raw.geometry || {};
+  var display = raw.display || {};
+  var geometryX = geometry.x != null ? geometry.x : sourceLayer.x;
+  var geometryY = geometry.y != null ? geometry.y : sourceLayer.y;
+  var geometryWidth = geometry.width != null
+    ? geometry.width
+    : (sourceLayer.w != null ? sourceLayer.w : sourceLayer.width);
+  var geometryHeight = geometry.height != null
+    ? geometry.height
+    : (sourceLayer.h != null ? sourceLayer.h : sourceLayer.height);
+  var rotation = geometry.rotation == null ? null : Number(geometry.rotation);
+  return canonicalizePsdSourceState({
+    version: 3,
+    layerId: normalizePsdLayerId(raw.layerId || sourceLayer.layerId),
+    mode: String(raw.mode || sourceLayer.mode || "image"),
+    geometry: {
+      x: Number(geometryX == null ? 0 : geometryX),
+      y: Number(geometryY == null ? 0 : geometryY),
+      width: Number(geometryWidth == null ? 0 : geometryWidth),
+      height: Number(geometryHeight == null ? 0 : geometryHeight),
+      rotation: Number.isFinite(rotation) ? rotation : null,
+    },
+    display: {
+      visible: (display.visible != null ? display.visible : sourceLayer.visible) !== false,
+      opacity: Number(display.opacity != null
+        ? display.opacity
+        : (sourceLayer.opacity != null ? sourceLayer.opacity : 1)),
+      blendMode: display.blendMode != null ? display.blendMode : null,
+      constraints: display.constraints || sourceLayer.constraints || {},
+    },
+    content: raw.content || { contentHash: String(sourceLayer.contentHash || "") },
+    text: raw.text || null,
+    nineSlice: raw.nineSlice || null,
+    unsupported: Array.isArray(raw.unsupported) ? raw.unsupported : [],
+  });
+}
+
+var PSD_SOURCE_FIELD_DESCRIPTORS = [
+  ["content.contentHash", "content"],
+  ["geometry.x", "position"], ["geometry.y", "position"],
+  ["geometry.width", "size"], ["geometry.height", "size"],
+  ["geometry.rotation", "rotation"],
+  ["display.visible", "display"], ["display.opacity", "display"],
+  ["display.blendMode", "display"], ["display.constraints", "display"],
+  ["text.characters", "textContent"], ["text.fontFamily", "textStyle"],
+  ["text.fontFallback", "textStyle"], ["text.fontSize", "textStyle"],
+  ["text.effectiveFontSize", "textStyle"], ["text.leading", "textStyle"],
+  ["text.lineHeightMode", "textStyle"], ["text.textAlignHorizontal", "textStyle"],
+  ["text.fillColor", "textStyle"], ["text.stroke", "textStyle"],
+  ["text.dropShadow", "textStyle"],
+  ["nineSlice", "nineSlice"],
+];
+
+function valueAtPsdPath(value, path) {
+  return path.split(".").reduce(function (current, key) {
+    return current == null ? undefined : current[key];
+  }, value);
+}
+
+function diffPsdSourceStates(baseline, incoming) {
+  var changes = [];
+  for (var descriptor of PSD_SOURCE_FIELD_DESCRIPTORS) {
+    var before = valueAtPsdPath(baseline, descriptor[0]);
+    var after = valueAtPsdPath(incoming, descriptor[0]);
+    if (stablePsdSourceStateJson(before) === stablePsdSourceStateJson(after)) continue;
+    changes.push({
+      path: descriptor[0],
+      category: descriptor[1],
+      before: before,
+      after: after,
+      delta: typeof before === "number" && typeof after === "number" ? after - before : null,
+    });
+  }
+  var unsupportedChanged = stablePsdSourceStateJson(baseline.unsupported || [])
+    !== stablePsdSourceStateJson(incoming.unsupported || []);
+  return { changes: changes, unsupportedChanged: unsupportedChanged };
+}
+
+function categoryLayerCount(changed, category) {
+  return changed.filter(function (pair) {
+    return pair.changes.some(function (change) { return change.category === category; });
+  }).length;
+}
+
+function transformPsdVector(matrix, vector) {
+  return {
+    x: matrix[0][0] * vector.x + matrix[0][1] * vector.y,
+    y: matrix[1][0] * vector.x + matrix[1][1] * vector.y,
+  };
+}
+
+function inversePsdTransformPoint(matrix, point) {
+  var a = matrix[0][0], c = matrix[0][1], tx = matrix[0][2];
+  var b = matrix[1][0], d = matrix[1][1], ty = matrix[1][2];
+  var determinant = a * d - b * c;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-8) {
+    throw new Error("non-invertible-parent-transform");
+  }
+  var x = point.x - tx;
+  var y = point.y - ty;
+  return {
+    x: (d * x - c * y) / determinant,
+    y: (-b * x + a * y) / determinant,
+  };
+}
+
+function computePsdGeometryTarget(input) {
+  var baseline = input.baseline;
+  var incoming = input.incoming;
+  if (!(baseline.width > 0) || !(baseline.height > 0)) {
+    throw new Error("invalid-baseline-size");
+  }
+  var sourceDelta = { x: incoming.x - baseline.x, y: incoming.y - baseline.y };
+  var pageDelta = transformPsdVector(input.rootAbsoluteTransform, sourceDelta);
+  var desiredAbsolute = {
+    x: input.currentAbsolute.x + pageDelta.x,
+    y: input.currentAbsolute.y + pageDelta.y,
+  };
+  return {
+    localPosition: inversePsdTransformPoint(input.parentAbsoluteTransform, desiredAbsolute),
+    size: {
+      width: input.currentSize.width * incoming.width / baseline.width,
+      height: input.currentSize.height * incoming.height / baseline.height,
+    },
+    rotation: Number.isFinite(baseline.rotation) && Number.isFinite(incoming.rotation)
+      ? input.currentRotation + incoming.rotation - baseline.rotation
+      : input.currentRotation,
+  };
+}
+
+function buildPsdLayerMutationPlan(pair) {
+  var categories = Array.from(new Set(pair.changes.map(function (change) {
+    return change.category;
+  }))).sort();
+  return {
+    layerId: normalizePsdLayerId(pair.source.layerId),
+    nodeId: String(pair.target.nodeId || ""),
+    source: pair.source,
+    target: pair.target,
+    categories: categories,
+    changedPaths: pair.changes.map(function (change) { return change.path; }).sort(),
+    baseline: normalizePsdSourceState({ sourceState: pair.target.sourceState }),
+    incoming: normalizePsdSourceState(pair.source),
+  };
+}
+
 function psdOwnershipForMode(mode) {
   if (mode === "text") return "text-content";
   if (mode === "image") return "image-content";
+  if (mode === "nine-slice") return "nine-slice-content";
   return "protected";
 }
 
@@ -13839,6 +14744,9 @@ function validatePsdOwnedTarget(ownership, sourceMode, nodeType, textAutoResize)
   var expected = psdOwnershipForMode(sourceMode);
   if (expected === "protected") return "protected-source-mode";
   if (ownership !== expected) return "ownership-mismatch";
+  if (expected === "nine-slice-content") {
+    return nodeType === "FRAME" ? "" : "unsupported-nine-slice-target";
+  }
   if (expected === "text-content") {
     if (nodeType !== "TEXT") return "unsupported-text-target";
     if (textAutoResize && textAutoResize !== "NONE") return "unsafe-text-auto-resize";
@@ -13932,20 +14840,60 @@ function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
   var unchanged = [];
   var added = [];
   var missing = [];
+  var baselineRequired = [];
 
   for (var incomingEntry of incomingById.entries()) {
     var layerId = incomingEntry[0];
     var sourceLayer = incomingEntry[1];
+    var incomingState = normalizePsdSourceState(sourceLayer);
     var target = currentById.get(layerId);
     if (!target) {
-      added.push({ source: sourceLayer });
+      if (incomingState && incomingState.unsupported.length > 0) {
+        conflicts.push({
+          kind: "unsupported-source-change",
+          layerId: layerId,
+          unsupported: incomingState.unsupported,
+        });
+      } else {
+        added.push({ source: sourceLayer, sourceState: incomingState });
+      }
       continue;
     }
 
-    var targetHash = String(target.contentHash || "");
-    var sourceHash = String(sourceLayer.contentHash || "");
-    var pair = { source: sourceLayer, target: target };
-    if (targetHash && targetHash === sourceHash) unchanged.push(pair);
+    if (!target.sourceState || typeof target.sourceState !== "object") {
+      baselineRequired.push({ source: sourceLayer, target: target, sourceState: incomingState });
+      continue;
+    }
+
+    var baselineState = normalizePsdSourceState({
+      layerId: layerId,
+      sourceState: target.sourceState,
+    });
+    var fieldDiff = diffPsdSourceStates(baselineState, incomingState);
+    var pair = {
+      source: sourceLayer,
+      target: target,
+      baselineState: baselineState,
+      sourceState: incomingState,
+      changes: fieldDiff.changes,
+    };
+
+    if (fieldDiff.changes.some(function (change) {
+      return change.path === "geometry.rotation"
+        && (!Number.isFinite(change.before) || !Number.isFinite(change.after));
+    })) {
+      conflicts.push({ kind: "unreliable-rotation-delta", layerId: layerId });
+    }
+    if (fieldDiff.unsupportedChanged) {
+      conflicts.push({
+        kind: "unsupported-source-change",
+        layerId: layerId,
+        before: baselineState.unsupported,
+        after: incomingState.unsupported,
+      });
+    }
+
+    if (fieldDiff.changes.length === 0 && !fieldDiff.unsupportedChanged) unchanged.push(pair);
     else changed.push(pair);
   }
 
@@ -13955,19 +14903,39 @@ function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
     }
   }
 
+  var status = conflicts.length > 0
+    ? "preview-blocked"
+    : baselineRequired.length > 0
+      ? "preview-baseline-required"
+      : changed.length === 0 && added.length === 0
+        ? "preview-no-changes"
+        : "preview-ready";
+
   return {
+    status: status,
     changed: changed,
     unchanged: unchanged,
     added: added,
     missing: missing,
+    baselineRequired: baselineRequired,
     conflicts: conflicts,
-    canApply: conflicts.length === 0,
+    canApply: status === "preview-ready",
     summary: {
+      affected: changed.length,
       changed: changed.length,
       unchanged: unchanged.length,
       added: added.length,
       missing: missing.length,
       conflicts: conflicts.length,
+      content: categoryLayerCount(changed, "content"),
+      textContent: categoryLayerCount(changed, "textContent"),
+      position: categoryLayerCount(changed, "position"),
+      size: categoryLayerCount(changed, "size"),
+      rotation: categoryLayerCount(changed, "rotation"),
+      display: categoryLayerCount(changed, "display"),
+      textStyle: categoryLayerCount(changed, "textStyle"),
+      nineSlice: categoryLayerCount(changed, "nineSlice"),
+      baselineRequired: baselineRequired.length,
     },
   };
 }
