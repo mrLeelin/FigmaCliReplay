@@ -650,7 +650,7 @@ async function handlePost(
       const result = pathname === "/ai-runner/config"
         ? writeLocalAiRunnerConfig(payload)
         : pathname === "/ai-runner/open-terminal"
-          ? openLocalAiTerminal(payload)
+          ? await openLocalAiTerminal(payload)
         : pathname === "/ai-runner/run-cleanup"
           ? await startLegacyCleanup(cleanupRuntime, payload)
           : runLocalAiPrompt(payload);

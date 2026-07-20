@@ -138,13 +138,28 @@ test("interactive terminal launch stays inside the guarded local AI route", () =
   assert.match(route, /pathname === "\/ai-runner\/open-terminal"/);
   assert.match(route, /openLocalAiTerminal\(payload\)/);
   assert.match(route, /!relay\.hasLivePluginSession\(payload\.sessionId\)/);
-  assert.match(runner, /export function openLocalAiTerminal\(payload: unknown\)/);
+  assert.match(runner, /export async function openLocalAiTerminal\(payload: unknown\)/);
   assert.match(runner, /aiLogger\.startOperation\("ai\.terminal"/);
   assert.ok(runner.indexOf('aiLogger.startOperation("ai.terminal"') < runner.indexOf('if (!sessionId) throw new Error("missing sessionId")'));
   assert.match(runner, /"-NoExit", "-EncodedCommand"/);
   assert.match(runner, /windowsHide: false/);
   assert.match(runner, /terminal-task\.md/);
   assert.match(runner, /Buffer\.from\(script, "utf16le"\)\.toString\("base64"\)/);
+});
+
+test("interactive terminal launch waits for a real PowerShell hosted by Windows Terminal", () => {
+  const source = fs.readFileSync(new URL("../src/httpServer.ts", import.meta.url), "utf8");
+  const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
+  const start = runner.indexOf("export async function openLocalAiTerminal(");
+  const end = runner.indexOf("function buildInteractiveTerminalTask", start);
+  const terminal = runner.slice(start, end);
+
+  assert.match(source, /await openLocalAiTerminal\(payload\)/);
+  assert.match(terminal, /terminal\.pid/);
+  assert.match(terminal, /await launchInteractivePowerShell\(/);
+  assert.match(runner, /spawn\("wt\.exe", \["-w", "new", "nt"/);
+  assert.match(runner, /await waitForTerminalPid\(/);
+  assert.doesNotMatch(terminal, /spawn\("powershell\.exe"/);
 });
 
 test("transient plugin websocket reconnects receive a grace lease before AI cancellation", () => {

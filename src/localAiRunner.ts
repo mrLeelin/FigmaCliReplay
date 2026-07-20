@@ -124,7 +124,7 @@ export function runLocalAiPrompt(payload: unknown) {
  * Starts a user-visible, interactive local CLI window. This deliberately does
  * not create an AiRun: Relay cannot observe or authorize later terminal input.
  */
-export function openLocalAiTerminal(payload: unknown) {
+export async function openLocalAiTerminal(payload: unknown) {
   const request = isRecord(payload) ? payload : {};
   const template = typeof request.template === "string" ? request.template.trim() : "";
   const prompt = typeof request.prompt === "string" ? request.prompt.trim() : "";
@@ -145,6 +145,7 @@ export function openLocalAiTerminal(payload: unknown) {
     const taskContent = buildInteractiveTerminalTask(template, prompt, unityProject);
     const terminalDir = path.join(RUNS_ROOT, terminalId);
     const taskFile = path.join(terminalDir, "terminal-task.md");
+    const pidFile = path.join(terminalDir, "terminal.pid");
     fs.mkdirSync(terminalDir, { recursive: true });
     fs.writeFileSync(taskFile, `\uFEFF${taskContent}`, "utf8");
     operation.step("task-persisted", "终端任务已保存为 UTF-8 文件", {
@@ -155,7 +156,7 @@ export function openLocalAiTerminal(payload: unknown) {
     });
 
     const command = resolveRunnerCommand(config.command);
-    const script = buildInteractivePowerShellScript(config.workspace, taskFile, command);
+    const script = buildInteractivePowerShellScript(config.workspace, taskFile, pidFile, command);
     const encodedScript = Buffer.from(script, "utf16le").toString("base64");
     operation.step("command-prepared", "已生成 PowerShell 交互启动命令", {
       runner: config.runner,
@@ -163,25 +164,18 @@ export function openLocalAiTerminal(payload: unknown) {
       encoded: true,
       taskFile: path.basename(taskFile),
     });
-    const child = spawn("powershell.exe", ["-NoExit", "-EncodedCommand", encodedScript], {
-      cwd: config.workspace,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: false,
-    });
-    if (!child.pid) throw new Error("PowerShell process did not provide a process id");
-    child.unref();
+    const pid = await launchInteractivePowerShell(config.workspace, encodedScript, pidFile);
     operation.step("powershell-started", "已启动可见的 PowerShell 交互窗口", {
       runner: config.runner,
-      pid: child.pid,
+      pid,
       taskFile: path.basename(taskFile),
     });
     operation.succeed("本地 AI 交互终端已启动", {
       runner: config.runner,
-      pid: child.pid,
+      pid,
       taskFile: path.basename(taskFile),
     });
-    return { ok: true, runner: config.runner, taskFile, pid: child.pid };
+    return { ok: true, runner: config.runner, taskFile, pid };
   } catch (error) {
     operation.fail(error, "打开本地 AI 交互终端失败", {
       template,
@@ -210,14 +204,60 @@ function buildInteractiveTerminalTask(
   ].join("\n");
 }
 
-function buildInteractivePowerShellScript(workspace: string, taskFile: string, command: string): string {
+function buildInteractivePowerShellScript(workspace: string, taskFile: string, pidFile: string, command: string): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    `[Diagnostics.Process]::GetCurrentProcess().Id | Set-Content -LiteralPath ${powerShellLiteral(pidFile)} -Encoding ascii`,
     `Set-Location -LiteralPath ${powerShellLiteral(workspace)}`,
     `$terminalPrompt = Get-Content -LiteralPath ${powerShellLiteral(taskFile)} -Raw -Encoding UTF8`,
     `& ${powerShellLiteral(command)} $terminalPrompt`,
     "if ($LASTEXITCODE -ne 0) { Write-Host ('AI CLI exited with code ' + $LASTEXITCODE) -ForegroundColor Yellow }",
   ].join("; ");
+}
+
+async function launchInteractivePowerShell(workspace: string, encodedScript: string, pidFile: string): Promise<number> {
+  if (process.platform !== "win32") throw new Error("interactive AI terminal launch is only supported on Windows");
+  if (!commandAvailable("wt.exe")) throw new Error("Windows Terminal (wt.exe) is required to open a visible AI PowerShell window");
+  fs.rmSync(pidFile, { force: true });
+
+  const child = spawn("wt.exe", ["-w", "new", "nt", "-d", workspace, "powershell.exe", "-NoLogo", "-NoExit", "-EncodedCommand", encodedScript], {
+    cwd: workspace,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+  });
+  await waitForChildSpawn(child);
+  child.unref();
+  return await waitForTerminalPid(pidFile, 8_000);
+}
+
+function waitForChildSpawn(child: ChildProcess): Promise<void> {
+  if (child.pid) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+}
+
+async function waitForTerminalPid(pidFile: string, timeoutMs: number): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(pidFile)) {
+      const pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+      if (Number.isSafeInteger(pid) && pid > 0 && processIsAlive(pid)) return pid;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Windows Terminal did not create a live PowerShell process within 8 seconds");
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function powerShellLiteral(value: string): string {
