@@ -9,8 +9,23 @@ import type { OperationScope } from "./logging/operationScope.js";
 import { logInfo, logWarn } from "./utils/logger.js";
 import { isRecord } from "./utils.js";
 
-type PsdImportMode = "initial" | "incremental-preview" | "incremental-apply";
-type PsdImportTaskStatus = "queued" | "running" | "preview-ready" | "completed" | "error";
+type PsdImportMode =
+  | "initial"
+  | "incremental-preview"
+  | "incremental-baseline-adopt"
+  | "incremental-apply";
+type PsdPreviewStatus =
+  | "preview-ready"
+  | "preview-blocked"
+  | "preview-no-changes"
+  | "preview-baseline-required";
+type PsdImportTaskStatus =
+  | "queued"
+  | "running"
+  | PsdPreviewStatus
+  | "baseline-adopted"
+  | "completed"
+  | "error";
 
 export interface PsdImportTask {
   taskId: string;
@@ -46,6 +61,12 @@ const taskOperations = new Map<string, OperationScope>();
 const logging = getLoggingRuntime();
 const taskLogger = logging.logger("psd-import-task");
 const PYTHON_LOG_MARKER = "FIGMA_RELAY_LOG ";
+const PSD_PREVIEW_STATUSES = new Set<PsdPreviewStatus>([
+  "preview-ready",
+  "preview-blocked",
+  "preview-no-changes",
+  "preview-baseline-required"
+]);
 
 export function startPsdImportTask(config: GatewayConfig, payload: unknown): PsdImportTask {
   if (!isRecord(payload)) {
@@ -140,6 +161,26 @@ export function applyPsdImportTask(config: GatewayConfig, taskId: string, payloa
   return serializePsdImportTask(task);
 }
 
+export function adoptPsdImportBaseline(config: GatewayConfig, taskId: string, payload: unknown): PsdImportTask {
+  const task = tasks.get(taskId);
+  if (!task || task.status !== "preview-baseline-required") {
+    throw new Error("PSD source baseline adoption is not available");
+  }
+  const providedFingerprint = isRecord(payload) ? stringValue(payload.baselineFingerprint) : "";
+  if (!providedFingerprint || providedFingerprint !== task.baselineFingerprint) {
+    throw new Error("PSD baseline preview fingerprint does not match");
+  }
+  task.mode = "incremental-baseline-adopt";
+  task.status = "queued";
+  task.stage = "queued_baseline_adopt";
+  task.percent = 0;
+  task.error = undefined;
+  task.updatedAt = Date.now();
+  startTaskOperation(task, "psd.incremental-baseline-adopt", "开始认领 PSD 源状态基线");
+  void runPsdImportTask(config, task, { reuseExportArtifacts: true });
+  return serializePsdImportTask(task);
+}
+
 function serializePsdImportTask(task: PsdImportTask): PsdImportTask {
   return {
     ...task,
@@ -196,7 +237,8 @@ async function runPsdImportTask(
     if (task.target.targetNodeId) {
       submitArgs.push("--target-node-id", task.target.targetNodeId);
     }
-    if (task.mode === "incremental-apply" && task.baselineFingerprint) {
+    if ((task.mode === "incremental-apply" || task.mode === "incremental-baseline-adopt")
+      && task.baselineFingerprint) {
       submitArgs.push("--baseline-fingerprint", task.baselineFingerprint);
     }
     await runPythonScript(task, submitScript, submitArgs);
@@ -207,17 +249,38 @@ async function runPsdImportTask(
     });
     task.summary = result;
     if (task.mode === "incremental-preview") {
-      if (!isRecord(result) || !stringValue(result.baselineFingerprint)) {
+      if (!isRecord(result)) {
+        throw new Error("PSD incremental preview did not return a result");
+      }
+      const previewStatus = stringValue(result.status);
+      if (!PSD_PREVIEW_STATUSES.has(previewStatus as PsdPreviewStatus)) {
+        throw new Error(`PSD incremental preview returned invalid status: ${previewStatus || "missing"}`);
+      }
+      if (!stringValue(result.baselineFingerprint)) {
         throw new Error("PSD incremental preview did not return a baseline fingerprint");
       }
       task.preview = result;
       task.baselineFingerprint = stringValue(result.baselineFingerprint);
-      task.status = "preview-ready";
-      task.stage = "preview_ready";
+      task.status = previewStatus as PsdPreviewStatus;
+      task.stage = previewStatus.replace(/-/g, "_");
       task.percent = 100;
       task.updatedAt = Date.now();
-      task.logs.push(formatTaskLog(task, "PSD 增量差异已生成，等待确认"));
-      taskOperations.get(task.taskId)?.succeed("PSD 增量预览已生成", { status: task.status });
+      task.logs.push(formatTaskLog(task, `PSD 增量预览已完成：${previewStatus}`));
+      taskOperations.get(task.taskId)?.succeed("PSD 增量预览已生成", { status: previewStatus });
+      taskOperations.delete(task.taskId);
+      return;
+    }
+    if (task.mode === "incremental-baseline-adopt") {
+      if (!isRecord(result) || result.status !== "baseline-adopted") {
+        throw new Error("PSD source baseline adoption was not completed");
+      }
+      task.status = "baseline-adopted";
+      task.stage = "baseline_adopted";
+      task.percent = 100;
+      task.completedAt = Date.now();
+      task.updatedAt = task.completedAt;
+      task.logs.push(formatTaskLog(task, "PSD 源状态基线认领完成，画布未修改"));
+      taskOperations.get(task.taskId)?.succeed("PSD 源状态基线认领完成", { status: task.status });
       taskOperations.delete(task.taskId);
       return;
     }

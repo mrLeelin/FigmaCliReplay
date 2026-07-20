@@ -15,10 +15,26 @@ class PsdIncrementalTerminalStatusTests(unittest.TestCase):
         self.assertTrue(MODULE.is_successful_import_status("completed", "initial"))
         self.assertFalse(MODULE.is_successful_import_status("preview-ready", "initial"))
 
-    def test_preview_accepts_ready_and_blocked_results(self):
-        self.assertTrue(MODULE.is_successful_import_status("preview-ready", "incremental-preview"))
-        self.assertTrue(MODULE.is_successful_import_status("preview-blocked", "incremental-preview"))
+    def test_preview_accepts_every_non_error_terminal_preview(self):
+        for status in (
+            "preview-ready",
+            "preview-blocked",
+            "preview-no-changes",
+            "preview-baseline-required",
+        ):
+            self.assertTrue(
+                MODULE.is_successful_import_status(status, "incremental-preview"),
+                status,
+            )
         self.assertFalse(MODULE.is_successful_import_status("error", "incremental-preview"))
+
+    def test_baseline_adoption_requires_baseline_adopted(self):
+        self.assertTrue(MODULE.is_successful_import_status(
+            "baseline-adopted", "incremental-baseline-adopt"
+        ))
+        self.assertFalse(MODULE.is_successful_import_status(
+            "applied", "incremental-baseline-adopt"
+        ))
 
     def test_apply_requires_applied(self):
         self.assertTrue(MODULE.is_successful_import_status("applied", "incremental-apply"))

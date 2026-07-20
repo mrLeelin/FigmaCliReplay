@@ -15,3 +15,30 @@ test("PSD task supports preview followed by apply using the same artifacts", () 
   assert.match(httpSource, /applyPsdImportTask\(config, taskId, payload\)/);
   assert.match(submitSource, /--import-mode/);
 });
+
+test("gateway preserves all preview terminal states", () => {
+  for (const status of [
+    "preview-ready", "preview-blocked", "preview-no-changes", "preview-baseline-required",
+  ]) {
+    assert.match(taskSource, new RegExp(status));
+  }
+  assert.match(taskSource, /const previewStatus = stringValue\(result\.status\)/);
+});
+
+test("baseline adoption reuses artifacts but cannot call apply", () => {
+  assert.match(taskSource, /adoptPsdImportBaseline/);
+  assert.match(taskSource, /incremental-baseline-adopt/);
+  assert.match(httpSource, /\/adopt-baseline/);
+  assert.match(submitSource, /baseline-adopted/);
+});
+
+test("only preview-ready can enter incremental apply", () => {
+  const applyStart = taskSource.indexOf("export function applyPsdImportTask(");
+  const adoptStart = taskSource.indexOf("export function adoptPsdImportBaseline(", applyStart);
+  const applySource = taskSource.slice(applyStart, adoptStart);
+  assert.match(applySource, /task\.status !== "preview-ready"/);
+  assert.doesNotMatch(applySource, /preview-baseline-required/);
+
+  const adoptionSource = taskSource.slice(adoptStart);
+  assert.match(adoptionSource, /task\.status !== "preview-baseline-required"/);
+});

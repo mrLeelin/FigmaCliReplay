@@ -13,7 +13,12 @@ import { UnityLogCollector } from "./logging/unityLogCollector.js";
 import { logError, logInfo, logWarn, logger } from "./utils/logger.js";
 import { RelayMcpHttpEndpoint } from "./mcpServer.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
-import { applyPsdImportTask, getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
+import {
+  adoptPsdImportBaseline,
+  applyPsdImportTask,
+  getPsdImportTask,
+  startPsdImportTask
+} from "./psdImportTask.js";
 import { followupAiRun, getAiRun, localAiRunnerStatus, openLocalAiTerminal, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
 import { redactLargeRelayPayload, type RuntimeRelay } from "./runtimeRelay.js";
 import { UnityProjectRegistry } from "./unityProjectRegistry.js";
@@ -674,6 +679,18 @@ async function handlePost(
   if (pathname === "/psd-to-figma/import") {
     try {
       const task = startPsdImportTask(config, payload);
+      jsonResponse(response, 200, { ok: true, task });
+    } catch (error) {
+      jsonResponse(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+  // Route shape: /psd-to-figma/import/[^/]+/adopt-baseline
+  const psdBaselineMatch = pathname.match(/^\/psd-to-figma\/import\/([^/]+)\/adopt-baseline$/);
+  if (psdBaselineMatch) {
+    const taskId = decodeURIComponent(psdBaselineMatch[1] || "");
+    try {
+      const task = adoptPsdImportBaseline(config, taskId, payload);
       jsonResponse(response, 200, { ok: true, task });
     } catch (error) {
       jsonResponse(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });

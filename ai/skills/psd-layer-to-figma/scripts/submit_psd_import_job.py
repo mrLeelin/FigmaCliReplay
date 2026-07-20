@@ -595,7 +595,14 @@ def validate_fast_repeat_args(args: argparse.Namespace) -> None:
 def is_successful_import_status(status: str, import_mode: str) -> bool:
     """Treat each import mode's valid terminal response as a successful submission."""
     if import_mode == "incremental-preview":
-        return status in {"preview-ready", "preview-blocked"}
+        return status in {
+            "preview-ready",
+            "preview-blocked",
+            "preview-no-changes",
+            "preview-baseline-required",
+        }
+    if import_mode == "incremental-baseline-adopt":
+        return status == "baseline-adopted"
     if import_mode == "incremental-apply":
         return status == "applied"
     return status == "completed"
@@ -635,9 +642,14 @@ def main() -> int:
     parser.add_argument("--target-node-id", default="", help="导入根 Frame 的目标 parent nodeId；不传则当前 Page")
     parser.add_argument(
         "--import-mode",
-        choices=("initial", "incremental-preview", "incremental-apply"),
+        choices=(
+            "initial",
+            "incremental-preview",
+            "incremental-baseline-adopt",
+            "incremental-apply",
+        ),
         default="initial",
-        help="首次导入、增量预览或确认后的增量应用",
+        help="首次导入、增量预览、旧数据认领或确认后的增量应用",
     )
     parser.add_argument("--baseline-fingerprint", default="", help="增量应用必须携带的预览指纹")
     parser.add_argument("--source-file-name", default="", help="仅保存文件名，用于隐藏的 PSD 来源校验")
