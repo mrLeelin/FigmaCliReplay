@@ -169,6 +169,24 @@ test("cleanup keeps the generated prompt preview and cleanup action buttons visi
   assert.match(ui, /\$figma-hierarchy-cleanup-mcp/);
 });
 
+test("manual prompt actions can continue with the currently selected AI in a terminal", () => {
+  const controlsStart = ui.indexOf("function refreshAiPromptControls()");
+  const controlsEnd = ui.indexOf("function readCurrentFigmaKey", controlsStart);
+  const controls = ui.slice(controlsStart, controlsEnd);
+  const terminalStart = ui.indexOf("async function postAiTerminalWithLiveSessionRetry(");
+  const terminalEnd = ui.indexOf("function requestAiRun()", terminalStart);
+  const terminal = ui.slice(terminalStart, terminalEnd);
+
+  assert.match(ui, /id="openAiTerminalBtn"/);
+  assert.match(ui, /openAiTerminalBtn\.addEventListener\("click", openAiTerminal\)/);
+  assert.match(controls, /openAiTerminalBtn\.disabled = generatingAiPrompt \|\| aiCleanupBusy \|\| aiTerminalLaunching \|\| !aiPromptPreviewEl\.value\.trim\(\)/);
+  assert.match(ui, /function runnerForCurrentAiPromptTemplate\(template\)/);
+  assert.match(terminal, /"\/ai-runner\/open-terminal"/);
+  assert.match(terminal, /runnerForCurrentAiPromptTemplate\(template\)/);
+  assert.match(terminal, /uiLogger\.startOperation\("ai\.terminal"/);
+  assert.match(terminal, /任务文件：/);
+});
+
 test("cleanup enters the AI execution page and records a read-only conversation start", () => {
   assert.doesNotMatch(ui, /autoApprove:\s*true/);
   assert.match(ui, /writeAuthorised: false/);

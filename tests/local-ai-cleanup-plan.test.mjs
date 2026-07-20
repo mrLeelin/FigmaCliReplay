@@ -88,6 +88,7 @@ test("the complete cleanup skill keeps hierarchy approval separate from variant 
 test("cleanup prompt keeps the AI read-only and delegates validated execution to Relay", () => {
   const prompt = fs.readFileSync(new URL("../prompts/cleanup.md", import.meta.url), "utf8");
   const skill = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md", import.meta.url), "utf8");
+  const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
 
   for (const source of [skill]) {
     assert.match(source, /原始直接子节点.*ID.*name/);
@@ -99,11 +100,11 @@ test("cleanup prompt keeps the AI read-only and delegates validated execution to
     assert.match(source, /本地.*校验/);
     assert.match(source, /不得询问确认/);
   }
-  assert.match(prompt, /Relay-owned cleanup execution/i);
-  assert.match(prompt, /AI is read-only/i);
-  assert.match(prompt, /automatically dispatches the validated hierarchy transaction/i);
-  assert.match(prompt, /\u6ee1\u610f/);
-  assert.doesNotMatch(prompt, /\$figma-hierarchy-cleanup-mcp/);
+  assert.match(prompt, /Relay 会在启动 AI 前生成唯一的执行规则和权威快照/);
+  assert.match(runner, /The first turn remains read-only/);
+  assert.match(runner, /Relay dispatches the validated safe hierarchy transaction automatically/);
+  assert.match(runner, /Only an explicit satisfied response/);
+  assert.match(prompt, /\$figma-hierarchy-cleanup-mcp/);
 });
 
 test("legacy cleanup HTTP entrypoint forwards into the single V2 controller", () => {
@@ -125,6 +126,25 @@ test("AI runner start requires the exact live plugin session even for Figma-orig
   const route = source.slice(start, end);
   assert.match(route, /!relay\.hasLivePluginSession\(payload\.sessionId\)/);
   assert.doesNotMatch(route, /!isFigmaPluginRequest\(request\) && !relay\.hasLivePluginSession/);
+});
+
+test("interactive terminal launch stays inside the guarded local AI route", () => {
+  const source = fs.readFileSync(new URL("../src/httpServer.ts", import.meta.url), "utf8");
+  const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
+  const start = source.indexOf('if (pathname === "/ai-runner/config"');
+  const end = source.indexOf('if (pathname === "/open-plugin-folder"', start);
+  const route = source.slice(start, end);
+
+  assert.match(route, /pathname === "\/ai-runner\/open-terminal"/);
+  assert.match(route, /openLocalAiTerminal\(payload\)/);
+  assert.match(route, /!relay\.hasLivePluginSession\(payload\.sessionId\)/);
+  assert.match(runner, /export function openLocalAiTerminal\(payload: unknown\)/);
+  assert.match(runner, /aiLogger\.startOperation\("ai\.terminal"/);
+  assert.ok(runner.indexOf('aiLogger.startOperation("ai.terminal"') < runner.indexOf('if (!sessionId) throw new Error("missing sessionId")'));
+  assert.match(runner, /"-NoExit", "-EncodedCommand"/);
+  assert.match(runner, /windowsHide: false/);
+  assert.match(runner, /terminal-task\.md/);
+  assert.match(runner, /Buffer\.from\(script, "utf16le"\)\.toString\("base64"\)/);
 });
 
 test("transient plugin websocket reconnects receive a grace lease before AI cancellation", () => {

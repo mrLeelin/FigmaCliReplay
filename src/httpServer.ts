@@ -14,7 +14,7 @@ import { logError, logInfo, logWarn, logger } from "./utils/logger.js";
 import { RelayMcpHttpEndpoint } from "./mcpServer.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 import { applyPsdImportTask, getPsdImportTask, startPsdImportTask } from "./psdImportTask.js";
-import { followupAiRun, getAiRun, localAiRunnerStatus, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
+import { followupAiRun, getAiRun, localAiRunnerStatus, openLocalAiTerminal, runLocalAiPrompt, stopAiRun, writeLocalAiRunnerConfig } from "./localAiRunner.js";
 import { redactLargeRelayPayload, type RuntimeRelay } from "./runtimeRelay.js";
 import { UnityProjectRegistry } from "./unityProjectRegistry.js";
 import { readUnityGatewayDiscovery } from "./unityGatewayDiscovery.js";
@@ -625,7 +625,7 @@ async function handlePost(
     }
     return;
   }
-  if (pathname === "/ai-runner/config" || pathname === "/ai-runner/run-cleanup" || pathname === "/ai-runner/run-prompt" || /^\/ai-runner\/runs\/[^/]+\/(followup|stop)$/.test(pathname)) {
+  if (pathname === "/ai-runner/config" || pathname === "/ai-runner/open-terminal" || pathname === "/ai-runner/run-cleanup" || pathname === "/ai-runner/run-prompt" || /^\/ai-runner\/runs\/[^/]+\/(followup|stop)$/.test(pathname)) {
     const runAction = pathname.match(/^\/ai-runner\/runs\/([^/]+)\/(followup|stop)$/);
     if (runAction) {
       try {
@@ -644,6 +644,8 @@ async function handlePost(
     try {
       const result = pathname === "/ai-runner/config"
         ? writeLocalAiRunnerConfig(payload)
+        : pathname === "/ai-runner/open-terminal"
+          ? openLocalAiTerminal(payload)
         : pathname === "/ai-runner/run-cleanup"
           ? await startLegacyCleanup(cleanupRuntime, payload)
           : runLocalAiPrompt(payload);

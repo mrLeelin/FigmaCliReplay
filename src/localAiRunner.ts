@@ -121,6 +121,110 @@ export function runLocalAiPrompt(payload: unknown) {
 }
 
 /**
+ * Starts a user-visible, interactive local CLI window. This deliberately does
+ * not create an AiRun: Relay cannot observe or authorize later terminal input.
+ */
+export function openLocalAiTerminal(payload: unknown) {
+  const request = isRecord(payload) ? payload : {};
+  const template = typeof request.template === "string" ? request.template.trim() : "";
+  const prompt = typeof request.prompt === "string" ? request.prompt.trim() : "";
+  const runner = runnerFrom(request);
+  const sessionId = typeof request.sessionId === "string" ? request.sessionId : "";
+  const terminalId = `terminal-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const operation = aiLogger.startOperation("ai.terminal", "打开本地 AI 交互终端", {
+    operationId: terminalId,
+    data: { template, runner, sessionId, promptChars: prompt.length },
+  });
+  try {
+    if (!sessionId) throw new Error("missing sessionId");
+    if (!SupportedPromptTemplates.has(template)) throw new Error("unsupported AI prompt template");
+    if (!prompt) throw new Error("AI prompt is required");
+    const config = preset(runner);
+    if (!commandAvailable(config.command)) throw new Error(`local AI command is not available: ${config.command}`);
+    const unityProject = resolveUnityProjectSnapshot(payload);
+    const taskContent = buildInteractiveTerminalTask(template, prompt, unityProject);
+    const terminalDir = path.join(RUNS_ROOT, terminalId);
+    const taskFile = path.join(terminalDir, "terminal-task.md");
+    fs.mkdirSync(terminalDir, { recursive: true });
+    fs.writeFileSync(taskFile, `\uFEFF${taskContent}`, "utf8");
+    operation.step("task-persisted", "终端任务已保存为 UTF-8 文件", {
+      template,
+      runner: config.runner,
+      fileName: path.basename(taskFile),
+      taskChars: taskContent.length,
+    });
+
+    const command = resolveRunnerCommand(config.command);
+    const script = buildInteractivePowerShellScript(config.workspace, taskFile, command);
+    const encodedScript = Buffer.from(script, "utf16le").toString("base64");
+    operation.step("command-prepared", "已生成 PowerShell 交互启动命令", {
+      runner: config.runner,
+      command: path.basename(command),
+      encoded: true,
+      taskFile: path.basename(taskFile),
+    });
+    const child = spawn("powershell.exe", ["-NoExit", "-EncodedCommand", encodedScript], {
+      cwd: config.workspace,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    if (!child.pid) throw new Error("PowerShell process did not provide a process id");
+    child.unref();
+    operation.step("powershell-started", "已启动可见的 PowerShell 交互窗口", {
+      runner: config.runner,
+      pid: child.pid,
+      taskFile: path.basename(taskFile),
+    });
+    operation.succeed("本地 AI 交互终端已启动", {
+      runner: config.runner,
+      pid: child.pid,
+      taskFile: path.basename(taskFile),
+    });
+    return { ok: true, runner: config.runner, taskFile, pid: child.pid };
+  } catch (error) {
+    operation.fail(error, "打开本地 AI 交互终端失败", {
+      template,
+      runner,
+      sessionId,
+      promptChars: prompt.length,
+    });
+    throw error;
+  }
+}
+
+function buildInteractiveTerminalTask(
+  template: string,
+  prompt: string,
+  unityProject?: Readonly<UnityProjectStatus>,
+): string {
+  return [
+    `# Figma AI task: ${template}`,
+    "",
+    "This task was explicitly handed to an interactive local AI terminal by the user.",
+    "Read and follow the task prompt below. Keep the conversation in this terminal for any follow-up requests.",
+    "The Figma MCP Relay at http://127.0.0.1:32130 is an externally managed endpoint. You are its client: never launch, restart, stop, reconfigure, probe, bind, or listen on its ports. If a Relay connection fails, report the exact error and do not add retries outside the task workflow.",
+    "",
+    ...(unityProject ? ["## Unity project snapshot", "", "```json", JSON.stringify(unityProject, null, 2), "```", ""] : []),
+    "## Task prompt", "", prompt,
+  ].join("\n");
+}
+
+function buildInteractivePowerShellScript(workspace: string, taskFile: string, command: string): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `Set-Location -LiteralPath ${powerShellLiteral(workspace)}`,
+    `$terminalPrompt = Get-Content -LiteralPath ${powerShellLiteral(taskFile)} -Raw -Encoding UTF8`,
+    `& ${powerShellLiteral(command)} $terminalPrompt`,
+    "if ($LASTEXITCODE -ne 0) { Write-Host ('AI CLI exited with code ' + $LASTEXITCODE) -ForegroundColor Yellow }",
+  ].join("; ");
+}
+
+function powerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/**
  * The UI cleanup template used to contain a second complete execution policy.
  * The Relay owns that policy in buildCleanupConversationTask, so passing the
  * UI template through as a user request created contradictory instructions.

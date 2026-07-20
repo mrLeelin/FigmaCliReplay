@@ -1037,6 +1037,7 @@
       <div class="row" id="aiPromptManualActions">
         <button id="generateAiPromptBtn">生成提示词</button>
         <button id="copyAiPromptBtn" class="secondary">复制提示词</button>
+        <button id="openAiTerminalBtn" class="secondary" type="button">在终端继续</button>
         <button id="runAiCleanupBtn" class="export-btn">开始 AI 整理对话</button>
       </div>
       <div class="mcp-config-panel expanded" id="aiRunnerPanel">
@@ -1216,6 +1217,7 @@
     const aiPromptPsdFileBox = document.getElementById("aiPromptPsdFileBox");
     const generateAiPromptBtn = document.getElementById("generateAiPromptBtn");
     const copyAiPromptBtn = document.getElementById("copyAiPromptBtn");
+    const openAiTerminalBtn = document.getElementById("openAiTerminalBtn");
     const runAiCleanupBtn = document.getElementById("runAiCleanupBtn");
     const aiRunnerSelect = document.getElementById("aiRunnerSelect");
     const cleanupProviderField = document.getElementById("cleanupProviderField");
@@ -1460,6 +1462,7 @@
     let pendingCleanupSnapshotReject = null;
     let pendingAutoAiTemplate = "";
     let aiCleanupBusy = false;
+    let aiTerminalLaunching = false;
     let aiCleanupPollTimer = null;
     let activeAiCleanupRun = null;
     let activeAiCleanupOperation = null;
@@ -2410,6 +2413,7 @@
       aiPromptTemplateSelect.value = template;
       generateAiPromptBtn.disabled = generatingAiPrompt;
       copyAiPromptBtn.disabled = !aiPromptPreviewEl.value.trim();
+      openAiTerminalBtn.disabled = generatingAiPrompt || aiCleanupBusy || aiTerminalLaunching || !aiPromptPreviewEl.value.trim();
       runAiCleanupBtn.disabled = generatingAiPrompt || aiProviderSyncing || !provider || provider.available !== true || aiCleanupBusy;
       runAiCleanupBtn.textContent = aiTemplateActionLabel(template);
       cleanupProviderField.style.display = "";
@@ -3429,6 +3433,12 @@
       return providerId === "claude-code" ? "claude" : "codex";
     }
 
+    function runnerForCurrentAiPromptTemplate(template) {
+      return template === "cleanup"
+        ? runnerIdForCleanupProvider(cleanupProviderSelect.value)
+        : aiRunnerSelect.value;
+    }
+
     function syncAiRunnerToCleanupProvider() {
       var providerId = cleanupProviderSelect.value;
       var targetRunner = runnerIdForCleanupProvider(providerId);
@@ -3641,6 +3651,106 @@
           sessionId: relaySessionId
         });
         return false;
+      }
+    }
+
+    async function postAiTerminalWithLiveSessionRetry(payload, operation) {
+      var maxAttempts = 3;
+      var registrationReady = await waitForRelaySocketRegistration(5000);
+      operation.step("plugin-session-registration", registrationReady ? "Figma 插件会话已完成 Relay 注册" : "等待 Figma 插件会话注册超时，将继续有限重试", {
+        sessionId: payload.sessionId,
+        runner: payload.runner,
+        socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
+        socketRegistered: relaySocketRegistered
+      }, registrationReady ? "info" : "warn");
+      for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        operation.step("terminal-request", "请求打开本地 AI 交互终端", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          template: payload.template,
+          runner: payload.runner,
+          sessionId: payload.sessionId,
+          promptChars: payload.prompt.length
+        });
+        var response;
+        try {
+          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/open-terminal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }, 8000);
+        } catch (networkError) {
+          if (attempt >= maxAttempts) throw networkError;
+          operation.step("terminal-network-retry", "请求打开终端时网络连接失败，将重试", {
+            attempt: attempt,
+            maxAttempts: maxAttempts,
+            error: networkError && networkError.message ? networkError.message : String(networkError)
+          }, "warn");
+          await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
+          continue;
+        }
+        var result = await response.json().catch(function () { return {}; });
+        if (response.ok && result.ok) return result;
+        var error = new Error(result.error || "打开终端失败（HTTP " + response.status + "）");
+        error.status = response.status;
+        if (![403, 502, 503].includes(response.status) || attempt >= maxAttempts) throw error;
+        operation.step("terminal-http-retry", "Relay 暂时无法打开终端，将重试同一请求", {
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          status: response.status,
+          error: error.message
+        }, "warn");
+        await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
+      }
+      throw new Error("打开终端请求重试已耗尽");
+    }
+
+    async function openAiTerminal() {
+      if (generatingAiPrompt || aiCleanupBusy || aiTerminalLaunching) return;
+      var template = currentAiPromptTemplate();
+      var prompt = aiPromptPreviewEl.value.trim();
+      if (!prompt) {
+        setAiPromptStatus("请先生成提示词，再在终端继续。");
+        refreshAiPromptControls();
+        return;
+      }
+      var runner = runnerForCurrentAiPromptTemplate(template);
+      var operation = uiLogger.startOperation("ai.terminal", "在终端继续 AI 任务", {
+        data: { template: template, runner: runner, sessionId: relaySessionId, promptChars: prompt.length }
+      });
+      aiTerminalLaunching = true;
+      refreshAiPromptControls();
+      setAiPromptStatus("正在打开" + (runner === "claude" ? " Claude Code" : " Codex") + " PowerShell 窗口...");
+      try {
+        var result = await postAiTerminalWithLiveSessionRetry({
+          template: template,
+          prompt: prompt,
+          runner: runner,
+          sessionId: relaySessionId,
+          unityProject: selectedUnityProject
+        }, operation);
+        if (!result.taskFile || !result.pid) throw new Error("Relay 未返回终端启动信息");
+        var runnerLabel = result.runner === "claude" ? "Claude Code" : "Codex";
+        operation.succeed("本地 AI 交互终端已打开", {
+          runner: result.runner || runner,
+          pid: result.pid,
+          taskFile: result.taskFile,
+          template: template
+        });
+        setAiPromptStatus(runnerLabel + " PowerShell 窗口已打开。任务文件：" + result.taskFile + "\n后续对话和执行请在该终端中完成；Relay 不会把终端操作误报为已整理完成。");
+        appendLog("已打开 " + runnerLabel + " 交互终端：pid=" + result.pid + "，任务文件：" + result.taskFile);
+      } catch (error) {
+        operation.fail(error, "打开本地 AI 交互终端失败", {
+          template: template,
+          runner: runner,
+          sessionId: relaySessionId,
+          promptChars: prompt.length
+        });
+        setAiPromptStatus("打开 AI 终端失败：" + (error.message || error));
+        appendLog("打开 AI 终端失败：" + (error.message || error), true);
+      } finally {
+        aiTerminalLaunching = false;
+        refreshAiPromptControls();
       }
     }
 
@@ -6995,6 +7105,7 @@
     aiPromptFigmaKeyInput.addEventListener("input", refreshAiPromptControls);
     generateAiPromptBtn.addEventListener("click", generateAiPromptFromSelection);
     copyAiPromptBtn.addEventListener("click", copyAiPrompt);
+    openAiTerminalBtn.addEventListener("click", openAiTerminal);
     runAiCleanupBtn.addEventListener("click", requestAiRun);
     aiExecutionContinueBtn.addEventListener("click", continueAiCleanup);
     aiExecutionStopBtn.addEventListener("click", stopActiveAiCleanup);
