@@ -28,6 +28,42 @@ export function hashPsdSourceState(value) {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+function equalPsdAssetBytes(left, right) {
+  if (!left || !right || typeof left.length !== "number" || typeof right.length !== "number") return false;
+  if (left.length !== right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+export function resolvePsdLiveContentHash(options) {
+  var value = options || {};
+  if (equalPsdAssetBytes(value.currentBytes, value.incomingBytes)) {
+    return String(value.incomingContentHash || "");
+  }
+  return "figma-image:" + String(value.currentImageHash || "missing");
+}
+
+export function isPsdFontFamilyAllowed(textState, liveFamily) {
+  var expected = textState || {};
+  var actual = String(liveFamily || "").trim().toLowerCase();
+  if (!actual) return false;
+  if (String(expected.fontFamily || "").trim().toLowerCase() === actual) return true;
+  return (Array.isArray(expected.fontFallback) ? expected.fontFallback : []).some(function (candidate) {
+    return String(candidate && candidate.family || "").trim().toLowerCase() === actual;
+  });
+}
+
+function isLegacyPsdPlacedPayloadUnsupported(item, mode) {
+  if (mode === "text" || !item || item.path !== "geometry.rotation") return false;
+  var value = item.value;
+  return !!value
+    && typeof value === "object"
+    && ["SoLd", "PlLd", "PlcL"].includes(String(value.tag || ""))
+    && typeof value.sha256 === "string";
+}
+
 export function normalizePsdSourceState(layer) {
   var sourceLayer = layer || {};
   var raw = sourceLayer.sourceState && typeof sourceLayer.sourceState === "object"
@@ -45,10 +81,11 @@ export function normalizePsdSourceState(layer) {
     ? geometry.height
     : (sourceLayer.h != null ? sourceLayer.h : sourceLayer.height);
   var rotation = geometry.rotation == null ? null : Number(geometry.rotation);
+  var mode = String(raw.mode || sourceLayer.mode || "image");
   return canonicalizePsdSourceState({
     version: 3,
     layerId: normalizePsdLayerId(raw.layerId || sourceLayer.layerId),
-    mode: String(raw.mode || sourceLayer.mode || "image"),
+    mode: mode,
     geometry: {
       x: Number(geometryX == null ? 0 : geometryX),
       y: Number(geometryY == null ? 0 : geometryY),
@@ -67,7 +104,11 @@ export function normalizePsdSourceState(layer) {
     content: raw.content || { contentHash: String(sourceLayer.contentHash || "") },
     text: raw.text || null,
     nineSlice: raw.nineSlice || null,
-    unsupported: Array.isArray(raw.unsupported) ? raw.unsupported : [],
+    unsupported: Array.isArray(raw.unsupported)
+      ? raw.unsupported.filter(function (item) {
+        return !isLegacyPsdPlacedPayloadUnsupported(item, mode);
+      })
+      : [],
   });
 }
 
@@ -93,14 +134,54 @@ function valueAtPsdPath(value, path) {
   }, value);
 }
 
+function psdNumericToleranceForPath(path) {
+  if (path === "display.opacity") return 0.000001;
+  if (path.startsWith("geometry.")
+    || path === "text.fontSize"
+    || path === "text.effectiveFontSize"
+    || path === "text.leading") return 0.01;
+  return 0;
+}
+
+function psdValuesEqualWithinTolerance(left, right, tolerance) {
+  if (typeof left === "number" && typeof right === "number") {
+    return Number.isFinite(left) && Number.isFinite(right)
+      ? Math.abs(left - right) <= tolerance
+      : Object.is(left, right);
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every(function (item, index) {
+      return psdValuesEqualWithinTolerance(item, right[index], tolerance);
+    });
+  }
+  if (left && right && typeof left === "object" && typeof right === "object") {
+    var keys = Array.from(new Set(Object.keys(left).concat(Object.keys(right)))).sort();
+    return keys.every(function (key) {
+      return psdValuesEqualWithinTolerance(left[key], right[key], tolerance);
+    });
+  }
+  return left === right;
+}
+
+function psdValuesEqualForPath(path, before, after) {
+  var tolerance = psdNumericToleranceForPath(path);
+  if (path === "text.fillColor" || path === "text.stroke" || path === "text.dropShadow") {
+    tolerance = 0.001;
+  }
+  return tolerance > 0 && psdValuesEqualWithinTolerance(before, after, tolerance);
+}
+
 export function diffPsdSourceStates(baseline, incoming) {
   var changes = [];
   for (var descriptor of PSD_SOURCE_FIELD_DESCRIPTORS) {
-    var before = valueAtPsdPath(baseline, descriptor[0]);
-    var after = valueAtPsdPath(incoming, descriptor[0]);
+    var path = descriptor[0];
+    var before = valueAtPsdPath(baseline, path);
+    var after = valueAtPsdPath(incoming, path);
+    if (psdValuesEqualForPath(path, before, after)) continue;
     if (stablePsdSourceStateJson(before) === stablePsdSourceStateJson(after)) continue;
     changes.push({
-      path: descriptor[0],
+      path: path,
       category: descriptor[1],
       before: before,
       after: after,
@@ -125,6 +206,13 @@ function transformPsdVector(matrix, vector) {
   };
 }
 
+function transformPsdPoint(matrix, point) {
+  return {
+    x: matrix[0][0] * point.x + matrix[0][1] * point.y + matrix[0][2],
+    y: matrix[1][0] * point.x + matrix[1][1] * point.y + matrix[1][2],
+  };
+}
+
 function inversePsdTransformPoint(matrix, point) {
   var a = matrix[0][0], c = matrix[0][1], tx = matrix[0][2];
   var b = matrix[1][0], d = matrix[1][1], ty = matrix[1][2];
@@ -141,26 +229,64 @@ function inversePsdTransformPoint(matrix, point) {
 }
 
 export function computePsdGeometryTarget(input) {
-  var baseline = input.baseline;
   var incoming = input.incoming;
-  if (!(baseline.width > 0) || !(baseline.height > 0)) {
-    throw new Error("invalid-baseline-size");
-  }
-  var sourceDelta = { x: incoming.x - baseline.x, y: incoming.y - baseline.y };
-  var pageDelta = transformPsdVector(input.rootAbsoluteTransform, sourceDelta);
-  var desiredAbsolute = {
-    x: input.currentAbsolute.x + pageDelta.x,
-    y: input.currentAbsolute.y + pageDelta.y,
-  };
+  var desiredAbsolute = transformPsdPoint(input.rootAbsoluteTransform, {
+    x: incoming.x,
+    y: incoming.y,
+  });
+  var rootOriginInParent = inversePsdTransformPoint(
+    input.parentAbsoluteTransform,
+    transformPsdPoint(input.rootAbsoluteTransform, { x: 0, y: 0 }),
+  );
+  var widthEdgeInParent = inversePsdTransformPoint(
+    input.parentAbsoluteTransform,
+    transformPsdPoint(input.rootAbsoluteTransform, { x: incoming.width, y: 0 }),
+  );
+  var heightEdgeInParent = inversePsdTransformPoint(
+    input.parentAbsoluteTransform,
+    transformPsdPoint(input.rootAbsoluteTransform, { x: 0, y: incoming.height }),
+  );
+  var rotation = Number.isFinite(incoming.rotation) ? incoming.rotation : input.currentRotation;
   return {
     localPosition: inversePsdTransformPoint(input.parentAbsoluteTransform, desiredAbsolute),
     size: {
-      width: input.currentSize.width * incoming.width / baseline.width,
-      height: input.currentSize.height * incoming.height / baseline.height,
+      width: Math.hypot(
+        widthEdgeInParent.x - rootOriginInParent.x,
+        widthEdgeInParent.y - rootOriginInParent.y,
+      ),
+      height: Math.hypot(
+        heightEdgeInParent.x - rootOriginInParent.x,
+        heightEdgeInParent.y - rootOriginInParent.y,
+      ),
     },
-    rotation: Number.isFinite(baseline.rotation) && Number.isFinite(incoming.rotation)
-      ? input.currentRotation + incoming.rotation - baseline.rotation
-      : input.currentRotation,
+    rotation: rotation,
+  };
+}
+
+export function mapPsdLiveGeometryToSource(input) {
+  var nodeSize = input.nodeSize || { width: 0, height: 0 };
+  var pageOrigin = transformPsdPoint(input.nodeAbsoluteTransform, { x: 0, y: 0 });
+  var pageWidthEdge = transformPsdPoint(input.nodeAbsoluteTransform, { x: nodeSize.width, y: 0 });
+  var pageHeightEdge = transformPsdPoint(input.nodeAbsoluteTransform, { x: 0, y: nodeSize.height });
+  var sourceOrigin = inversePsdTransformPoint(input.rootAbsoluteTransform, pageOrigin);
+  var sourceWidthEdge = inversePsdTransformPoint(input.rootAbsoluteTransform, pageWidthEdge);
+  var sourceHeightEdge = inversePsdTransformPoint(input.rootAbsoluteTransform, pageHeightEdge);
+  var widthVector = {
+    x: sourceWidthEdge.x - sourceOrigin.x,
+    y: sourceWidthEdge.y - sourceOrigin.y,
+  };
+  var heightVector = {
+    x: sourceHeightEdge.x - sourceOrigin.x,
+    y: sourceHeightEdge.y - sourceOrigin.y,
+  };
+  var rotation = Math.atan2(widthVector.y, widthVector.x) * 180 / Math.PI;
+  if (Math.abs(rotation) < 1e-10) rotation = 0;
+  return {
+    x: sourceOrigin.x,
+    y: sourceOrigin.y,
+    width: Math.hypot(widthVector.x, widthVector.y),
+    height: Math.hypot(heightVector.x, heightVector.y),
+    rotation: rotation,
   };
 }
 
@@ -316,11 +442,19 @@ export function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
       layerId: layerId,
       sourceState: target.sourceState,
     });
-    var fieldDiff = diffPsdSourceStates(baselineState, incomingState);
+    var sourceFieldDiff = diffPsdSourceStates(baselineState, incomingState);
+    var liveState = target.liveState && typeof target.liveState === "object"
+      ? normalizePsdSourceState({ layerId: layerId, sourceState: target.liveState })
+      : null;
+    var liveFieldDiff = liveState ? diffPsdSourceStates(liveState, incomingState) : sourceFieldDiff;
+    var fieldDiff = liveFieldDiff.changes.length > 0 || !sourceFieldDiff.changes.length
+      ? liveFieldDiff
+      : sourceFieldDiff;
     var pair = {
       source: sourceLayer,
       target: target,
       baselineState: baselineState,
+      liveState: liveState,
       sourceState: incomingState,
       changes: fieldDiff.changes,
     };
@@ -331,7 +465,7 @@ export function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
     })) {
       conflicts.push({ kind: "unreliable-rotation-delta", layerId: layerId });
     }
-    if (fieldDiff.unsupportedChanged) {
+    if (sourceFieldDiff.unsupportedChanged) {
       conflicts.push({
         kind: "unsupported-source-change",
         layerId: layerId,
@@ -340,7 +474,7 @@ export function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
       });
     }
 
-    if (fieldDiff.changes.length === 0 && !fieldDiff.unsupportedChanged) unchanged.push(pair);
+    if (fieldDiff.changes.length === 0 && !sourceFieldDiff.unsupportedChanged) unchanged.push(pair);
     else changed.push(pair);
   }
 

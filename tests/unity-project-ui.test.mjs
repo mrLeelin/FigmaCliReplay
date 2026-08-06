@@ -28,6 +28,23 @@ test("Unity AI task carries the selected project snapshot and explicit script pa
   assert.match(ui, /--unity-project\s+\\?"?\{\{unityProjectPath\}\}/);
 });
 
+test("Prefab-to-Figma import sends the selected Unity project root", () => {
+  const functionStart = ui.indexOf("async function startPrefabImportToFigma(");
+  const functionEnd = ui.indexOf("async function pollPrefabImportTask()", functionStart);
+  const source = ui.slice(functionStart, functionEnd);
+
+  assert.match(source, /unityProjectPath:\s*selectedUnityProject\.path/);
+});
+
+test("Prefab-to-Figma import records terminal task errors in the live log", () => {
+  const functionStart = ui.indexOf("async function pollPrefabImportTask()");
+  const functionEnd = ui.indexOf("function renderPrefabImportTaskStatus", functionStart);
+  const source = ui.slice(functionStart, functionEnd);
+
+  assert.match(source, /data\.status === "error"[\s\S]*?appendLog\(/);
+  assert.match(source, /data\.errors/);
+});
+
 test("adding a Unity project gives immediate progress and always restores the button", () => {
   const functionStart = ui.indexOf("async function addUnityProject()");
   const functionEnd = ui.indexOf("async function selectUnityProject()", functionStart);

@@ -65,3 +65,23 @@ test("added PSD layers verify complete source state before commit", () => {
   assert.match(verification, /readStoredPsdSourceState\(node\)/);
   assert.match(verification, /stablePsdSourceStateJson/);
 });
+
+test("incremental preview supplies normalized live Figma state to the authoritative diff", () => {
+  assert.match(utils, /buildPsdLiveSourceState/);
+  assert.match(utils, /liveState:\s*buildPsdLiveSourceState/);
+  assert.match(utils, /mapPsdLiveGeometryToSource/);
+});
+
+test("incremental preview compares live Figma raster bytes with the incoming PSD asset", () => {
+  assert.match(utils, /await enrichPsdLiveContentStates\(currentNodes, manifest\.layers, context\.assetBytes\)/);
+  assert.match(utils, /async function enrichPsdLiveContentStates\(/);
+  assert.match(utils, /currentImage\.getBytesAsync\(\)/);
+  assert.match(utils, /resolvePsdLiveContentHash\(/);
+});
+
+test("incremental preview reads PSD-owned text paints and accepts declared fallback fonts", () => {
+  assert.match(utils, /isPsdFontFamilyAllowed\(liveState\.text, liveFontFamily\)/);
+  assert.match(utils, /buildPsdLiveTextFillColor\(node, liveState\.text\.fillColor\)/);
+  assert.match(utils, /buildPsdLiveTextStroke\(node, liveState\.text\.stroke\)/);
+  assert.match(utils, /buildPsdLiveTextShadow\(node, liveState\.text\.dropShadow\)/);
+});

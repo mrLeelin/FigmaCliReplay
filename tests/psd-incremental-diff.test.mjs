@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import * as psdIncremental from "../code/06_psd_incremental.mjs";
 
 import {
   buildPsdIncrementalDiff,
@@ -8,9 +9,11 @@ import {
   computePsdGeometryTarget,
   diffPsdSourceStates,
   hashPsdSourceState,
+  isPsdFontFamilyAllowed,
   measurePsdLayerIdentity,
   normalizePsdLayerId,
   psdOwnershipForMode,
+  resolvePsdLiveContentHash,
   validatePsdOwnedTarget,
 } from "../code/06_psd_incremental.mjs";
 
@@ -90,6 +93,109 @@ test("position-only source changes are affected even when content hash is unchan
   assert.equal(diff.changed[0].changes[0].delta, -318);
 });
 
+test("Figma-only position drift is affected when PSD is the authoritative source", () => {
+  const baseline = state({ geometry: { ...state().geometry, y: 1196 } });
+  const liveState = state({ geometry: { ...baseline.geometry, y: 1443 } });
+  const diff = buildPsdIncrementalDiff(
+    [{ layerId: "406", nodeId: "7210:992", sourceState: baseline, liveState }],
+    [{ layerId: "406", name: "ui_anniu_1", sourceState: baseline }],
+  );
+
+  assert.equal(diff.status, "preview-ready");
+  assert.equal(diff.summary.affected, 1);
+  assert.equal(diff.summary.position, 1);
+  assert.equal(diff.summary.content, 0);
+  assert.equal(diff.changed[0].changes[0].path, "geometry.y");
+  assert.equal(diff.changed[0].changes[0].before, 1443);
+  assert.equal(diff.changed[0].changes[0].after, 1196);
+  assert.equal(diff.changed[0].changes[0].delta, -247);
+});
+
+test("live-state comparison ignores serialization noise but keeps meaningful numeric drift", () => {
+  const baseline = state();
+  const noisy = state({
+    display: { ...baseline.display, opacity: baseline.display.opacity - 2e-8 },
+    text: {
+      characters: "99",
+      effectiveFontSize: 55.83997344970703,
+      leading: 0,
+      lineHeightMode: "AUTO",
+    },
+  });
+  const incoming = state({
+    text: {
+      characters: "99",
+      effectiveFontSize: 55.839974447056775,
+      leading: 0.01,
+      lineHeightMode: "AUTO",
+    },
+  });
+  assert.deepEqual(diffPsdSourceStates(noisy, incoming).changes, []);
+
+  const meaningful = state({ display: { ...baseline.display, opacity: 0.98 } });
+  assert.equal(diffPsdSourceStates(meaningful, baseline).changes[0].path, "display.opacity");
+});
+
+test("live image bytes resolve to the PSD hash only when the pixels still match", () => {
+  const incomingBytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
+  assert.equal(resolvePsdLiveContentHash({
+    currentBytes: new Uint8Array(incomingBytes),
+    incomingBytes,
+    currentImageHash: "figma-hash",
+    incomingContentHash: "psd-sha256",
+  }), "psd-sha256");
+  assert.equal(resolvePsdLiveContentHash({
+    currentBytes: new Uint8Array([137, 80, 78, 71, 9, 9, 9]),
+    incomingBytes,
+    currentImageHash: "figma-hash",
+    incomingContentHash: "psd-sha256",
+  }), "figma-image:figma-hash");
+  assert.equal(resolvePsdLiveContentHash({
+    currentBytes: null,
+    incomingBytes,
+    currentImageHash: "",
+    incomingContentHash: "psd-sha256",
+  }), "figma-image:missing");
+});
+
+test("an installed PSD fallback font is equivalent to the requested source font", () => {
+  const text = {
+    fontFamily: "GROBOLD",
+    fontFallback: [
+      { family: "GROBOLD", style: "Regular" },
+      { family: "Lilita One", style: "Regular" },
+    ],
+  };
+  assert.equal(isPsdFontFamilyAllowed(text, "Lilita One"), true);
+  assert.equal(isPsdFontFamilyAllowed(text, "Arial"), false);
+});
+
+test("live text paint comparison tolerates Figma float serialization", () => {
+  const baseline = state({
+    mode: "text",
+    text: {
+      characters: "99",
+      fillColor: { r: 1, g: 0.5, b: 0.25, a: 1, hex: "#FF8040" },
+      stroke: { enabled: true, size: 6, color: { r: 0, g: 0.1443350911, b: 0.360784322 } },
+      dropShadow: null,
+    },
+  });
+  const noisy = state({
+    mode: "text",
+    text: {
+      ...baseline.text,
+      fillColor: { ...baseline.text.fillColor, g: 0.50000002 },
+      stroke: { ...baseline.text.stroke, size: 6.000001 },
+    },
+  });
+  assert.deepEqual(diffPsdSourceStates(noisy, baseline).changes, []);
+  const changed = state({
+    mode: "text",
+    text: { ...baseline.text, fillColor: { ...baseline.text.fillColor, g: 0.7 } },
+  });
+  assert.equal(diffPsdSourceStates(changed, baseline).changes[0].path, "text.fillColor");
+});
+
 test("one layer contributes to multiple categories but one affected total", () => {
   const baseline = state();
   const incoming = state({
@@ -138,10 +244,29 @@ test("changed unsupported state is blocking", () => {
   assert.equal(diff.conflicts[0].kind, "unsupported-source-change");
 });
 
+test("legacy raster placed-payload hashes do not create unsupported conflicts", () => {
+  const baseline = state({
+    unsupported: [{
+      path: "geometry.rotation",
+      value: { tag: "SoLd", sha256: "old-save-internal-payload" },
+    }],
+  });
+  const incoming = state({ unsupported: [] });
+
+  const diff = buildPsdIncrementalDiff(
+    [{ layerId: "406", nodeId: "n", sourceState: baseline }],
+    [{ layerId: "406", sourceState: incoming }],
+  );
+
+  assert.equal(diff.status, "preview-no-changes");
+  assert.equal(diff.summary.conflicts, 0);
+  assert.equal(diff.summary.changed, 0);
+});
+
 test("new unsupported source state is blocking", () => {
   const incoming = state({
     layerId: "407",
-    unsupported: [{ path: "geometry.rotation", value: { tag: "SoLd", sha256: "abc" } }],
+    unsupported: [{ path: "display.blendMode", value: "zzzz" }],
   });
   const diff = buildPsdIncrementalDiff([], [{ layerId: "407", sourceState: incoming }]);
   assert.equal(diff.status, "preview-blocked");
@@ -156,7 +281,7 @@ test("canonical hashes ignore object key insertion order", () => {
   );
 });
 
-test("geometry target preserves organized offset under transformed parents", () => {
+test("geometry target restores authoritative PSD geometry under transformed parents", () => {
   const target = computePsdGeometryTarget({
     baseline: { x: 580, y: 1514, width: 363, height: 140, rotation: 0 },
     incoming: { x: 580, y: 1196, width: 726, height: 140, rotation: 15 },
@@ -166,21 +291,34 @@ test("geometry target preserves organized offset under transformed parents", () 
     rootAbsoluteTransform: [[2, 0, 100], [0, 2, 50]],
     parentAbsoluteTransform: [[1, 0, 400], [0, 1, 600]],
   });
-  assert.deepEqual(target.localPosition, { x: 600, y: 764 });
-  assert.deepEqual(target.size, { width: 1000, height: 200 });
-  assert.equal(target.rotation, 20);
+  assert.deepEqual(target.localPosition, { x: 860, y: 1842 });
+  assert.deepEqual(target.size, { width: 1452, height: 280 });
+  assert.equal(target.rotation, 15);
 });
 
-test("zero baseline size blocks geometry planning", () => {
-  assert.throws(() => computePsdGeometryTarget({
+test("authoritative geometry planning does not depend on the stored PSD baseline size", () => {
+  const target = computePsdGeometryTarget({
     baseline: { x: 0, y: 0, width: 0, height: 10, rotation: 0 },
-    incoming: { x: 0, y: 0, width: 20, height: 10, rotation: 0 },
+    incoming: { x: 20, y: 30, width: 40, height: 10, rotation: 0 },
     currentAbsolute: { x: 0, y: 0 },
     currentSize: { width: 10, height: 10 },
     currentRotation: 0,
     rootAbsoluteTransform: [[1, 0, 0], [0, 1, 0]],
     parentAbsoluteTransform: [[1, 0, 0], [0, 1, 0]],
-  }), /invalid-baseline-size/);
+  });
+  assert.deepEqual(target.localPosition, { x: 20, y: 30 });
+  assert.deepEqual(target.size, { width: 40, height: 10 });
+});
+
+test("live Figma geometry is normalized back into PSD source coordinates", () => {
+  assert.equal(typeof psdIncremental.mapPsdLiveGeometryToSource, "function");
+  const geometry = psdIncremental.mapPsdLiveGeometryToSource({
+    nodeAbsoluteTransform: [[2, 0, 1260], [0, 2, 2442]],
+    nodeSize: { width: 363, height: 140 },
+    nodeRotation: 0,
+    rootAbsoluteTransform: [[2, 0, 100], [0, 2, 50]],
+  });
+  assert.deepEqual(geometry, { x: 580, y: 1196, width: 363, height: 140, rotation: 0 });
 });
 
 test("mutation plan names every writable category for one layer", () => {

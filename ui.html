@@ -756,7 +756,7 @@
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
   <div class="app-title-row">
     <h1>LKS Figma MCP Relay</h1>
-    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.45<!-- END_RELEASE_VERSION --></span>
+    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.46<!-- END_RELEASE_VERSION --></span>
     <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
   </div>
 
@@ -2939,6 +2939,10 @@
           body: JSON.stringify({
             fileName: file.name,
             fileBase64: fileBase64,
+            sourceFile: {
+              size: file.size || 0,
+              lastModified: file.lastModified || 0
+            },
             mode: dropMode.mode,
             target: target
           })
@@ -3083,6 +3087,7 @@
           showPsdIncrementalPreview(task.preview, {
             taskId: task.taskId,
             fileName: task.fileName,
+            sourceFile: task.sourceFile || {},
             targetName: task.target && task.target.targetName || "",
             targetType: task.target && task.target.targetType || ""
           });
@@ -3167,12 +3172,14 @@
       preview = preview || {};
       var summary = preview.summary || {};
       var warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
+      var sourceFile = capturedTarget && capturedTarget.sourceFile || {};
       activePsdIncrementalPreview = {
         taskId: String(capturedTarget && capturedTarget.taskId || psdImportTaskId || ""),
         baselineFingerprint: String(preview.baselineFingerprint || ""),
         status: String(preview.status || "preview-blocked"),
         target: {
           fileName: String(capturedTarget && capturedTarget.fileName || ""),
+          sourceFile: sourceFile,
           name: String(capturedTarget && capturedTarget.targetName || preview.targetName || ""),
           type: String(capturedTarget && capturedTarget.targetType || "")
         }
@@ -3190,8 +3197,13 @@
           return definition[1] + " " + Number(summary[definition[0]] || 0);
         }).join(" · ")
       ];
+      var sourceFileSummary = formatPsdSourceFileSummary(sourceFile);
+      if (sourceFileSummary) summaryLines.push(sourceFileSummary);
       if (preview.status === "preview-no-changes") {
         summaryLines.push("没有可同步的 PSD 变化，Figma 不会执行写入。");
+        if (sourceFile.identicalToPreviousUpload) {
+          summaryLines.push("⚠ 本次拖入文件与上一次上传的 PSD 逐字节相同。请先在 Photoshop 中保存当前文档，再从已保存位置重新拖入。");
+        }
       } else if (preview.status === "preview-blocked") {
         summaryLines.push("存在无法安全同步的字段或结构冲突，本次不会写入 Figma。");
       } else if (preview.status === "preview-baseline-required") {
@@ -3229,6 +3241,15 @@
         + "，新增 " + Number(summary.added || 0)
         + "，冲突 " + Number(summary.conflicts || 0)
         + "，状态 " + String(preview.status || "unknown"));
+    }
+
+    function formatPsdSourceFileSummary(sourceFile) {
+      if (!sourceFile || !sourceFile.sha256) return "";
+      var size = Number(sourceFile.size || 0);
+      var sizeText = size > 0 ? (size / 1024 / 1024).toFixed(2) + " MB" : "未知大小";
+      var modified = Number(sourceFile.lastModified || 0);
+      var modifiedText = modified > 0 ? new Date(modified).toLocaleString() : "未知时间";
+      return "上传文件：" + sizeText + " · 修改时间 " + modifiedText + " · SHA-256 " + String(sourceFile.sha256).slice(0, 16);
     }
 
     function renderPsdIncrementalGroups(groups) {
@@ -6533,6 +6554,9 @@
           : await fetchUnitySelectedPrefabPaths();
         var invalid = prefabPaths.find(function (path) { return !/\.prefab$/i.test(path); });
         if (invalid) throw new Error("当前选择包含非 Prefab：" + invalid);
+        if (!selectedUnityProject || !selectedUnityProject.path) {
+          throw new Error("请先在 Unity 设置中选择目标 Unity 工程。");
+        }
         var figmaKey = getPrefabImportFigmaKey();
         if (!figmaKey) throw new Error("未读取到 Figma Key，请点击顶部“读取 Key”。");
         var canvasByPrefabPath = {};
@@ -6558,6 +6582,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             prefabPaths: prefabPaths,
+            unityProjectPath: selectedUnityProject.path,
             canvas: "auto",
             canvasByPrefabPath: canvasByPrefabPath,
             componentMode: prefabImportComponentModeSelect.value || "component",
@@ -6593,6 +6618,12 @@
           return;
         }
         if (data.status === "error") {
+          var errors = Array.isArray(data.errors) ? data.errors : [];
+          var errorLines = String(errors[0] || "Prefab 导入失败，未返回具体错误。")
+            .split(/\r?\n/)
+            .map(function (line) { return line.trim(); })
+            .filter(Boolean);
+          appendLog("Prefab 导入失败：" + errorLines[errorLines.length - 1], true);
           finishPrefabImport(false);
           return;
         }

@@ -1,0 +1,129 @@
+diff --git a/ui.html b/ui.html
+index 7ca2a64..3070d56 100644
+--- a/ui.html
++++ b/ui.html
+@@ -732,7 +732,7 @@
+   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
+   <div class="app-title-row">
+     <h1>LKS Figma MCP Relay</h1>
+-    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.44<!-- END_RELEASE_VERSION --></span>
++    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.45<!-- END_RELEASE_VERSION --></span>
+     <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
+   </div>
+ 
+@@ -1420,7 +1420,8 @@
+     let cleanupProviderPreferenceLoaded = false;
+     let cleanupPreferredProviderId = "";
+     let aiProviderSyncing = false;
+-    let aiProviderSyncGeneration = 0;
++    let aiProviderSyncPromise = null;
++    let aiProviderSyncTargetRunner = "";
+     let cleanupRecoveryBackups = [];
+     let cleanupRecoveryActionPending = false;
+     let cleanupRecoveryDeferred = false;
+@@ -3212,20 +3213,30 @@
+     }
+ 
+     async function syncAiRunnerToCleanupProvider() {
+-      var generation = ++aiProviderSyncGeneration;
+-      aiProviderSyncing = true;
+-      aiRunnerSelect.value = runnerIdForCleanupProvider(cleanupProviderSelect.value);
+-      cleanupProviderStatusEl.textContent = "正在切换 AI...";
+-      refreshAiPromptControls();
+-      var synced = await selectAiRunner();
+-      if (generation !== aiProviderSyncGeneration) {
+-        syncAiRunnerToCleanupProvider();
+-        return false;
+-      }
+-      aiProviderSyncing = false;
+-      if (synced) renderCleanupProviderStatus();
+-      else cleanupProviderStatusEl.textContent = "AI 切换失败，请检查本机服务。";
+-      refreshAiPromptControls();
++      aiProviderSyncTargetRunner = runnerIdForCleanupProvider(cleanupProviderSelect.value);
++      if (aiProviderSyncPromise) return aiProviderSyncPromise;
++      aiProviderSyncPromise = (async function () {
++        aiProviderSyncing = true;
++        cleanupProviderStatusEl.textContent = "正在切换 AI...";
++        refreshAiPromptControls();
++        var synced = false;
++        try {
++          var syncingRunner = "";
++          do {
++            aiRunnerSelect.value = runnerIdForCleanupProvider(cleanupProviderSelect.value);
++            syncingRunner = aiRunnerSelect.value;
++            synced = await selectAiRunner();
++          } while (syncingRunner !== aiProviderSyncTargetRunner);
++          if (synced) renderCleanupProviderStatus();
++          else cleanupProviderStatusEl.textContent = "AI 切换失败，请检查本机服务。";
++          return synced;
++        } finally {
++          aiProviderSyncing = false;
++          aiProviderSyncPromise = null;
++          refreshAiPromptControls();
++        }
++      })();
++      return aiProviderSyncPromise;
+     }
+ 
+     function selectCleanupProvider() {
+@@ -3519,10 +3530,27 @@
+     }
+ 
+     function handleCleanupSnapshotResult(message) {
++      var result = message.result || {};
++      if (message.requestId === executingRequestId && executingJobType === "QUERY_CLEANUP_SNAPSHOT") {
++        isExecuting = false;
++        clearExecutionWatchdog();
++        executingRequestId = "";
++        executingJobType = "";
++        lastResultPayload = { requestId: message.requestId, result: result };
++        (async function () {
++          try {
++            await postResult(message.requestId, result);
++          } catch (error) {
++            appendLog("MCP cleanup snapshot result upload failed: " + (error.message || error), true);
++          }
++          scheduleNextPoll(500);
++          processRelaySocketQueue();
++        })();
++        return;
++      }
+       if (!pendingCleanupSnapshotRequestId || message.requestId !== pendingCleanupSnapshotRequestId) return;
+       clearAiPromptTimeout();
+       pendingCleanupSnapshotRequestId = "";
+-      var result = message.result || {};
+       if (result.status !== "completed" || !result.snapshot) {
+         aiCleanupBusy = false;
+         refreshAiPromptControls();
+@@ -4116,13 +4144,7 @@
+       startExecutionWatchdog(payload.requestId || "", (payload.job && payload.job.type) || "IMPORT_PSD_JOB");
+       executeJob(payload)
+         .then(function () {
+-          clearExecutionWatchdog();
+-          isExecuting = false;
+-          if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+-            relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, accepted: true }));
+-          }
+-          scheduleNextPoll(500);
+-          setTimeout(processRelaySocketQueue, 0);
++          // 不再立即发送 command.response，等待插件端的 _RESULT 消息
+         })
+         .catch(function (error) {
+           clearExecutionWatchdog();
+@@ -5791,6 +5813,16 @@
+             var summary = typeof result.summary === "object" ? JSON.stringify(result.summary) : (result.createdCount + " 节点");
+             appendLog("任务完成 (" + message.type + ")：" + (result.status || "unknown") + "，" + summary);
+             setAiStatus("任务完成：" + (result.status || "unknown"));
++
++            // 在结果回传成功后发送 command.response
++            if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
++              relaySocket.send(JSON.stringify({
++                type: "command.response",
++                id: message.requestId,
++                requestId: message.requestId,
++                accepted: true
++              }));
++            }
+           } catch (e) {
+             appendLog("任务完成但结果回传失败：" + (e.message || e));
+           }

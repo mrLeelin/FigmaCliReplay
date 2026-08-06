@@ -321,7 +321,15 @@ def run_export(args: argparse.Namespace) -> int:
     if not write_plan_path.exists():
         raise FileNotFoundError(f"写入计划不存在：{write_plan_path}")
 
-    job, asset_paths = build_job(package_path, write_plan_path, args.component_mode, args.job_name, args.job_type)
+    project_root = args.project_root.resolve()
+    job, asset_paths = build_job(
+        package_path,
+        write_plan_path,
+        args.component_mode,
+        args.job_name,
+        args.job_type,
+        project_root,
+    )
     job["relayUrl"] = relay_url
     if args.job_output:
         write_json(args.job_output.resolve(), {"job": job, "assetPaths": {key: value.as_posix() for key, value in asset_paths.items()}})
@@ -388,6 +396,8 @@ def parse_args() -> argparse.Namespace:
                         help="figma_write_verify_report.json 输出路径，默认写到 result 同目录")
     parser.add_argument("--job-output", type=Path, default=None,
                         help="可选：保存提交给 MCP 的 job 预览")
+    parser.add_argument("--project-root", type=Path, default=RELAY_ROOT,
+                        help="解析 Unity Assets 相对路径的工程根目录")
     parser.add_argument("--relay-url", default=DEFAULT_RELAY_URL, help="内部 runtime relay 地址")
     parser.add_argument("--bridge-url", dest="relay_url", default=DEFAULT_RELAY_URL, help=argparse.SUPPRESS)
     parser.add_argument("--job-name", default="Prefab_To_Figma_Write", help="MCP job 名称")

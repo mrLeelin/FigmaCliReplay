@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>测试面板</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: sans-serif;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 10px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      background: #e3f2fd;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Figma MCP Relay - 测试面板</h1>
+
+  <div class="status" id="status">
+    等待操作...
+  </div>
+
+  <button id="testBtn1" onclick="handleClick(1)">测试按钮 1</button>
+  <button id="testBtn2" onclick="handleClick(2)">测试按钮 2</button>
+  <button id="testBtn3" onclick="handleClick(3)">测试按钮 3</button>
+
+  <script>
+    function handleClick(num) {
+      document.getElementById('status').textContent = '✅ 按钮 ' + num + ' 点击成功！时间：' + new Date().toLocaleTimeString();
+      console.log('按钮', num, '被点击');
+    }
+
+    console.log('测试页面加载完成');
+    document.getElementById('status').textContent = '✅ 页面加载完成，所有按钮应该可以点击';
+  </script>
+</body>
+</html>

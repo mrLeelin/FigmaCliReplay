@@ -6,7 +6,7 @@ import { RelayLogger } from "./logging/relayLogger.js";
 
 export const SERVER_NAME = "figmaMcpRelay";
 // BEGIN_RELEASE_VERSION
-export const SERVER_VERSION = "0.1.45";
+export const SERVER_VERSION = "0.1.46";
 // END_RELEASE_VERSION
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PUBLIC_HOST = "localhost";

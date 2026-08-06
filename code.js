@@ -1,4 +1,4 @@
-// Figma MCP Relay build #231
+// Figma MCP Relay build #241
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma MCP Relay build #231
+// Figma MCP Relay build #241
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (231 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 231)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "231" });
+// DIAG: 插件启动标记 (241 由 build.py 替换)
+figma.notify("Figma MCP Relay 插件已加载 (build 241)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "241" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -430,7 +430,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "231",
+        build: "241",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -10325,6 +10325,7 @@ async function preparePsdIncrementalUpdate(job, assets) {
     stats: { image: 0, text: 0, commonInstance: 0, commonFallbackImage: 0, nineSlice: 0, slice: 0 }
   };
   const currentNodes = collectPsdBoundNodes(target);
+  await enrichPsdLiveContentStates(currentNodes, manifest.layers, context.assetBytes);
   const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
   appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
   appendPsdIncrementalAssetConflicts(diff, context);
@@ -10444,6 +10445,7 @@ function collectPsdBoundNodes(root) {
         contentHash: readSharedPluginData(node, "psdContentHash"),
         ownership: readSharedPluginData(node, "psdOwnership"),
         sourceState: storedSourceState.state,
+        liveState: buildPsdLiveSourceState(node, root, storedSourceState.state),
         sourceStateHash: readSharedPluginData(node, "psdSourceStateHash"),
         sourceStateError: storedSourceState.error,
         parentId: node.parent ? node.parent.id : "",
@@ -10462,6 +10464,156 @@ function collectPsdBoundNodes(root) {
   };
   visit(root);
   return found;
+}
+
+function buildPsdLiveSourceState(node, root, storedSourceState) {
+  if (!storedSourceState || !node || !root || !node.absoluteTransform || !root.absoluteTransform) return null;
+  const liveState = clonePsdValue(storedSourceState);
+  const liveGeometry = mapPsdLiveGeometryToSource({
+    nodeAbsoluteTransform: node.absoluteTransform,
+    nodeSize: { width: numericOr(node.width, 0), height: numericOr(node.height, 0) },
+    nodeRotation: numericOr(node.rotation, 0),
+    rootAbsoluteTransform: root.absoluteTransform
+  });
+  if (liveState.geometry && liveState.geometry.rotation == null) liveGeometry.rotation = null;
+  liveState.geometry = liveGeometry;
+  liveState.display = {
+    visible: node.visible !== false,
+    opacity: numericOr(node.opacity, 1),
+    blendMode: "blendMode" in node ? node.blendMode : null,
+    constraints: "constraints" in node && node.constraints ? clonePsdValue(node.constraints) : {}
+  };
+  if (node.type === "TEXT" && liveState.text) {
+    const fontName = node.fontName && typeof node.fontName === "object" ? node.fontName : {};
+    const lineHeight = node.lineHeight && typeof node.lineHeight === "object" ? node.lineHeight : {};
+    const liveFontFamily = String(fontName.family || "");
+    liveState.text.characters = String(node.characters || "");
+    if (!isPsdFontFamilyAllowed(liveState.text, liveFontFamily)) {
+      liveState.text.fontFamily = liveFontFamily;
+    }
+    liveState.text.effectiveFontSize = numericOr(node.fontSize, liveState.text.effectiveFontSize);
+    liveState.text.leading = lineHeight.unit === "PIXELS" ? numericOr(lineHeight.value, 0) : 0;
+    liveState.text.lineHeightMode = lineHeight.unit === "PIXELS" ? "PIXELS" : "AUTO";
+    liveState.text.textAlignHorizontal = String(node.textAlignHorizontal || liveState.text.textAlignHorizontal || "LEFT");
+    liveState.text.fillColor = buildPsdLiveTextFillColor(node, liveState.text.fillColor);
+    liveState.text.stroke = buildPsdLiveTextStroke(node, liveState.text.stroke);
+    liveState.text.dropShadow = buildPsdLiveTextShadow(node, liveState.text.dropShadow);
+  }
+  return normalizePsdSourceState({ sourceState: liveState });
+}
+
+function firstPsdSolidPaint(paints) {
+  if (!Array.isArray(paints)) return null;
+  return paints.find((paint) => paint && paint.visible !== false && paint.type === "SOLID") || null;
+}
+
+function buildPsdLiveTextFillColor(node, storedFillColor) {
+  const paint = firstPsdSolidPaint(node && node.fills);
+  if (!paint) return { figmaDrift: "missing-solid-fill" };
+  return {
+    ...(storedFillColor && typeof storedFillColor === "object" ? clonePsdValue(storedFillColor) : {}),
+    r: numericOr(paint.color && paint.color.r, 0),
+    g: numericOr(paint.color && paint.color.g, 0),
+    b: numericOr(paint.color && paint.color.b, 0),
+    a: numericOr(paint.opacity, 1)
+  };
+}
+
+function buildPsdLiveTextStroke(node, storedStroke) {
+  const strokes = Array.isArray(node && node.strokes) ? node.strokes : [];
+  const paint = firstPsdSolidPaint(strokes);
+  if (!paint) {
+    return storedStroke && storedStroke.enabled === false
+      ? clonePsdValue(storedStroke)
+      : null;
+  }
+  const storedColor = storedStroke && storedStroke.color && typeof storedStroke.color === "object"
+    ? storedStroke.color
+    : {};
+  return {
+    ...(storedStroke && typeof storedStroke === "object" ? clonePsdValue(storedStroke) : {}),
+    enabled: true,
+    present: true,
+    position: String(node.strokeAlign || "OUTSIDE"),
+    opacity: numericOr(paint.opacity, 1),
+    size: numericOr(node.strokeWeight, 1),
+    color: {
+      ...clonePsdValue(storedColor),
+      r: numericOr(paint.color && paint.color.r, 0),
+      g: numericOr(paint.color && paint.color.g, 0),
+      b: numericOr(paint.color && paint.color.b, 0)
+    }
+  };
+}
+
+function buildPsdLiveTextShadow(node, storedShadow) {
+  const shadows = Array.isArray(node && node.effects)
+    ? node.effects.filter((effect) => effect && effect.visible !== false && effect.type === "DROP_SHADOW")
+    : [];
+  if (shadows.length === 0) {
+    return storedShadow && storedShadow.enabled === false
+      ? clonePsdValue(storedShadow)
+      : null;
+  }
+  if (shadows.length !== 1) return { figmaDrift: "multiple-drop-shadows" };
+  const effect = shadows[0];
+  const offsetX = numericOr(effect.offset && effect.offset.x, 0);
+  const offsetY = numericOr(effect.offset && effect.offset.y, 0);
+  const storedColor = storedShadow && storedShadow.color && typeof storedShadow.color === "object"
+    ? storedShadow.color
+    : {};
+  return {
+    ...(storedShadow && typeof storedShadow === "object" ? clonePsdValue(storedShadow) : {}),
+    enabled: true,
+    present: true,
+    opacity: numericOr(effect.color && effect.color.a, 1),
+    angle: (Math.atan2(-offsetY, offsetX) * 180 / Math.PI + 360) % 360,
+    distance: Math.sqrt(offsetX * offsetX + offsetY * offsetY),
+    spread: Math.max(0, numericOr(effect.spread, 0)),
+    blur: Math.max(0, numericOr(effect.radius, 0)),
+    color: {
+      ...clonePsdValue(storedColor),
+      r: numericOr(effect.color && effect.color.r, 0),
+      g: numericOr(effect.color && effect.color.g, 0),
+      b: numericOr(effect.color && effect.color.b, 0)
+    }
+  };
+}
+
+async function enrichPsdLiveContentStates(currentNodes, incomingLayers, assetBytes) {
+  const incomingById = new Map((incomingLayers || []).map((layer) => [
+    normalizePsdLayerId(layer && layer.layerId),
+    layer
+  ]));
+  await Promise.all((currentNodes || []).map(async (current) => {
+    const source = incomingById.get(current.layerId);
+    const incomingState = source ? normalizePsdSourceState(source) : null;
+    if (!current.liveState || !incomingState || !incomingState.content) return;
+    if (incomingState.mode !== "image" && incomingState.mode !== "nine-slice") return;
+
+    const currentImageHash = incomingState.mode === "nine-slice"
+      ? (findFirstImageHash(current.node, true) || findNineSliceSourceHash(current.node))
+      : findFirstImageHash(current.node, true);
+    let currentBytes = null;
+    if (currentImageHash) {
+      try {
+        const currentImage = figma.getImageByHash(currentImageHash);
+        if (currentImage) currentBytes = await currentImage.getBytesAsync();
+      } catch (error) {
+        currentBytes = null;
+      }
+    }
+    const incomingBytes = assetBytes.get(String(source.assetId || source.idx || ""));
+    current.liveState.content = {
+      ...current.liveState.content,
+      contentHash: resolvePsdLiveContentHash({
+        currentBytes,
+        incomingBytes,
+        currentImageHash,
+        incomingContentHash: incomingState.content.contentHash
+      })
+    };
+  }));
 }
 
 function readStoredPsdSourceState(node) {
@@ -14581,6 +14733,42 @@ function hashPsdSourceState(value) {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+function equalPsdAssetBytes(left, right) {
+  if (!left || !right || typeof left.length !== "number" || typeof right.length !== "number") return false;
+  if (left.length !== right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function resolvePsdLiveContentHash(options) {
+  var value = options || {};
+  if (equalPsdAssetBytes(value.currentBytes, value.incomingBytes)) {
+    return String(value.incomingContentHash || "");
+  }
+  return "figma-image:" + String(value.currentImageHash || "missing");
+}
+
+function isPsdFontFamilyAllowed(textState, liveFamily) {
+  var expected = textState || {};
+  var actual = String(liveFamily || "").trim().toLowerCase();
+  if (!actual) return false;
+  if (String(expected.fontFamily || "").trim().toLowerCase() === actual) return true;
+  return (Array.isArray(expected.fontFallback) ? expected.fontFallback : []).some(function (candidate) {
+    return String(candidate && candidate.family || "").trim().toLowerCase() === actual;
+  });
+}
+
+function isLegacyPsdPlacedPayloadUnsupported(item, mode) {
+  if (mode === "text" || !item || item.path !== "geometry.rotation") return false;
+  var value = item.value;
+  return !!value
+    && typeof value === "object"
+    && ["SoLd", "PlLd", "PlcL"].includes(String(value.tag || ""))
+    && typeof value.sha256 === "string";
+}
+
 function normalizePsdSourceState(layer) {
   var sourceLayer = layer || {};
   var raw = sourceLayer.sourceState && typeof sourceLayer.sourceState === "object"
@@ -14598,10 +14786,11 @@ function normalizePsdSourceState(layer) {
     ? geometry.height
     : (sourceLayer.h != null ? sourceLayer.h : sourceLayer.height);
   var rotation = geometry.rotation == null ? null : Number(geometry.rotation);
+  var mode = String(raw.mode || sourceLayer.mode || "image");
   return canonicalizePsdSourceState({
     version: 3,
     layerId: normalizePsdLayerId(raw.layerId || sourceLayer.layerId),
-    mode: String(raw.mode || sourceLayer.mode || "image"),
+    mode: mode,
     geometry: {
       x: Number(geometryX == null ? 0 : geometryX),
       y: Number(geometryY == null ? 0 : geometryY),
@@ -14620,7 +14809,11 @@ function normalizePsdSourceState(layer) {
     content: raw.content || { contentHash: String(sourceLayer.contentHash || "") },
     text: raw.text || null,
     nineSlice: raw.nineSlice || null,
-    unsupported: Array.isArray(raw.unsupported) ? raw.unsupported : [],
+    unsupported: Array.isArray(raw.unsupported)
+      ? raw.unsupported.filter(function (item) {
+        return !isLegacyPsdPlacedPayloadUnsupported(item, mode);
+      })
+      : [],
   });
 }
 
@@ -14646,14 +14839,54 @@ function valueAtPsdPath(value, path) {
   }, value);
 }
 
+function psdNumericToleranceForPath(path) {
+  if (path === "display.opacity") return 0.000001;
+  if (path.startsWith("geometry.")
+    || path === "text.fontSize"
+    || path === "text.effectiveFontSize"
+    || path === "text.leading") return 0.01;
+  return 0;
+}
+
+function psdValuesEqualWithinTolerance(left, right, tolerance) {
+  if (typeof left === "number" && typeof right === "number") {
+    return Number.isFinite(left) && Number.isFinite(right)
+      ? Math.abs(left - right) <= tolerance
+      : Object.is(left, right);
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every(function (item, index) {
+      return psdValuesEqualWithinTolerance(item, right[index], tolerance);
+    });
+  }
+  if (left && right && typeof left === "object" && typeof right === "object") {
+    var keys = Array.from(new Set(Object.keys(left).concat(Object.keys(right)))).sort();
+    return keys.every(function (key) {
+      return psdValuesEqualWithinTolerance(left[key], right[key], tolerance);
+    });
+  }
+  return left === right;
+}
+
+function psdValuesEqualForPath(path, before, after) {
+  var tolerance = psdNumericToleranceForPath(path);
+  if (path === "text.fillColor" || path === "text.stroke" || path === "text.dropShadow") {
+    tolerance = 0.001;
+  }
+  return tolerance > 0 && psdValuesEqualWithinTolerance(before, after, tolerance);
+}
+
 function diffPsdSourceStates(baseline, incoming) {
   var changes = [];
   for (var descriptor of PSD_SOURCE_FIELD_DESCRIPTORS) {
-    var before = valueAtPsdPath(baseline, descriptor[0]);
-    var after = valueAtPsdPath(incoming, descriptor[0]);
+    var path = descriptor[0];
+    var before = valueAtPsdPath(baseline, path);
+    var after = valueAtPsdPath(incoming, path);
+    if (psdValuesEqualForPath(path, before, after)) continue;
     if (stablePsdSourceStateJson(before) === stablePsdSourceStateJson(after)) continue;
     changes.push({
-      path: descriptor[0],
+      path: path,
       category: descriptor[1],
       before: before,
       after: after,
@@ -14678,6 +14911,13 @@ function transformPsdVector(matrix, vector) {
   };
 }
 
+function transformPsdPoint(matrix, point) {
+  return {
+    x: matrix[0][0] * point.x + matrix[0][1] * point.y + matrix[0][2],
+    y: matrix[1][0] * point.x + matrix[1][1] * point.y + matrix[1][2],
+  };
+}
+
 function inversePsdTransformPoint(matrix, point) {
   var a = matrix[0][0], c = matrix[0][1], tx = matrix[0][2];
   var b = matrix[1][0], d = matrix[1][1], ty = matrix[1][2];
@@ -14694,26 +14934,64 @@ function inversePsdTransformPoint(matrix, point) {
 }
 
 function computePsdGeometryTarget(input) {
-  var baseline = input.baseline;
   var incoming = input.incoming;
-  if (!(baseline.width > 0) || !(baseline.height > 0)) {
-    throw new Error("invalid-baseline-size");
-  }
-  var sourceDelta = { x: incoming.x - baseline.x, y: incoming.y - baseline.y };
-  var pageDelta = transformPsdVector(input.rootAbsoluteTransform, sourceDelta);
-  var desiredAbsolute = {
-    x: input.currentAbsolute.x + pageDelta.x,
-    y: input.currentAbsolute.y + pageDelta.y,
-  };
+  var desiredAbsolute = transformPsdPoint(input.rootAbsoluteTransform, {
+    x: incoming.x,
+    y: incoming.y,
+  });
+  var rootOriginInParent = inversePsdTransformPoint(
+    input.parentAbsoluteTransform,
+    transformPsdPoint(input.rootAbsoluteTransform, { x: 0, y: 0 }),
+  );
+  var widthEdgeInParent = inversePsdTransformPoint(
+    input.parentAbsoluteTransform,
+    transformPsdPoint(input.rootAbsoluteTransform, { x: incoming.width, y: 0 }),
+  );
+  var heightEdgeInParent = inversePsdTransformPoint(
+    input.parentAbsoluteTransform,
+    transformPsdPoint(input.rootAbsoluteTransform, { x: 0, y: incoming.height }),
+  );
+  var rotation = Number.isFinite(incoming.rotation) ? incoming.rotation : input.currentRotation;
   return {
     localPosition: inversePsdTransformPoint(input.parentAbsoluteTransform, desiredAbsolute),
     size: {
-      width: input.currentSize.width * incoming.width / baseline.width,
-      height: input.currentSize.height * incoming.height / baseline.height,
+      width: Math.hypot(
+        widthEdgeInParent.x - rootOriginInParent.x,
+        widthEdgeInParent.y - rootOriginInParent.y,
+      ),
+      height: Math.hypot(
+        heightEdgeInParent.x - rootOriginInParent.x,
+        heightEdgeInParent.y - rootOriginInParent.y,
+      ),
     },
-    rotation: Number.isFinite(baseline.rotation) && Number.isFinite(incoming.rotation)
-      ? input.currentRotation + incoming.rotation - baseline.rotation
-      : input.currentRotation,
+    rotation: rotation,
+  };
+}
+
+function mapPsdLiveGeometryToSource(input) {
+  var nodeSize = input.nodeSize || { width: 0, height: 0 };
+  var pageOrigin = transformPsdPoint(input.nodeAbsoluteTransform, { x: 0, y: 0 });
+  var pageWidthEdge = transformPsdPoint(input.nodeAbsoluteTransform, { x: nodeSize.width, y: 0 });
+  var pageHeightEdge = transformPsdPoint(input.nodeAbsoluteTransform, { x: 0, y: nodeSize.height });
+  var sourceOrigin = inversePsdTransformPoint(input.rootAbsoluteTransform, pageOrigin);
+  var sourceWidthEdge = inversePsdTransformPoint(input.rootAbsoluteTransform, pageWidthEdge);
+  var sourceHeightEdge = inversePsdTransformPoint(input.rootAbsoluteTransform, pageHeightEdge);
+  var widthVector = {
+    x: sourceWidthEdge.x - sourceOrigin.x,
+    y: sourceWidthEdge.y - sourceOrigin.y,
+  };
+  var heightVector = {
+    x: sourceHeightEdge.x - sourceOrigin.x,
+    y: sourceHeightEdge.y - sourceOrigin.y,
+  };
+  var rotation = Math.atan2(widthVector.y, widthVector.x) * 180 / Math.PI;
+  if (Math.abs(rotation) < 1e-10) rotation = 0;
+  return {
+    x: sourceOrigin.x,
+    y: sourceOrigin.y,
+    width: Math.hypot(widthVector.x, widthVector.y),
+    height: Math.hypot(heightVector.x, heightVector.y),
+    rotation: rotation,
   };
 }
 
@@ -14869,11 +15147,19 @@ function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
       layerId: layerId,
       sourceState: target.sourceState,
     });
-    var fieldDiff = diffPsdSourceStates(baselineState, incomingState);
+    var sourceFieldDiff = diffPsdSourceStates(baselineState, incomingState);
+    var liveState = target.liveState && typeof target.liveState === "object"
+      ? normalizePsdSourceState({ layerId: layerId, sourceState: target.liveState })
+      : null;
+    var liveFieldDiff = liveState ? diffPsdSourceStates(liveState, incomingState) : sourceFieldDiff;
+    var fieldDiff = liveFieldDiff.changes.length > 0 || !sourceFieldDiff.changes.length
+      ? liveFieldDiff
+      : sourceFieldDiff;
     var pair = {
       source: sourceLayer,
       target: target,
       baselineState: baselineState,
+      liveState: liveState,
       sourceState: incomingState,
       changes: fieldDiff.changes,
     };
@@ -14884,7 +15170,7 @@ function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
     })) {
       conflicts.push({ kind: "unreliable-rotation-delta", layerId: layerId });
     }
-    if (fieldDiff.unsupportedChanged) {
+    if (sourceFieldDiff.unsupportedChanged) {
       conflicts.push({
         kind: "unsupported-source-change",
         layerId: layerId,
@@ -14893,7 +15179,7 @@ function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
       });
     }
 
-    if (fieldDiff.changes.length === 0 && !fieldDiff.unsupportedChanged) unchanged.push(pair);
+    if (fieldDiff.changes.length === 0 && !sourceFieldDiff.unsupportedChanged) unchanged.push(pair);
     else changed.push(pair);
   }
 

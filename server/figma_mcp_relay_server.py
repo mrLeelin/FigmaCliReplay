@@ -1843,6 +1843,8 @@ def run_single_prefab_to_figma_import(
         str(out_dir / "figma_write_plan.json"),
         "--result",
         str(relay_result_path),
+        "--project-root",
+        str(unity_project_root),
         "--relay-url",
         relay_url,
         "--component-mode",

@@ -720,20 +720,6 @@ def _build_psd_source_state(
             "value": text_transform.get("matrix"),
         })
 
-    tag_payloads = layer.get("_tagPayloads", {})
-    if mode != "text" and isinstance(tag_payloads, dict):
-        for tag in ("SoLd", "PlLd", "PlcL"):
-            payload = tag_payloads.get(tag)
-            if isinstance(payload, bytes):
-                unsupported.append({
-                    "path": "geometry.rotation",
-                    "value": {
-                        "tag": tag,
-                        "sha256": hashlib.sha256(payload).hexdigest(),
-                    },
-                })
-                break
-
     text_state = None
     if mode == "text" and text_info:
         effects = text_info.get("effects") if isinstance(text_info.get("effects"), dict) else {}

@@ -57,3 +57,12 @@ test("updated plugin UI script remains syntactically valid", () => {
   assert.ok(script.length > 0);
   assert.doesNotThrow(() => new Function(script));
 });
+
+test("PSD upload sends source metadata and no-change preview explains identical bytes", () => {
+  assert.match(ui, /sourceFile:\s*\{/);
+  assert.match(ui, /size:\s*file\.size/);
+  assert.match(ui, /lastModified:\s*file\.lastModified/);
+  assert.match(ui, /task\.sourceFile/);
+  assert.match(ui, /identicalToPreviousUpload/);
+  assert.match(ui, /与上一次上传的 PSD 逐字节相同/);
+});

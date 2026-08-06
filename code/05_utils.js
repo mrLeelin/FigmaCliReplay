@@ -3760,6 +3760,7 @@ async function preparePsdIncrementalUpdate(job, assets) {
     stats: { image: 0, text: 0, commonInstance: 0, commonFallbackImage: 0, nineSlice: 0, slice: 0 }
   };
   const currentNodes = collectPsdBoundNodes(target);
+  await enrichPsdLiveContentStates(currentNodes, manifest.layers, context.assetBytes);
   const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
   appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
   appendPsdIncrementalAssetConflicts(diff, context);
@@ -3879,6 +3880,7 @@ function collectPsdBoundNodes(root) {
         contentHash: readSharedPluginData(node, "psdContentHash"),
         ownership: readSharedPluginData(node, "psdOwnership"),
         sourceState: storedSourceState.state,
+        liveState: buildPsdLiveSourceState(node, root, storedSourceState.state),
         sourceStateHash: readSharedPluginData(node, "psdSourceStateHash"),
         sourceStateError: storedSourceState.error,
         parentId: node.parent ? node.parent.id : "",
@@ -3897,6 +3899,156 @@ function collectPsdBoundNodes(root) {
   };
   visit(root);
   return found;
+}
+
+function buildPsdLiveSourceState(node, root, storedSourceState) {
+  if (!storedSourceState || !node || !root || !node.absoluteTransform || !root.absoluteTransform) return null;
+  const liveState = clonePsdValue(storedSourceState);
+  const liveGeometry = mapPsdLiveGeometryToSource({
+    nodeAbsoluteTransform: node.absoluteTransform,
+    nodeSize: { width: numericOr(node.width, 0), height: numericOr(node.height, 0) },
+    nodeRotation: numericOr(node.rotation, 0),
+    rootAbsoluteTransform: root.absoluteTransform
+  });
+  if (liveState.geometry && liveState.geometry.rotation == null) liveGeometry.rotation = null;
+  liveState.geometry = liveGeometry;
+  liveState.display = {
+    visible: node.visible !== false,
+    opacity: numericOr(node.opacity, 1),
+    blendMode: "blendMode" in node ? node.blendMode : null,
+    constraints: "constraints" in node && node.constraints ? clonePsdValue(node.constraints) : {}
+  };
+  if (node.type === "TEXT" && liveState.text) {
+    const fontName = node.fontName && typeof node.fontName === "object" ? node.fontName : {};
+    const lineHeight = node.lineHeight && typeof node.lineHeight === "object" ? node.lineHeight : {};
+    const liveFontFamily = String(fontName.family || "");
+    liveState.text.characters = String(node.characters || "");
+    if (!isPsdFontFamilyAllowed(liveState.text, liveFontFamily)) {
+      liveState.text.fontFamily = liveFontFamily;
+    }
+    liveState.text.effectiveFontSize = numericOr(node.fontSize, liveState.text.effectiveFontSize);
+    liveState.text.leading = lineHeight.unit === "PIXELS" ? numericOr(lineHeight.value, 0) : 0;
+    liveState.text.lineHeightMode = lineHeight.unit === "PIXELS" ? "PIXELS" : "AUTO";
+    liveState.text.textAlignHorizontal = String(node.textAlignHorizontal || liveState.text.textAlignHorizontal || "LEFT");
+    liveState.text.fillColor = buildPsdLiveTextFillColor(node, liveState.text.fillColor);
+    liveState.text.stroke = buildPsdLiveTextStroke(node, liveState.text.stroke);
+    liveState.text.dropShadow = buildPsdLiveTextShadow(node, liveState.text.dropShadow);
+  }
+  return normalizePsdSourceState({ sourceState: liveState });
+}
+
+function firstPsdSolidPaint(paints) {
+  if (!Array.isArray(paints)) return null;
+  return paints.find((paint) => paint && paint.visible !== false && paint.type === "SOLID") || null;
+}
+
+function buildPsdLiveTextFillColor(node, storedFillColor) {
+  const paint = firstPsdSolidPaint(node && node.fills);
+  if (!paint) return { figmaDrift: "missing-solid-fill" };
+  return {
+    ...(storedFillColor && typeof storedFillColor === "object" ? clonePsdValue(storedFillColor) : {}),
+    r: numericOr(paint.color && paint.color.r, 0),
+    g: numericOr(paint.color && paint.color.g, 0),
+    b: numericOr(paint.color && paint.color.b, 0),
+    a: numericOr(paint.opacity, 1)
+  };
+}
+
+function buildPsdLiveTextStroke(node, storedStroke) {
+  const strokes = Array.isArray(node && node.strokes) ? node.strokes : [];
+  const paint = firstPsdSolidPaint(strokes);
+  if (!paint) {
+    return storedStroke && storedStroke.enabled === false
+      ? clonePsdValue(storedStroke)
+      : null;
+  }
+  const storedColor = storedStroke && storedStroke.color && typeof storedStroke.color === "object"
+    ? storedStroke.color
+    : {};
+  return {
+    ...(storedStroke && typeof storedStroke === "object" ? clonePsdValue(storedStroke) : {}),
+    enabled: true,
+    present: true,
+    position: String(node.strokeAlign || "OUTSIDE"),
+    opacity: numericOr(paint.opacity, 1),
+    size: numericOr(node.strokeWeight, 1),
+    color: {
+      ...clonePsdValue(storedColor),
+      r: numericOr(paint.color && paint.color.r, 0),
+      g: numericOr(paint.color && paint.color.g, 0),
+      b: numericOr(paint.color && paint.color.b, 0)
+    }
+  };
+}
+
+function buildPsdLiveTextShadow(node, storedShadow) {
+  const shadows = Array.isArray(node && node.effects)
+    ? node.effects.filter((effect) => effect && effect.visible !== false && effect.type === "DROP_SHADOW")
+    : [];
+  if (shadows.length === 0) {
+    return storedShadow && storedShadow.enabled === false
+      ? clonePsdValue(storedShadow)
+      : null;
+  }
+  if (shadows.length !== 1) return { figmaDrift: "multiple-drop-shadows" };
+  const effect = shadows[0];
+  const offsetX = numericOr(effect.offset && effect.offset.x, 0);
+  const offsetY = numericOr(effect.offset && effect.offset.y, 0);
+  const storedColor = storedShadow && storedShadow.color && typeof storedShadow.color === "object"
+    ? storedShadow.color
+    : {};
+  return {
+    ...(storedShadow && typeof storedShadow === "object" ? clonePsdValue(storedShadow) : {}),
+    enabled: true,
+    present: true,
+    opacity: numericOr(effect.color && effect.color.a, 1),
+    angle: (Math.atan2(-offsetY, offsetX) * 180 / Math.PI + 360) % 360,
+    distance: Math.sqrt(offsetX * offsetX + offsetY * offsetY),
+    spread: Math.max(0, numericOr(effect.spread, 0)),
+    blur: Math.max(0, numericOr(effect.radius, 0)),
+    color: {
+      ...clonePsdValue(storedColor),
+      r: numericOr(effect.color && effect.color.r, 0),
+      g: numericOr(effect.color && effect.color.g, 0),
+      b: numericOr(effect.color && effect.color.b, 0)
+    }
+  };
+}
+
+async function enrichPsdLiveContentStates(currentNodes, incomingLayers, assetBytes) {
+  const incomingById = new Map((incomingLayers || []).map((layer) => [
+    normalizePsdLayerId(layer && layer.layerId),
+    layer
+  ]));
+  await Promise.all((currentNodes || []).map(async (current) => {
+    const source = incomingById.get(current.layerId);
+    const incomingState = source ? normalizePsdSourceState(source) : null;
+    if (!current.liveState || !incomingState || !incomingState.content) return;
+    if (incomingState.mode !== "image" && incomingState.mode !== "nine-slice") return;
+
+    const currentImageHash = incomingState.mode === "nine-slice"
+      ? (findFirstImageHash(current.node, true) || findNineSliceSourceHash(current.node))
+      : findFirstImageHash(current.node, true);
+    let currentBytes = null;
+    if (currentImageHash) {
+      try {
+        const currentImage = figma.getImageByHash(currentImageHash);
+        if (currentImage) currentBytes = await currentImage.getBytesAsync();
+      } catch (error) {
+        currentBytes = null;
+      }
+    }
+    const incomingBytes = assetBytes.get(String(source.assetId || source.idx || ""));
+    current.liveState.content = {
+      ...current.liveState.content,
+      contentHash: resolvePsdLiveContentHash({
+        currentBytes,
+        incomingBytes,
+        currentImageHash,
+        incomingContentHash: incomingState.content.contentHash
+      })
+    };
+  }));
 }
 
 function readStoredPsdSourceState(node) {

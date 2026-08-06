@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -35,6 +36,12 @@ export interface PsdImportTask {
   percent: number;
   fileName: string;
   sourcePsdPath: string;
+  sourceFile: {
+    size: number;
+    lastModified: number;
+    sha256: string;
+    identicalToPreviousUpload: boolean;
+  };
   artifactDir: string;
   manifestSummaryPath: string;
   resultPath: string;
@@ -81,6 +88,7 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
     throw new Error("fileBase64 is required");
   }
   const target = isRecord(payload.target) ? payload.target : {};
+  const sourceFilePayload = isRecord(payload.sourceFile) ? payload.sourceFile : {};
   const fileKey = stringValue(target.fileKey);
   const sessionId = stringValue(target.sessionId);
   const targetNodeId = stringValue(target.targetNodeId);
@@ -99,15 +107,19 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
   }
 
   const taskId = `psd-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  const taskDir = path.join(PLUGIN_ROOT, ".tmp", "psd-to-figma", taskId);
+  const importsRoot = path.join(PLUGIN_ROOT, ".tmp", "psd-to-figma");
+  const taskDir = path.join(importsRoot, taskId);
   const sourcePsdPath = path.join(taskDir, fileName);
   const artifactDir = path.join(taskDir, "layers");
   const resultPath = path.join(taskDir, "figma_mcp_result.json");
   const timelinePath = path.join(taskDir, "timeline.json");
   const manifestSummaryPath = path.join(artifactDir, "manifest_summary.json");
 
+  const sourceBytes = decodeBase64File(fileBase64);
+  const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+  const identicalToPreviousUpload = findPreviousIdenticalPsdUpload(importsRoot, fileName, sourceBytes.length, sourceSha256);
   fs.mkdirSync(taskDir, { recursive: true });
-  fs.writeFileSync(sourcePsdPath, decodeBase64File(fileBase64));
+  fs.writeFileSync(sourcePsdPath, sourceBytes);
 
   const now = Date.now();
   const task: PsdImportTask = {
@@ -118,6 +130,12 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
     percent: 0,
     fileName,
     sourcePsdPath,
+    sourceFile: {
+      size: sourceBytes.length,
+      lastModified: finiteNonNegativeNumber(sourceFilePayload.lastModified),
+      sha256: sourceSha256,
+      identicalToPreviousUpload
+    },
     artifactDir,
     manifestSummaryPath,
     resultPath,
@@ -444,6 +462,42 @@ function decodeBase64File(value: string): Buffer {
   return bytes;
 }
 
+function findPreviousIdenticalPsdUpload(
+  importsRoot: string,
+  fileName: string,
+  size: number,
+  sha256: string
+): boolean {
+  if (!fs.existsSync(importsRoot)) return false;
+  try {
+    const taskDirs = fs.readdirSync(importsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("psd-"))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse()
+      .slice(0, 50);
+    for (const taskDirName of taskDirs) {
+      const taskDirPath = path.join(importsRoot, taskDirName);
+      const candidateNames = fs.readdirSync(taskDirPath, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /\.psd$/i.test(entry.name))
+        .map((entry) => entry.name);
+      for (const candidateName of candidateNames) {
+        const candidatePath = path.join(taskDirPath, candidateName);
+        const stat = fs.statSync(candidatePath);
+        if (stat.size !== size) continue;
+        const candidateSha256 = createHash("sha256").update(fs.readFileSync(candidatePath)).digest("hex");
+        if (candidateSha256 === sha256) return true;
+      }
+    }
+  } catch (error) {
+    logWarn("Unable to inspect previous PSD upload fingerprint", {
+      fileName,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+  return false;
+}
+
 function rootNameFromFile(fileName: string): string {
   const stem = path.basename(fileName, path.extname(fileName));
   const cleaned = stem
@@ -460,6 +514,11 @@ function sanitizeFileName(value: string): string {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function finiteNonNegativeNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function trimText(value: string, maxLength: number): string {

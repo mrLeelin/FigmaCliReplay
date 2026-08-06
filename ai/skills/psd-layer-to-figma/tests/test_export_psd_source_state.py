@@ -89,29 +89,30 @@ class PsdSourceStateTests(unittest.TestCase):
         self.assertIsNone(state["display"]["blendMode"])
         self.assertEqual(state["unsupported"], [{"path": "display.blendMode", "value": "zzzz"}])
 
-    def test_undecoded_placed_transform_is_fingerprinted_as_unsupported(self):
-        state = MODULE._build_psd_source_state(
-            layer={
-                "layerId": 8,
-                "x": 0,
-                "y": 0,
-                "width": 10,
-                "height": 10,
-                "opacity": 255,
-                "visible": True,
-                "blend": "norm",
-                "_tagPayloads": {"SoLd": b"placed-transform-record"},
-            },
-            mode="image",
-            content_hash="hash-8",
-            constraints={},
-            text_info=None,
-            nine_slice_info=None,
-        )
-        unsupported = state["unsupported"][0]
-        self.assertEqual(unsupported["path"], "geometry.rotation")
-        self.assertEqual(unsupported["value"]["tag"], "SoLd")
-        self.assertEqual(len(unsupported["value"]["sha256"]), 64)
+    def test_raster_placed_payload_churn_is_not_reported_as_rotation_change(self):
+        states = []
+        for payload in (b"first-save-record", b"second-save-record"):
+            states.append(MODULE._build_psd_source_state(
+                layer={
+                    "layerId": 8,
+                    "x": 0,
+                    "y": 0,
+                    "width": 10,
+                    "height": 10,
+                    "opacity": 255,
+                    "visible": True,
+                    "blend": "norm",
+                    "_tagPayloads": {"SoLd": payload},
+                },
+                mode="image",
+                content_hash="same-rendered-pixels",
+                constraints={},
+                text_info=None,
+                nine_slice_info=None,
+            ))
+
+        self.assertEqual(states[0]["unsupported"], [])
+        self.assertEqual(states[0], states[1])
 
     def test_rotation_is_emitted_only_for_a_non_skewed_text_transform(self):
         transform = MODULE._normalize_text_rotation(

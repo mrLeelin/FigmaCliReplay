@@ -42,3 +42,21 @@ test("only preview-ready can enter incremental apply", () => {
   const adoptionSource = taskSource.slice(adoptStart);
   assert.match(adoptionSource, /task\.status !== "preview-baseline-required"/);
 });
+
+test("PSD task exposes the uploaded file fingerprint and detects byte-identical reuploads", () => {
+  assert.match(taskSource, /sourceFile:\s*\{/);
+  assert.match(taskSource, /sha256:\s*string/);
+  assert.match(taskSource, /lastModified:\s*number/);
+  assert.match(taskSource, /identicalToPreviousUpload:\s*boolean/);
+  assert.match(taskSource, /createHash\("sha256"\)/);
+  assert.match(taskSource, /findPreviousIdenticalPsdUpload/);
+});
+
+test("byte-identical reupload detection checks prior PSD bytes even when the file name changed", () => {
+  const helperStart = taskSource.indexOf("function findPreviousIdenticalPsdUpload(");
+  const helperEnd = taskSource.indexOf("function rootNameFromFile(", helperStart);
+  const helperSource = taskSource.slice(helperStart, helperEnd);
+  assert.match(helperSource, /readdirSync\(taskDirPath/);
+  assert.match(helperSource, /candidateSha256 === sha256/);
+  assert.doesNotMatch(helperSource, /return candidateSha256 === sha256/);
+});

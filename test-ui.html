@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<body>
+<div id="status">检查按钮状态...</div>
+<script>
+// 模拟检查按钮禁用条件
+const conditions = {
+  generatingAiPrompt: false,
+  aiProviderSyncing: false,
+  provider: { id: 'test', available: true },
+  aiCleanupBusy: false,
+  template: 'cleanup'
+};
+
+const isDisabled = conditions.generatingAiPrompt || 
+                   conditions.aiProviderSyncing || 
+                   !conditions.provider || 
+                   conditions.provider.available !== true || 
+                   (conditions.aiCleanupBusy && conditions.template !== "cleanup");
+
+document.getElementById('status').innerHTML = `
+按钮应该${isDisabled ? '禁用' : '启用'}<br>
+- generatingAiPrompt: ${conditions.generatingAiPrompt}<br>
+- aiProviderSyncing: ${conditions.aiProviderSyncing}<br>
+- provider: ${JSON.stringify(conditions.provider)}<br>
+- aiCleanupBusy: ${conditions.aiCleanupBusy}<br>
+- template: ${conditions.template}<br>
+`;
+</script>
+</body>
+</html>
