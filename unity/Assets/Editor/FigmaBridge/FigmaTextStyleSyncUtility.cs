@@ -13,14 +13,48 @@ namespace MagicWarrior.Editor.FigmaBridge
     /// </summary>
     internal static class FigmaTextStyleSyncUtility
     {
-        /// <summary>项目通用 TMP 字体资产路径。</summary>
-        private const string CommonFontPath = "Assets/MagicWarrior/_Resources/Font/Package/CommonFont.asset";
+        /// <summary>未配置导入字体时的兼容路径。</summary>
+        private const string DefaultCommonFontPath =
+            "Assets/MagicWarrior/_Resources/Font/Package/CommonFont.asset";
+
+        private const string NestedCommonFontPath =
+            "Assets/MagicWarrior/_Resources/Font/Package/CommonFont/CommonFont.asset";
+
+        /// <summary>
+        /// 项目通用 TMP 字体资产路径。与 Prefab 生成器共用 ProjectSettings 配置，
+        /// 以支持 CommonFont 放在 Package 子目录等项目布局。
+        /// </summary>
+        private static string CommonFontPath
+        {
+            get
+            {
+                string configuredPath = FigmaBridgeImportSettings.FontPath;
+                if (!string.IsNullOrWhiteSpace(configuredPath))
+                {
+                    return configuredPath.Replace("\\", "/");
+                }
+
+                // Older projects used the flat path; current projects commonly keep
+                // the font and its material in a CommonFont subdirectory.
+                string[] candidates = { NestedCommonFontPath, DefaultCommonFontPath };
+                foreach (string candidate in candidates)
+                {
+                    if (AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(candidate) != null)
+                    {
+                        return candidate;
+                    }
+                }
+
+                return DefaultCommonFontPath;
+            }
+        }
 
         /// <summary>项目通用 TMP 字体材质路径。</summary>
-        private const string CommonFontMatPath = "Assets/MagicWarrior/_Resources/Font/Package/CommonFont.mat";
+        private static string CommonFontMatPath => Path.ChangeExtension(CommonFontPath, ".mat").Replace("\\", "/");
 
         /// <summary>Figma 专用 TMP 材质输出目录。</summary>
-        private const string FigmaTextMaterialDir = "Assets/MagicWarrior/_Resources/Font/Package";
+        private static string FigmaTextMaterialDir =>
+            Path.GetDirectoryName(CommonFontPath)?.Replace("\\", "/") ?? "Assets/MagicWarrior/_Resources/Font/Package";
 
         /// <summary>TMP 材质浮点参数近似匹配误差。</summary>
         private const float MaterialFloatTolerance = 0.015f;
@@ -325,10 +359,16 @@ namespace MagicWarrior.Editor.FigmaBridge
         {
             string[] candidateFolders =
             {
+                FigmaTextMaterialDir,
+                // 保留旧目录，兼容尚未迁移材质的工程。
                 "Assets/MagicWarrior/_Resources/Font/Package",
                 "Assets/_Resources/Sharders/Font"
             };
-            return candidateFolders.Where(AssetDatabase.IsValidFolder).ToArray();
+            return candidateFolders
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(AssetDatabase.IsValidFolder)
+                .ToArray();
         }
 
         /// <summary>
