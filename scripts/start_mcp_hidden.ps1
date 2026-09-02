@@ -1,5 +1,6 @@
 param(
-    [string]$GatewayUrl = "http://127.0.0.1:32130"
+    [string]$GatewayUrl = "http://127.0.0.1:32130",
+    [switch]$ValidateNodeTools
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,7 @@ $ExpectedRoot = $PluginRoot.TrimEnd('\')
 $DistScript = Join-Path $PluginRoot "dist\index.js"
 $LogDir = Join-Path $PluginRoot ".logs"
 $LocalDir = Join-Path $PluginRoot ".local"
+$LocalNodeDir = Join-Path $LocalDir "node"
 $TokenFile = Join-Path $LocalDir "admin-token.txt"
 
 function Test-ExistingGateway {
@@ -44,21 +46,47 @@ function Get-AdminToken {
     return (Get-Content -LiteralPath $TokenFile -Raw).Trim()
 }
 
-function Ensure-GatewayBuild {
-    $node = Get-Command node -ErrorAction SilentlyContinue
-    if (-not $node) {
-        throw "node.exe was not found in PATH. Install Node.js 18+ first."
+function Resolve-NodeTools {
+    $localNode = Join-Path $LocalNodeDir "node.exe"
+    if (Test-Path -LiteralPath $localNode -PathType Leaf) {
+        $nodePath = (Resolve-Path -LiteralPath $localNode).Path
+        $env:Path = "$LocalNodeDir;$env:Path"
+    } else {
+        $node = Get-Command node -ErrorAction SilentlyContinue
+        if (-not $node) {
+            throw "node.exe was not found in PATH. Install Node.js 18+ first."
+        }
+        $nodePath = $node.Source
     }
+
     $npm = Get-Command npm -ErrorAction SilentlyContinue
-    if (-not $npm) {
-        throw "npm was not found in PATH. Reinstall Node.js with npm enabled."
+    $npmPath = if ($npm) {
+        $npm.Source
+    } else {
+        $nodeDirectory = Split-Path -Parent $nodePath
+        @("npm.cmd", "npm.ps1", "npm") |
+            ForEach-Object { Join-Path $nodeDirectory $_ } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
     }
+    if (-not $npmPath) {
+        throw "npm was not found in PATH or beside node.exe: $nodePath. Install a full Node.js distribution, or place one under .local\\node."
+    }
+
+    return [pscustomobject]@{
+        NodePath = $nodePath
+        NpmPath = $npmPath
+    }
+}
+
+function Ensure-GatewayBuild {
+    $nodeTools = Resolve-NodeTools
 
     $nodeModules = Join-Path $PluginRoot "node_modules"
     if (-not (Test-Path -LiteralPath $nodeModules -PathType Container)) {
         Push-Location $PluginRoot
         try {
-            & npm install
+            & $nodeTools.NpmPath install
             if ($LASTEXITCODE -ne 0) {
                 throw "npm install failed with exit code $LASTEXITCODE"
             }
@@ -78,7 +106,7 @@ function Ensure-GatewayBuild {
     if ($needsBuild) {
         Push-Location $PluginRoot
         try {
-            & npm run build
+            & $nodeTools.NpmPath run build
             if ($LASTEXITCODE -ne 0) {
                 throw "npm run build failed with exit code $LASTEXITCODE"
             }
@@ -87,7 +115,7 @@ function Ensure-GatewayBuild {
         }
     }
 
-    return $node
+    return $nodeTools
 }
 
 function Start-GatewayProcess {
@@ -106,7 +134,7 @@ function Start-GatewayProcess {
         "--asset-root", (Join-Path $PluginRoot ".tmp")
     )
 
-    return Start-Process -FilePath $node.Source -ArgumentList $arguments -WorkingDirectory $PluginRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+    return Start-Process -FilePath $node.NodePath -ArgumentList $arguments -WorkingDirectory $PluginRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
 }
 
 function Wait-ForGateway {
@@ -140,6 +168,11 @@ function Wait-ForGateway {
     } while ((Get-Date) -lt $deadline)
 
     throw "Gateway did not become healthy at $GatewayBaseUrl. Check $LogDir. Last error: $lastError"
+}
+
+if ($ValidateNodeTools) {
+    [void](Resolve-NodeTools)
+    exit 0
 }
 
 if (Test-ExistingGateway) {
