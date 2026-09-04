@@ -1435,6 +1435,7 @@
     const unityPortMax = 32135;
     let unityUrl = unityUrlInput.value.trim();
     let unityConnected = false;
+    let unityGatewayProjectPath = "";
     let unityBridgeVersionMismatch = null;
     let unityProjects = [];
     let selectedUnityProject = null;
@@ -5630,6 +5631,7 @@
         unityUrl = probe.url;
         unityUrlInput.value = unityUrl;
         unityConnected = true;
+        unityGatewayProjectPath = data.projectPath || "";
         unityBridgeVersionMismatch = null;
         setBridgeVersionBadge(data.version, "connected");
         setUnityBadge(true);
@@ -5642,6 +5644,7 @@
         refreshUnityControls();
       } catch (error) {
         unityConnected = false;
+        unityGatewayProjectPath = "";
         unityBridgeVersionMismatch = error && error.bridgeVersionMismatch ? error : null;
         setUnityBadge(false);
         setSelectedFolder("未连接", true);
@@ -5655,6 +5658,7 @@
 
     function disconnectUnity() {
       unityConnected = false;
+      unityGatewayProjectPath = "";
       setBridgeVersionBadge("", "disconnected");
       setUnityBadge(false);
       setSelectedFolder("未连接", true);
@@ -6816,6 +6820,10 @@
         var targetDir = "";
         try {
           targetDir = await fetchSelectedUnityFolder();
+          var unityProjectPath = selectedUnityProject ? selectedUnityProject.path : unityGatewayProjectPath;
+          if (!unityProjectPath) {
+            throw new Error("请先在 Unity 设置中选择目标 Unity 工程，或重新连接 Unity 网关。");
+          }
           if (selectedUnityImageTargetMode === "replaceImage" && nineSliceList.length !== 1) {
             throw new Error("Unity 当前选中图片时只能覆盖 1 张九宫图，当前 " + nineSliceList.length + " 张。");
           }
@@ -6837,6 +6845,7 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+              unityProjectPath: unityProjectPath,
               targetDir: targetDir,
               targetMode: selectedUnityImageTargetMode,
               replaceAssetPath: selectedUnityReplaceAssetPath,

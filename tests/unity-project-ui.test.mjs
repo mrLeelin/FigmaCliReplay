@@ -36,6 +36,17 @@ test("Prefab-to-Figma import sends the selected Unity project root", () => {
   assert.match(source, /unityProjectPath:\s*selectedUnityProject\.path/);
 });
 
+test("nine-slice crop sends the selected Unity project root", () => {
+  const functionStart = ui.indexOf("async function handleUnityImageExport(message)");
+  const functionEnd = ui.indexOf("function renderUnityImportResult", functionStart);
+  const source = ui.slice(functionStart, functionEnd);
+
+  assert.match(source, /relayEndpoint\("\/crop-jiugong"\)/);
+  assert.match(source, /var unityProjectPath = selectedUnityProject\s*\?\s*selectedUnityProject\.path\s*:\s*unityGatewayProjectPath/);
+  assert.match(source, /unityProjectPath:\s*unityProjectPath/);
+  assert.match(source, /if \(!unityProjectPath\)/);
+});
+
 test("Prefab-to-Figma import records terminal task errors in the live log", () => {
   const functionStart = ui.indexOf("async function pollPrefabImportTask()");
   const functionEnd = ui.indexOf("function renderPrefabImportTaskStatus", functionStart);

@@ -1087,14 +1087,49 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// 解析 Unity 当前选择的图片导入目标：图片直接覆盖，文件夹导入，其他资源导入到所在文件夹。
+        /// 解析 Unity 当前选择的图片导入目标：场景节点的单个 Image 直接覆盖其 Sprite，
+        /// 图片资源直接覆盖，文件夹导入，其他资源导入到所在文件夹。
         /// </summary>
         private static ImageImportTarget ResolveImageImportTarget()
         {
+            GameObject selectedGameObject = Selection.activeGameObject;
+            if (selectedGameObject != null && !EditorUtility.IsPersistent(selectedGameObject))
+            {
+                Image[] imageComponents = selectedGameObject.GetComponents<Image>();
+                if (imageComponents.Length != 1)
+                {
+                    return ImageImportTarget.Error(
+                        $"当前选中的 GameObject 必须有且只有一个 Image 或其子类组件，当前为 {imageComponents.Length} 个。");
+                }
+
+                Image image = imageComponents[0];
+                if (image.sprite == null)
+                {
+                    return ImageImportTarget.Error(
+                        $"当前选中的 GameObject 的 Image 未绑定 Sprite，无法直接替图：{selectedGameObject.name}");
+                }
+
+                string spriteAssetPath = NormalizeUnityPath(AssetDatabase.GetAssetPath(image.sprite));
+                if (string.IsNullOrEmpty(spriteAssetPath))
+                {
+                    return ImageImportTarget.Error(
+                        $"当前选中的 GameObject 的 Image Sprite 不是 Assets 下的图片资源：{selectedGameObject.name}");
+                }
+
+                if (!IsImageAssetSelection(image.sprite, spriteAssetPath))
+                {
+                    return ImageImportTarget.Error(
+                        $"当前选中的 GameObject 的 Image Sprite 不是可直接覆盖的图片资源：{spriteAssetPath}");
+                }
+
+                string spriteFolder = NormalizeUnityPath(Path.GetDirectoryName(spriteAssetPath) ?? "Assets");
+                return ImageImportTarget.Replace(spriteAssetPath, spriteFolder);
+            }
+
             var selected = Selection.activeObject;
             if (selected == null)
             {
-                return ImageImportTarget.Error("请在 Unity Project 窗口中选中一个图片资源、Assets 文件夹或 Assets 下的资源");
+                return ImageImportTarget.Error("请在 Unity Project 窗口中选中一个图片资源、Assets 文件夹或 Assets 下的资源，或在 Hierarchy 中选中一个带单个 Image 的 GameObject");
             }
 
             string selectedPath = NormalizeUnityPath(AssetDatabase.GetAssetPath(selected));
