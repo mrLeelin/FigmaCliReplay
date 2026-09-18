@@ -43,7 +43,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         private string _figmaFileUrl = "";
 
         /// <summary>服务器首选监听端口输入值</summary>
-        private int _serverPort = FigmaBridgeServer.DefaultPort;
+        private int _serverPort = FigmaBridgeServer.RelayPort;
         private TMP_FontAsset _importFont;
 
         /// <summary>最近一次推送的 Prefab 名称</summary>
@@ -74,7 +74,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         {
             BridgeLogger.OnChanged += OnLogChanged;
             _figmaFileUrl = EditorPrefs.GetString(PrefsFigmaUrlKey, "");
-            _serverPort = FigmaBridgeServer.PreferredPort;
+            _serverPort = FigmaBridgeServer.RelayPort;
             _importFont = FigmaBridgeImportSettings.Font;
         }
 
@@ -166,7 +166,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// </summary>
         private void DrawServerPortConfig()
         {
-            EditorGUILayout.LabelField("Unity 网关端口", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Relay 端口", EditorStyles.boldLabel);
             EditorGUI.BeginDisabledGroup(FigmaBridgeServer.IsRunning);
             EditorGUILayout.BeginHorizontal();
 
@@ -174,31 +174,29 @@ namespace MagicWarrior.Editor.FigmaBridge
             _serverPort = EditorGUILayout.IntField(_serverPort, GUILayout.MinWidth(PortFieldMinWidth));
             if (EditorGUI.EndChangeCheck())
             {
-                _serverPort = Mathf.Clamp(
-                    _serverPort,
-                    FigmaBridgeServer.DefaultPort,
-                    FigmaBridgeServer.MaxPort);
-                FigmaBridgeServer.PreferredPort = _serverPort;
+                _serverPort = Mathf.Clamp(_serverPort, 1, 65535);
+                FigmaBridgeServer.RelayPort = _serverPort;
             }
 
             EditorGUILayout.LabelField(
-                $"可用范围：{FigmaBridgeServer.DefaultPort}-{FigmaBridgeServer.MaxPort}",
+                "Bridge 主动出站连接该端口",
                 EditorStyles.miniLabel);
 
             EditorGUILayout.EndHorizontal();
             EditorGUI.EndDisabledGroup();
 
-            if (FigmaBridgeServer.IsRunning)
+            if (FigmaBridgeServer.IsRelayConnected)
             {
                 EditorGUILayout.HelpBox(
-                    $"服务器运行中，实际地址：{FigmaBridgeServer.CurrentGatewayUrl}",
+                    $"已连接中继：{FigmaBridgeServer.RelayClientUrl}",
                     MessageType.Info);
             }
             else
             {
                 EditorGUILayout.HelpBox(
-                    "如端口被占用，启动时会自动尝试后续端口。",
-                    MessageType.None);
+                    $"未连接。请确认 Relay 正在运行且为支持 /unity 的版本，然后核对 {FigmaBridgeServer.RelayClientUrl}；"
+                    + "Bridge 不再监听本地端口，也不再写发现文件。",
+                    MessageType.Warning);
             }
         }
 
@@ -207,19 +205,21 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// </summary>
         private void DrawConnectionStatus()
         {
+            bool connected = FigmaBridgeServer.IsRelayConnected;
             bool isRunning = FigmaBridgeServer.IsRunning;
 
             EditorGUILayout.BeginHorizontal();
 
             // 状态圆点
-            Texture2D dot = isRunning ? _greenDot : _redDot;
+            Texture2D dot = connected ? _greenDot : _redDot;
             GUILayout.Label(
                 new GUIContent(dot),
                 GUILayout.Width(DotSize + 4),
                 GUILayout.Height(DotSize + 4));
 
             // 状态文字
-            string statusText = isRunning ? $"已连接 ({FigmaBridgeServer.CurrentGatewayUrl})" : "未连接";
+            string statusText = connected ? $"已连接中继 ({FigmaBridgeServer.RelayClientUrl})"
+                : isRunning ? "等待中继连接…" : "未连接";
             EditorGUILayout.LabelField(statusText);
 
             EditorGUILayout.EndHorizontal();

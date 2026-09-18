@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const RELAY_PROTOCOL_VERSION = 1;
 export const RELAY_CLI_PATH = "/relay";
+/** Unity Bridge 主动连入的路径（出站倒置的接收侧）。 */
+export const UNITY_BRIDGE_PATH = "/unity";
 
 const identifier = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
 

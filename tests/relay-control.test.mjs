@@ -5,6 +5,7 @@ import test from "node:test";
 import { WebSocket } from "ws";
 import { WebSocketGateway } from "../dist/websocketGateway.js";
 import { createRelayControlHandler } from "../dist/relayControl.js";
+import { notifyRunChanged } from "../dist/runChangeNotifier.js";
 
 test("shared controls reject ambiguous/offline targets and preserve confirmation fields", async () => {
   const sessions = [{ authenticated: true, sessionId: "one", fileKey: "file1" }, { authenticated: true, sessionId: "two", fileKey: "file2" }];
@@ -75,7 +76,10 @@ test("run subscriptions authenticate, push only changes, resume output, and rele
   assert.equal(messages.filter((message) => message.type === "relay.event").length, 0);
   send("sub1", "secret");
   await until(() => messages.some((message) => message.subscriptionId === "sub1"));
+  // 变化驱动：没有变化就完全不拉取（取代原先每 250ms 无条件 get）。
+  const idleReads = reads;
   await new Promise((resolve) => setTimeout(resolve, 550));
+  assert.equal(reads, idleReads, "an idle subscription must not poll");
   assert.equal(messages.filter((message) => message.type === "relay.event").length, 1);
   socket.send(JSON.stringify({ type: "relay.request", requestId: "import-sub", action: "prefab.import.subscribe", payload: { taskId: "import-task" } }));
   await until(() => messages.some((message) => message.type === "relay.event" && message.taskId === "import-task"));
@@ -90,9 +94,12 @@ test("run subscriptions authenticate, push only changes, resume output, and rele
   await until(() => messages.some((message) => message.type === "relay.event" && message.taskId === "figma-task"));
   socket.send(JSON.stringify({ type: "relay.request", requestId: "figma-unsubscribe", action: "figma.prefab.unsubscribe", payload: {} }));
   await until(() => messages.some((message) => message.requestId === "figma-unsubscribe"));
+  const readsBeforePush = reads;
   output.push({ sequence: 2, text: "second" });
   state = "completed";
+  notifyRunChanged("run");
   await until(() => messages.some((message) => message.result?.status === "completed"));
+  assert.equal(reads, readsBeforePush + 1, "one change must trigger exactly one read");
   assert.deepEqual(messages.filter((message) => message.type === "relay.event").at(-1).result.output, [{ sequence: 2, text: "second" }]);
   assert.equal(messages.filter((message) => message.type === "relay.event" && message.taskId === "import-task").length, 1);
   socket.close();

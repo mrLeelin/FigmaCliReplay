@@ -15,11 +15,28 @@ node dist/cli.js control --job-type unity.command --payload '{"id":"<projectId>"
 node dist/cli.js control --job-type unity.command-status --payload '{"id":"<projectId>","requestId":"health-001"}'
 ```
 
-Relay 从所选项目的本地发现文件读取 Bridge 地址与私有令牌，连接 `/bridge` WebSocket，并校验协议版本、精确产品版本及项目路径；公开 `unity.gateway.get` 不返回令牌。UI 的健康、选择、Canvas、图片导入、层级和字体同步以及 Node 日志采集已切换 WS，业务在 Unity 主线程执行；UI 不再扫描端口。`run_full_import.py` 经项目 CLI 执行 Unity 导入，`--unity-project-id` 与 `--unity-project` 共同校验目标，旧 `--unity-gateway-url` 已删除。导入编排与拖放已使用共享 WS 控制，运行时真值通过 Unity CLI，旧 Bridge 业务 HTTP 已拒绝执行。
+Unity Bridge 由 Unity **主动出站**连接 Relay 的 `/unity`：一条长连接，不需要发现文件、端口级联或每命令一次握手，断线按退避重连。中继侧不再有"读取本地发现文件并拨入 `/bridge`"的兼容路径——升级后必须重启 Relay，否则 Unity 侧只会记录"未连接"。握手校验协议版本、精确产品版本与项目路径；公开 `unity.gateway.get` 不返回令牌，会话在线时返回 `transport: "inbound"` 与会话心跳时间，离线时返回 `{"found": false}`。
+
+## 长驻模式（消除每命令一次进程启动与握手）
+
+AI 包装脚本或批处理可以只启动一次 `serve`，用同一条 WebSocket 连接发送多轮请求：
+
+```powershell
+node dist/cli.js serve --url ws://127.0.0.1:32130/relay
+```
+
+- stdin 每行一个请求：`{"action":"relay.control","payload":{"controlAction":"unity.command","controlPayload":{...}},"timeout":15}`
+- stdout 每行一个响应：`{"requestId":"...","ok":true,"result":{...}}`；首行是 `{"type":"serve.ready",...}`，stdin 结束（EOF）时输出 `{"type":"serve.closed","requests":N}` 并以 0 退出。
+- 处理顺序与 stdin 一致，调用方无需自行配对；非法行返回 `ok:false` 且 code 为 `USAGE`，不中断循环。
+- `payload` 仍按 CLI 协议严格校验（未知键会被拒绝），可用字段与一次性命令完全相同；`requestId` 省略时自动生成。
+
+与一次性命令的唯一差别是进程与连接数量：一次性命令每条一次进程启动 + 一次 WS 握手，`serve` 全程一次。
+
+UI 的健康、选择、Canvas、图片导入、层级和字体同步以及 Node 日志采集已切换 WS，业务在 Unity 主线程执行；UI 不再扫描端口。`run_full_import.py` 经项目 CLI 执行 Unity 导入，`--unity-project-id` 与 `--unity-project` 共同校验目标，旧 `--unity-gateway-url` 已删除。导入编排与拖放已使用共享 WS 控制，运行时真值通过 Unity CLI，旧 Bridge 业务 HTTP 已拒绝执行。
 
 命令状态为 queued/running/completed/failed；断线或超时只查询原 requestId，不自动重放。保留记录中的相同请求 ID 与参数只执行一次，不同参数被拒绝；最多保留 1000 项。满时回收已完成的 health/ping/selected-folder/logs 只读结果，不能回收写入记录；无可回收项则拒绝新请求。已回收的只读请求可重新查询。Editor 域重载或 Bridge 重启会丢失内存状态，旧 ID 查询返回 unknown，此时不能据此重新写入。单帧请求上限 16 MiB。UI/Python 错误保留项目和请求 ID，便于用 `unity.command-status` 核对；安装 Bridge 不等于实际 Editor 编译或运行验收。
 
-传输回归可独立于 Unity 运行：`dotnet build tests/fixtures/unity-bridge-host/BridgeHost.csproj --output .tmp/bridge-host`，设置 `UNITY_BRIDGE_TEST_HOST` 为生成的 `BridgeHost.dll` 绝对路径，再运行 `node --test tests/unity-bridge-csharp.test.mjs`。此测试链接实际 C# 传输源码，仅替换 Unity API 和业务队列，不证明真实资源操作正确。
+传输回归可独立于 Unity 运行：`dotnet build tests/fixtures/unity-bridge-client-host/BridgeClientHost.csproj`，设置 `UNITY_BRIDGE_CLIENT_HOST` 为生成的 `BridgeClientHost.dll` 绝对路径，再运行 `node --test tests/unity-outbound-client.test.mjs`；同一测试可用 Unity 自带的 Mono 运行（设 `UNITY_BRIDGE_CLIENT_RUNNER=mono` 与 `UNITY_MONO_EXE`，宿主换成针对 Mono BCL 编译的 exe）。此测试链接实际 C# 传输源码，仅替换 Unity API 和业务队列，不证明真实资源操作正确。
 
 PSD 控制已接入 `control --job-type psd.import.start|get|apply|adopt-baseline`（竖线表示选择一个 action）。启动 payload 包含稳定的 `clientRequestId`、`fileName`、`fileBase64`、`mode` 和 `target`；查询包含 `taskId`；应用与采用基线还必须包含预览返回的 `baselineFingerprint`。使用 `--session-id` 固定会话，Relay 校验目标文件与任务归属。示例：
 

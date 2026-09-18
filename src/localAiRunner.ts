@@ -28,6 +28,7 @@ import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 import type { OperationScope } from "./logging/operationScope.js";
 import { logInfo } from "./utils/logger.js";
 import { isRecord } from "./utils.js";
+import { notifyRunChanged } from "./runChangeNotifier.js";
 import { UnityProjectRegistry, type UnityProjectStatus } from "./unityProjectRegistry.js";
 
 type RunnerKind = "codex" | "claude";
@@ -855,6 +856,8 @@ function appendOutput(run: AiRun, stream: OutputEntry["stream"], text: string) {
   run.output.push(entry); if (run.output.length > MaxOutputEntries) run.output.splice(0, run.output.length - MaxOutputEntries);
   fs.appendFileSync(run.executionLog, `${entry.at} [${stream}] ${text}\n`, "utf8");
   if (!run.finalised && (run.status === "starting" || run.status === "running")) resetIdleTimeout(run);
+  // 进度变化即通知订阅者（网关会合并同一轮事件循环内的连续通知）。
+  notifyRunChanged(run.runId);
 }
 
 function recordRelayClientConnectionFailure(run: AiRun, stream: OutputEntry["stream"], text: string) {
@@ -968,6 +971,7 @@ function finalise(run: AiRun, status: RunStatus, code: number | null) {
   settleCleanupPhase(run, status);
   clearRunTimeouts(run);
   run.finalised = true; run.status = status; run.exitCode = code; run.endedAt = new Date().toISOString(); run.child = undefined; run.pid = undefined;
+  notifyRunChanged(run.runId);
   run.operation?.step("cli-exit", "本地 AI CLI 进程已退出", {
     exitCode: code,
     outputBytes: run.outputBytes,

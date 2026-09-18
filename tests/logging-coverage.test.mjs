@@ -20,7 +20,6 @@ const operationOwners = [
   "src/pythonWorker.ts",
   "src/relayControl.ts",
   "src/unityProjectRegistry.ts",
-  "src/unityGatewayDiscovery.ts",
   "src/unityBridgeInstaller.ts",
 ];
 
@@ -51,7 +50,7 @@ test("decisive operation steps remain covered by source-level guardrails", () =>
     "planning", "approval", "execution", "rollback", "verification",
     "provider-probe", "cli-spawn", "cli-exit", "timeout", "cancel",
     "queued", "export", "submit", "result",
-    "discover", "install", "connect",
+    "install", "connect",
     "read", "write",
   ];
   const missing = requiredSteps.filter((step) => !source.includes(`"${step}"`));

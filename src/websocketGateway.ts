@@ -6,6 +6,9 @@ import { logInfo, logWarn } from "./utils/logger.js";
 import type { RelayJob, PluginGatewayStatus, PluginSessionStatus, PluginSessionTarget } from "./types.js";
 import { isAllowedLocalRequest, isRecord } from "./utils.js";
 import type { RelayCliEndpoint } from "./relayCliEndpoint.js";
+import { watchRunChanges } from "./runChangeNotifier.js";
+import { UNITY_BRIDGE_PATH } from "./relayProtocol.js";
+import { closeUnitySessions, handleUnityMessage, pruneUnitySessions, unregisterUnitySession } from "./unitySessionRegistry.js";
 import { RELAY_CLI_PATH } from "./relayProtocol.js";
 
 const HEARTBEAT_TIMEOUT_MS = 120_000;
@@ -39,14 +42,18 @@ type RelayClientRequestHandler = (request: RelayClientRequest) => Promise<unknow
 
 interface RunSubscription {
   request: RelayClientRequest;
-  timer?: NodeJS.Timeout;
+  key: string;
   previous: string;
   sequence: number;
   cancelled: boolean;
+  pushScheduled?: boolean;
+  release?: () => void;
 }
 
 export class WebSocketGateway {
   private readonly server: WebSocketServer;
+  /** Unity Bridge 主动连入的独立 server，避免与 Figma 插件的 connection 处理混用。 */
+  private readonly unityServer: WebSocketServer;
   private readonly sessions = new Map<WebSocket, PluginSession>();
   private activeSocket?: WebSocket;
   private readonly heartbeatTimer: NodeJS.Timeout;
@@ -70,6 +77,8 @@ export class WebSocketGateway {
   constructor(private readonly ingestLogEvents?: (events: unknown[]) => unknown) {
     this.server = new WebSocketServer({ noServer: true });
     this.server.on("connection", (socket) => this.attach(socket));
+    this.unityServer = new WebSocketServer({ noServer: true });
+    this.unityServer.on("connection", (socket) => this.attachUnity(socket));
     this.heartbeatTimer = setInterval(() => this.pruneStaleSession(), 5_000);
   }
 
@@ -77,6 +86,18 @@ export class WebSocketGateway {
     this.cliEndpoint = cliEndpoint;
     httpServer.on("upgrade", (request, socket, head) => {
       const url = new URL(request.url ?? "/", "http://localhost");
+      if (url.pathname === UNITY_BRIDGE_PATH) {
+        // Unity 主动连入：仅本机、无浏览器 Origin；身份与版本在 bridge.register 里校验。
+        if (!isAllowedLocalRequest(request)) {
+          logWarn("Unity Bridge upgrade rejected", { path: url.pathname });
+          socket.destroy();
+          return;
+        }
+        this.unityServer.handleUpgrade(request, socket, head, (ws) => {
+          this.unityServer.emit("connection", ws, request);
+        });
+        return;
+      }
       if (url.pathname === RELAY_CLI_PATH && cliEndpoint) {
         cliEndpoint.handleUpgrade(request, socket, head);
         return;
@@ -104,6 +125,13 @@ export class WebSocketGateway {
     }
     this.ackTimers.clear();
     this.server.close();
+    // 已注册的会话由 closeUnitySessions 收尾；被拒绝/未注册的连入连接也必须主动终止，
+    // 否则它们会让 HTTP server 的 close 一直等下去（升级后的连接不受 closeAllConnections 影响）。
+    for (const client of this.unityServer.clients) {
+      try { client.terminate(); } catch { /* 已断开 */ }
+    }
+    this.unityServer.close();
+    closeUnitySessions();
     for (const session of this.sessions.values()) {
       this.notifySessionDisconnected(session, "gateway closed");
       session.socket.close();
@@ -246,6 +274,22 @@ export class WebSocketGateway {
         }
       }
     });
+  }
+
+  /** Unity Bridge 连入后的消息与断开处理，转发给会话注册表。 */
+  private attachUnity(socket: WebSocket): void {
+    socket.on("message", (raw) => {
+      let message: unknown;
+      try {
+        message = JSON.parse(String(raw));
+      } catch {
+        return;
+      }
+      if (!isRecord(message)) return;
+      handleUnityMessage(socket, message);
+    });
+    socket.on("close", () => unregisterUnitySession(socket, "unity bridge disconnected"));
+    socket.on("error", () => unregisterUnitySession(socket, "unity bridge error"));
   }
 
   private handleMessage(socket: WebSocket, raw: string): void {
@@ -457,11 +501,18 @@ export class WebSocketGateway {
         if (socket.readyState !== socket.OPEN) return;
         if (this.sessions.get(socket) !== session) return;
         this.clearRunSubscription(socket, isImport);
-        const subscription: RunSubscription = { request: readRequest, previous: "", sequence: 0, cancelled: false };
+        const subscription: RunSubscription = {
+          request: readRequest,
+          key: String(readRequest.payload.runId || readRequest.payload.taskId || ""),
+          previous: "",
+          sequence: 0,
+          cancelled: false,
+        };
         subscriptions.set(socket, subscription);
         this.sendRelayClientResponse(socket, requestId, true, { ok: true, subscriptionId: requestId });
         this.publishRunView(socket, subscription, initial);
-        this.scheduleRunView(socket, subscription);
+        // 变化驱动：数据源 notify 时才拉取一次，取代原先每 250ms 无条件 get。
+        subscription.release = watchRunChanges(subscription.key, () => this.scheduleRunPush(socket, subscription));
         return;
       }
       const result = await this.onRelayClientRequest(request);
@@ -492,7 +543,8 @@ export class WebSocketGateway {
     const subscription = subscriptions.get(socket);
     if (!subscription) return;
     subscription.cancelled = true;
-    clearTimeout(subscription.timer);
+    subscription.release?.();
+    subscription.release = undefined;
     subscriptions.delete(socket);
     logInfo("Run subscription released", { subscriptionId: subscription.request.requestId, sessionId: subscription.request.sessionId });
   }
@@ -512,14 +564,16 @@ export class WebSocketGateway {
     logInfo("Run subscription updated", { subscriptionId: subscription.request.requestId, runId: subscription.request.payload.runId, sequence: subscription.sequence, outputCount: output.length });
   }
 
-  private scheduleRunView(socket: WebSocket, subscription: RunSubscription): void {
-    if (subscription.cancelled) return;
-    subscription.timer = setTimeout(async () => {
+  private scheduleRunPush(socket: WebSocket, subscription: RunSubscription): void {
+    if (subscription.cancelled || subscription.pushScheduled) return;
+    subscription.pushScheduled = true;
+    // 同一轮事件循环里的连续 notify 合并为一次推送。
+    setTimeout(async () => {
+      subscription.pushScheduled = false;
       if (subscription.cancelled || socket.readyState !== socket.OPEN) return;
       try {
         const value = await this.onRelayClientRequest!(subscription.request);
         this.publishRunView(socket, subscription, value);
-        this.scheduleRunView(socket, subscription);
       } catch (error) {
         if (!subscription.cancelled && socket.readyState === socket.OPEN) {
           socket.send(JSON.stringify({ type: "relay.event", subscriptionId: subscription.request.requestId, runId: subscription.request.payload.runId, taskId: subscription.request.payload.taskId, error: error instanceof Error ? error.message : String(error) }));
@@ -527,7 +581,7 @@ export class WebSocketGateway {
         const isImport = subscription.request.action.startsWith("figma.prefab.") ? "figma" : subscription.request.action.startsWith("psd.import.") ? "psd" : subscription.request.action.startsWith("prefab.import.");
         if ((isImport === "figma" ? this.figmaPrefabSubscriptions : isImport === "psd" ? this.psdSubscriptions : isImport ? this.importSubscriptions : this.runSubscriptions).get(socket) === subscription) this.clearRunSubscription(socket, isImport);
       }
-    }, 250);
+    }, 0);
   }
 
   private sendRelayClientResponse(socket: WebSocket, requestId: string, ok: boolean, result?: unknown, error?: string): void {
@@ -550,6 +604,7 @@ export class WebSocketGateway {
   }
 
   private pruneStaleSession(): void {
+    pruneUnitySessions();
     for (const session of this.sessions.values()) {
       if (!session.lastHeartbeatAt) {
         continue;

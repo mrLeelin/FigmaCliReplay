@@ -7,9 +7,9 @@ import { PLUGIN_ROOT } from "./config.js";
 import { UnityLogCollector } from "./logging/unityLogCollector.js";
 import { LogLevels, LogSources, LogStatuses, type LogQuery } from "./logging/logEvent.js";
 import { UnityProjectRegistry } from "./unityProjectRegistry.js";
-import { readUnityGatewayDiscovery } from "./unityGatewayDiscovery.js";
 import { installUnityBridge } from "./unityBridgeInstaller.js";
 import { callUnityBridge } from "./unityBridgeClient.js";
+import { unityProjectKey, unitySessionStatus } from "./unitySessionRegistry.js";
 import { isRecord } from "./utils.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 
@@ -101,7 +101,23 @@ export function createRelayControlHandler(
           if (!id) throw new Error("An explicit Unity project id is required.");
           const existing = unityProjects.list().projects.find((project) => project.id === id);
           if (!existing) throw new Error("Unknown Unity project.");
-          if (action === "unity.gateway.get") result = existing.valid ? readUnityGatewayDiscovery(existing.path) : { found: false };
+          if (action === "unity.gateway.get") {
+            // 只有出站会话一种形态：没有会话就是未连接（不再读取发现文件）。
+            const key = unityProjectKey(existing.path);
+            const session = existing.valid
+              ? unitySessionStatus().find((item) => unityProjectKey(item.projectPath) === key)
+              : undefined;
+            result = session
+              ? {
+                  found: true,
+                  transport: "inbound",
+                  gatewayUrl: "relay-session://inbound",
+                  projectPath: session.projectPath,
+                  clientVersion: session.clientVersion,
+                  updatedAtUtc: session.lastHeartbeatAt
+                }
+              : { found: false };
+          }
           else if (action === "unity.projects.remove") {
             unityProjects.remove(id);
             result = { ok: true, ...unityProjects.list() };

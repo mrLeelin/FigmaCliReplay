@@ -1,0 +1,15 @@
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\bin\Debug\net8.0\BridgeClientHost.exe
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\bin\Debug\net8.0\BridgeClientHost.deps.json
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\bin\Debug\net8.0\BridgeClientHost.runtimeconfig.json
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\bin\Debug\net8.0\BridgeClientHost.dll
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\bin\Debug\net8.0\BridgeClientHost.pdb
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.GeneratedMSBuildEditorConfig.editorconfig
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.AssemblyInfoInputs.cache
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.AssemblyInfo.cs
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.csproj.CoreCompileInputs.cache
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.sourcelink.json
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.dll
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\refint\BridgeClientHost.dll
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.pdb
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\BridgeClientHost.genruntimeconfig.cache
+E:\Project\Tools\FigmaMcpRelay\tests\fixtures\unity-bridge-client-host\obj\Debug\net8.0\ref\BridgeClientHost.dll

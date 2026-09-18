@@ -10,6 +10,7 @@ import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 import type { OperationScope } from "./logging/operationScope.js";
 import { logInfo, logWarn } from "./utils/logger.js";
 import { isRecord } from "./utils.js";
+import { notifyRunChanged } from "./runChangeNotifier.js";
 
 type PsdImportMode =
   | "initial"
@@ -167,6 +168,12 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
   return serializePsdImportTask(task);
 }
 
+/** 进度变化：更新 updatedAt 并通知订阅者。 */
+function touchTask(task: PsdImportTask): void {
+  task.updatedAt = Date.now();
+  notifyRunChanged(task.taskId);
+}
+
 export function getPsdImportTask(taskId: string): PsdImportTask | undefined {
   const task = tasks.get(taskId);
   return task ? serializePsdImportTask(task) : undefined;
@@ -189,7 +196,7 @@ export function applyPsdImportTask(config: GatewayConfig, taskId: string, payloa
   task.stage = "queued_apply";
   task.percent = 0;
   task.error = undefined;
-  task.updatedAt = Date.now();
+  touchTask(task);
   startTaskOperation(task, "psd.incremental-apply", "开始 PSD 增量应用任务");
   void runPsdImportTask(config, task, { reuseExportArtifacts: true });
   return serializePsdImportTask(task);
@@ -209,7 +216,7 @@ export function adoptPsdImportBaseline(config: GatewayConfig, taskId: string, pa
   task.stage = "queued_baseline_adopt";
   task.percent = 0;
   task.error = undefined;
-  task.updatedAt = Date.now();
+  touchTask(task);
   startTaskOperation(task, "psd.incremental-baseline-adopt", "开始认领 PSD 源状态基线");
   void runPsdImportTask(config, task, { reuseExportArtifacts: true });
   return serializePsdImportTask(task);
@@ -233,6 +240,7 @@ export function cancelPsdImportTask(taskId: string): { ok: true; accepted: boole
     task.status = "cancelled";
     task.stage = "cancelled";
     task.updatedAt = task.completedAt = Date.now();
+    notifyRunChanged(task.taskId);
     const operation = taskLogger.startOperation("psd.cancel", "Cancel PSD preview", { operationId: taskId });
     operation.step("validate", "Preview is idle; no write is executing");
     operation.cancel("PSD preview cancelled");
@@ -240,7 +248,7 @@ export function cancelPsdImportTask(taskId: string): { ok: true; accepted: boole
   }
   if (task.status === "queued" || (task.status === "running" && task.stage === "exporting_psd_layers")) {
     task.status = "cancel_requested";
-    task.updatedAt = Date.now();
+    touchTask(task);
     taskOperations.get(taskId)?.step("cancel.requested", "Cancel after the current export returns; do not submit to Figma");
     return { ok: true, accepted: true, task: serializePsdImportTask(task) };
   }
@@ -325,7 +333,7 @@ async function runPsdImportTask(
       task.status = previewStatus as PsdPreviewStatus;
       task.stage = previewStatus.replace(/-/g, "_");
       task.percent = 100;
-      task.updatedAt = Date.now();
+      touchTask(task);
       task.logs.push(formatTaskLog(task, `PSD 增量预览已完成：${previewStatus}`));
       taskOperations.get(task.taskId)?.succeed("PSD 增量预览已生成", { status: previewStatus });
       taskOperations.delete(task.taskId);
@@ -340,6 +348,7 @@ async function runPsdImportTask(
       task.percent = 100;
       task.completedAt = Date.now();
       task.updatedAt = task.completedAt;
+    notifyRunChanged(task.taskId);
       task.logs.push(formatTaskLog(task, "PSD 源状态基线认领完成，画布未修改"));
       taskOperations.get(task.taskId)?.succeed("PSD 源状态基线认领完成", { status: task.status });
       taskOperations.delete(task.taskId);
@@ -352,6 +361,7 @@ async function runPsdImportTask(
     task.status = "completed";
     task.completedAt = Date.now();
     task.updatedAt = task.completedAt;
+    notifyRunChanged(task.taskId);
     logInfo("PSD import task completed", { taskId: task.taskId, fileName: task.fileName });
     taskOperations.get(task.taskId)?.succeed("PSD 导入任务完成", { mode: task.mode });
     taskOperations.delete(task.taskId);
@@ -360,6 +370,7 @@ async function runPsdImportTask(
       task.status = "cancelled";
       task.stage = "cancelled";
       task.updatedAt = task.completedAt = Date.now();
+    notifyRunChanged(task.taskId);
       task.logs.push(formatTaskLog(task, "Cancelled before Figma submission"));
       taskOperations.get(task.taskId)?.cancel("Export finished; Figma submission skipped");
       taskOperations.delete(task.taskId);
@@ -371,6 +382,7 @@ async function runPsdImportTask(
     task.error = error instanceof Error ? error.message : String(error);
     task.completedAt = Date.now();
     task.updatedAt = task.completedAt;
+    notifyRunChanged(task.taskId);
     task.logs.push(formatTaskLog(task, `错误：${task.error}`));
     logWarn("PSD import task failed", { taskId: task.taskId, error: task.error });
     taskOperations.get(task.taskId)?.fail(error, "PSD 导入任务失败");
@@ -390,7 +402,7 @@ function setTaskStage(task: PsdImportTask, stage: string, percent: number, log: 
   task.status = "running";
   task.stage = stage;
   task.percent = percent;
-  task.updatedAt = Date.now();
+  touchTask(task);
   task.logs.push(formatTaskLog(task, log));
   const step = stage.includes("export")
     ? "export"
@@ -476,7 +488,7 @@ function appendCommandOutput(task: PsdImportTask, text: string): void {
       task.logs.push(formatTaskLog(task, trimText(line.trim(), 500)));
     }
   }
-  task.updatedAt = Date.now();
+  touchTask(task);
 }
 
 function formatTaskLog(task: PsdImportTask, message: string): string {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { PLUGIN_ROOT, SERVER_DIR, publicUrl, type GatewayConfig } from "./config.js";
 import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 import { isRecord } from "./utils.js";
+import { notifyRunChanged } from "./runChangeNotifier.js";
 
 const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 const RETENTION_MS = 60 * 60 * 1000;
@@ -54,8 +55,9 @@ export class PythonAlgorithms {
         currentIndex: 0, logs: [], errors: [], createdAt: now / 1000, updatedAt: now / 1000 },
     };
     this.imports.set(taskId, record);
+    notifyRunChanged(taskId);
     void this.execute({ action: "prefab-to-figma", payload: record.payload, taskId, relayUrl: publicUrl(this.config) },
-      60 * 60 * 1000, (snapshot) => { record.snapshot = snapshot; })
+      60 * 60 * 1000, (snapshot) => { record.snapshot = snapshot; notifyRunChanged(taskId); })
       .then((result) => {
         if (!isRecord(result) || result.taskId !== taskId || !["completed", "error"].includes(String(result.status))) {
           throw new Error("Python import did not return a terminal task snapshot.");
@@ -64,6 +66,7 @@ export class PythonAlgorithms {
       }).catch((error: unknown) => {
         record.snapshot = { ...record.snapshot, ok: false, status: "error", stage: "error",
           updatedAt: Date.now() / 1000, errors: [error instanceof Error ? error.message : String(error)] };
+        notifyRunChanged(taskId);
       }).finally(() => { record.active = false; record.expiresAt = Date.now() + RETENTION_MS; });
     return { ok: true, taskId, prefabCount: record.snapshot.total };
   }

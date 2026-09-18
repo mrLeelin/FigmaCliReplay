@@ -1,10 +1,11 @@
 import type { LoggingRuntime } from "./loggingRuntime.js";
 import type { UnityProjectRegistry, UnityProjectStatus } from "../unityProjectRegistry.js";
-import { readUnityGatewayDiscovery, type UnityGatewayDiscoveryResult } from "../unityGatewayDiscovery.js";
 import { callUnityBridge } from "../unityBridgeClient.js";
+import { hasUnitySession } from "../unitySessionRegistry.js";
 
 interface UnityLogCollectorOptions {
-  discover?: (projectPath: string) => UnityGatewayDiscoveryResult;
+  /** 仅测试用：覆盖"该工程是否已有 Unity 出站会话"的判断。 */
+  connected?: (projectPath: string) => boolean;
   command?: typeof callUnityBridge;
   timeoutMs?: number;
   maxSeenEvents?: number;
@@ -16,7 +17,7 @@ interface UnityLogPayload {
 
 export class UnityLogCollector {
   private readonly logger;
-  private readonly discover;
+  private readonly connected;
   private readonly command;
   private readonly timeoutMs;
   private readonly maxSeenEvents;
@@ -28,7 +29,7 @@ export class UnityLogCollector {
     options: UnityLogCollectorOptions = {},
   ) {
     this.logger = logging.logger("unity-log-collector");
-    this.discover = options.discover ?? readUnityGatewayDiscovery;
+    this.connected = options.connected ?? hasUnitySession;
     this.command = options.command ?? callUnityBridge;
     this.timeoutMs = options.timeoutMs ?? 1_500;
     this.maxSeenEvents = options.maxSeenEvents ?? 10_000;
@@ -64,8 +65,7 @@ export class UnityLogCollector {
     project: UnityProjectStatus,
     parentOperationId: string,
   ): Promise<{ found: boolean; accepted: number }> {
-    const discovery = this.discover(project.path);
-    if (!discovery.found) return { found: false, accepted: 0 };
+    if (!this.connected(project.path)) return { found: false, accepted: 0 };
     try {
       const payload: UnityLogPayload = await this.command(project.path, "unity.logs", {}, {
         operationId: parentOperationId, timeoutMs: this.timeoutMs, query: "limit=1000",

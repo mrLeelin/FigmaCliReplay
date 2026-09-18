@@ -8,6 +8,7 @@ import { PLUGIN_ROOT, SERVER_VERSION, publicUrl } from "./config.js";
 import { callUnityBridge } from "./unityBridgeClient.js";
 import type { UnityProjectRegistry, UnityProjectStatus } from "./unityProjectRegistry.js";
 import { isRecord } from "./utils.js";
+import { notifyRunChanged } from "./runChangeNotifier.js";
 import { logInfo, logWarn } from "./utils/logger.js";
 
 export type FigmaPrefabImportTaskStatus = "queued" | "running" | "completed" | "error";
@@ -136,6 +137,12 @@ export function startFigmaPrefabImportTask(
     void runFigmaPrefabImportTask(config, task, prepared, dependencies);
   });
   return serializeTask(task);
+}
+
+/** 进度变化：更新 updatedAt 并通知订阅者。 */
+function touchTask(task: FigmaPrefabImportTask): void {
+  task.updatedAt = Date.now();
+  notifyRunChanged(task.taskId);
 }
 
 export function getFigmaPrefabImportTask(taskId: string): FigmaPrefabImportTask | undefined {
@@ -322,6 +329,7 @@ async function runFigmaPrefabImportTask(
     task.percent = 100;
     task.completedAt = Date.now();
     task.updatedAt = task.completedAt;
+    notifyRunChanged(task.taskId);
     appendTaskLog(task, "[100%] Prefab, Texture, and UiAtlas outputs passed deterministic verification.");
     logInfo("Deterministic Figma Prefab import completed", {
       taskId: task.taskId,
@@ -335,6 +343,7 @@ async function runFigmaPrefabImportTask(
     task.error = error instanceof Error ? error.message : String(error);
     task.completedAt = Date.now();
     task.updatedAt = task.completedAt;
+    notifyRunChanged(task.taskId);
     appendTaskLog(task, `[error] ${task.error}`);
     logWarn("Deterministic Figma Prefab import failed", {
       taskId: task.taskId,
@@ -514,7 +523,7 @@ function setTaskStage(task: FigmaPrefabImportTask, stage: string, percent: numbe
   task.status = "running";
   task.stage = stage;
   task.percent = percent;
-  task.updatedAt = Date.now();
+  touchTask(task);
   appendTaskLog(task, `[${percent}%] ${message}`);
 }
 
@@ -528,7 +537,7 @@ function appendProcessOutput(task: FigmaPrefabImportTask, output: string): void 
 function appendTaskLog(task: FigmaPrefabImportTask, line: string): void {
   task.logs.push(line);
   if (task.logs.length > MAX_TASK_LOGS) task.logs.splice(0, task.logs.length - MAX_TASK_LOGS);
-  task.updatedAt = Date.now();
+  touchTask(task);
 }
 
 function appendBoundedOutput(current: string, chunk: unknown): string {

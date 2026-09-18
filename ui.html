@@ -4684,6 +4684,7 @@
 
     function closeRelaySocket() {
       relaySocketRegistered = false;
+      setAiBadge(false);
       if (activeAiCleanupRun) activeAiCleanupRun.subscriptionId = null;
       rejectRelaySocketRequests(new Error("Relay WebSocket was closed."));
       if (relaySocketReconnectTimer) {
@@ -4943,6 +4944,8 @@
         if (message && message.type === "plugin.registered" && message.sessionId === relaySessionId) {
           relaySocketRegistered = true;
           refreshUnityProjects();
+          setAiBadge(true);
+          setAiStatus("本地 Relay 已连接\n会话：" + relaySessionId);
           appendLog("WebSocket 会话已在本地 Relay 完成注册：" + relaySessionId);
           refreshCleanupProviders();
           refreshAiRunner();
@@ -4974,6 +4977,8 @@
       socket.onclose = function () {
         if (relaySocket !== socket) return;
         relaySocketRegistered = false;
+        setAiBadge(false);
+        setAiStatus("本地 Relay 连接已断开，正在自动重连…");
         if (activeAiCleanupRun) activeAiCleanupRun.subscriptionId = null;
         if (relaySocketHeartbeat) {
           clearInterval(relaySocketHeartbeat);
@@ -5165,6 +5170,8 @@
     async function readSelectedUnityGatewayConfig() {
       if (!selectedUnityProject || !selectedUnityProject.id) return "";
       var payload = await sendRelaySocketRequest("unity.gateway.get", { id: selectedUnityProject.id }, "", 5000);
+      // 纯出站模式（Unity 主动连中继）没有发现记录，网关地址以会话为准。
+      if (payload && payload.transport === "inbound") return normalizeBaseUrl(payload.gatewayUrl);
       return payload && payload.found && payload.gatewayUrl ? normalizeBaseUrl(payload.gatewayUrl) : "";
     }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # Figma Relay - 错误日志查看器
 # 用于查看和分析日志文件中的错误信息
 

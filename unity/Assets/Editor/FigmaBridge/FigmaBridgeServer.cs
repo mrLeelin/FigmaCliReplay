@@ -1,10 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -20,17 +22,11 @@ namespace MagicWarrior.Editor.FigmaBridge
     {
         // ─────────────────────── 常量 ───────────────────────
 
-        /// <summary>默认监听端口</summary>
-        internal const int DefaultPort = 32129;
+        /// <summary>EditorPrefs 存储中继端口的 key（Unity 出站连接用）</summary>
+        private const string PrefsRelayPortKey = "FigmaBridge_RelayPort";
 
-        /// <summary>自动避让时允许尝试的最大端口</summary>
-        internal const int MaxPort = 32135;
-
-        /// <summary>EditorPrefs 存储首选监听端口的 key</summary>
-        private const string PrefsPortKey = "FigmaBridge_ServerPort";
-
-        /// <summary>监听地址主机名</summary>
-        private const string ListenHost = "localhost";
+        /// <summary>中继默认端口，与 Relay 默认端口一致</summary>
+        private const int DefaultRelayPort = 32130;
 
         /// <summary>服务器版本号</summary>
         // BEGIN_RELEASE_VERSION
@@ -45,10 +41,8 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         // ─────────────────────── 状态 ───────────────────────
 
-        private static HttpListener _listener;
         private static BridgeWebSocketTransport _webSocketTransport;
         private static bool _running;
-        private static int _currentPort;
 
         /// <summary>待处理的请求队列（后台线程写入，主线程消费）</summary>
         private static readonly Queue<BridgeCommand> PendingContexts =
@@ -70,21 +64,23 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         // （previewBase64 / canvas 字段已移除，不再需要预览缓存和相关方法）
 
-        /// <summary>服务器是否正在运行</summary>
+        /// <summary>服务器是否正在运行（出站连接已启动）</summary>
         public static bool IsRunning => _running;
 
-        /// <summary>当前实际监听端口，未启动时返回首选端口</summary>
-        internal static int CurrentPort => _running ? _currentPort : PreferredPort;
+        /// <summary>出站会话是否已在中继侧注册成功</summary>
+        internal static bool IsRelayConnected => _webSocketTransport != null && _webSocketTransport.RelayClientRegistered;
 
-        /// <summary>当前实际监听地址，供窗口和 Figma 插件配置使用</summary>
-        internal static string CurrentGatewayUrl => BuildGatewayUrl(CurrentPort);
-
-        /// <summary>用户首选监听端口，会持久化到 EditorPrefs</summary>
-        internal static int PreferredPort
+        /// <summary>中继端口（Unity 出站连接用），可在 FigmaBridge 窗口配置</summary>
+        internal static int RelayPort
         {
-            get => SanitizePort(EditorPrefs.GetInt(PrefsPortKey, DefaultPort));
-            set => EditorPrefs.SetInt(PrefsPortKey, SanitizePort(value));
+            get => ClampRelayPort(EditorPrefs.GetInt(PrefsRelayPortKey, DefaultRelayPort));
+            set => EditorPrefs.SetInt(PrefsRelayPortKey, ClampRelayPort(value));
         }
+
+        /// <summary>Unity 出站连接的 Relay 端点（新版中继在 /unity 接收）</summary>
+        internal static string RelayClientUrl => $"ws://127.0.0.1:{RelayPort}/unity";
+
+        private static int ClampRelayPort(int port) => port < 1 || port > 65535 ? DefaultRelayPort : port;
 
         // ─────────────────────── 生命周期 ───────────────────────
 
@@ -93,93 +89,37 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// </summary>
         static FigmaBridgeServer()
         {
+            // 域重载前必须主动断开：否则旧实例会继续持有连接与会话状态。
+            AssemblyReloadEvents.beforeAssemblyReload += Stop;
+
             // 延迟到下一帧启动，避免在静态构造中做过多初始化
             EditorApplication.delayCall += TryStart;
         }
 
         /// <summary>
-        /// 启动 HTTP 服务器。
+        /// 启动：出站连中继。Bridge 只有这一条通路——没有本地端口，也就没有发现文件与端口级联。
         /// </summary>
         public static void Start()
         {
             if (_running) return;
 
-            int preferredPort = PreferredPort;
-            string lastError = "";
+            _webSocketTransport = new BridgeWebSocketTransport(Version, Path.GetDirectoryName(Application.dataPath));
+            _webSocketTransport.StartRelayClient(RelayClientUrl);
+            _running = true;
 
-            for (int port = preferredPort; port <= MaxPort; port++)
-            {
-                if (TryStartOnPort(port, out lastError))
-                    return;
-            }
+            EditorApplication.update -= ProcessPendingRequests;
+            EditorApplication.update += ProcessPendingRequests;
 
-            AddLog($"[FigmaBridge] 启动失败：端口 {preferredPort}-{MaxPort} 均不可用。最后错误：{lastError}");
-            BridgeLogger.Error($"[FigmaBridge] 启动失败：端口 {preferredPort}-{MaxPort} 均不可用。最后错误：{lastError}");
+            AddLog($"[FigmaBridge] 正在出站连接中继 {RelayClientUrl}（Bridge 只走这条长连接）");
         }
 
         /// <summary>
-        /// 尝试在指定端口启动 HTTP 服务器，失败时释放 listener 并返回错误信息。
-        /// </summary>
-        private static bool TryStartOnPort(int port, out string error)
-        {
-            string listenPrefix = BuildListenPrefix(port);
-
-            try
-            {
-                _listener = new HttpListener();
-                _listener.Prefixes.Add(listenPrefix);
-                _listener.Start();
-                _running = true;
-                _currentPort = port;
-                _webSocketTransport = new BridgeWebSocketTransport(Version, Path.GetDirectoryName(Application.dataPath));
-
-                // 注册主线程 Update 回调
-                EditorApplication.update -= ProcessPendingRequests;
-                EditorApplication.update += ProcessPendingRequests;
-
-                // 开始异步接收请求
-                BeginAccept();
-
-                AddLog($"[FigmaBridge] 服务器已启动，监听 {listenPrefix}");
-                if (port != PreferredPort)
-                    AddLog($"[FigmaBridge] 首选端口被占用，已自动切换到 {port}");
-                FigmaBridgeGatewayDiscovery.Publish(CurrentGatewayUrl, _webSocketTransport.Token);
-
-                error = "";
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = ex.Message;
-                _running = false;
-                _currentPort = 0;
-                EditorApplication.update -= ProcessPendingRequests;
-                _webSocketTransport?.Dispose();
-                _webSocketTransport = null;
-
-                try
-                {
-                    _listener?.Close();
-                }
-                catch
-                {
-                    // 关闭失败只影响清理，不影响继续尝试下一个端口
-                }
-
-                _listener = null;
-                AddLog($"[FigmaBridge] 端口 {port} 不可用：{ex.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 停止 HTTP 服务器。
+        /// 停止：断开到中继的出站连接，并让在途任务得到明确终态（不留下"结果不明"的静默任务）。
         /// </summary>
         public static void Stop()
         {
             if (!_running) return;
 
-            FigmaBridgeGatewayDiscovery.RemoveOwned(CurrentGatewayUrl);
             _running = false;
             EditorApplication.update -= ProcessPendingRequests;
             _webSocketTransport?.Dispose();
@@ -190,45 +130,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                     PendingContexts.Dequeue().Response.Complete(503, "application/json", Encoding.UTF8.GetBytes("{\"error\":\"Bridge stopped before execution\"}"));
             }
 
-            try
-            {
-                _listener?.Stop();
-                _listener?.Close();
-            }
-            catch (Exception ex)
-            {
-                BridgeLogger.Warn($"[FigmaBridge] 停止时出错：{ex.Message}");
-            }
-
-            _listener = null;
-            _currentPort = 0;
-            AddLog("[FigmaBridge] 服务器已停止");
-        }
-
-        /// <summary>
-        /// 按允许范围修正端口，避免非法端口导致服务器无法启动。
-        /// </summary>
-        private static int SanitizePort(int port)
-        {
-            if (port < DefaultPort) return DefaultPort;
-            if (port > MaxPort) return MaxPort;
-            return port;
-        }
-
-        /// <summary>
-        /// 构建供 Figma 插件访问的网关地址。
-        /// </summary>
-        private static string BuildGatewayUrl(int port)
-        {
-            return $"http://{ListenHost}:{SanitizePort(port)}";
-        }
-
-        /// <summary>
-        /// 构建 HttpListener 使用的监听前缀，末尾必须包含斜杠。
-        /// </summary>
-        private static string BuildListenPrefix(int port)
-        {
-            return $"{BuildGatewayUrl(port)}/";
+            AddLog("[FigmaBridge] 已断开与中继的连接");
         }
 
         /// <summary>
@@ -241,62 +143,6 @@ namespace MagicWarrior.Editor.FigmaBridge
             {
                 BridgeLogger.Warn($"[FigmaBridge] 自动启动失败：{ex.Message}");
             }
-        }
-
-        // ─────────────────────── 异步接收 ───────────────────────
-
-        /// <summary>
-        /// 开始异步等待下一个 HTTP 请求。
-        /// </summary>
-        private static void BeginAccept()
-        {
-            if (!_running || _listener == null) return;
-
-            try
-            {
-                _listener.BeginGetContext(OnContextReceived, null);
-            }
-            catch (ObjectDisposedException) { /* 服务器已关闭 */ }
-            catch (Exception ex)
-            {
-                BridgeLogger.Warn($"[FigmaBridge] BeginGetContext 失败：{ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 后台线程回调：收到请求后放入队列，由主线程处理。
-        /// 只接收 /bridge WebSocket 升级，旧 HTTP 业务请求一律拒绝。
-        /// </summary>
-        private static void OnContextReceived(IAsyncResult ar)
-        {
-            HttpListenerContext ctx = null;
-            try
-            {
-                if (_listener != null && _listener.IsListening)
-                    ctx = _listener.EndGetContext(ar);
-            }
-            catch (ObjectDisposedException) { return; }
-            catch (HttpListenerException) { return; }
-            catch (Exception ex)
-            {
-                BridgeLogger.Warn($"[FigmaBridge] EndGetContext 失败：{ex.Message}");
-            }
-
-            if (ctx != null)
-            {
-                string path = ctx.Request.Url.AbsolutePath.TrimEnd('/');
-                if (path == "/bridge" && _webSocketTransport != null)
-                {
-                    _ = _webSocketTransport.Accept(ctx);
-                    BeginAccept();
-                    return;
-                }
-                BridgeLogger.Warn("Legacy Unity HTTP request rejected; use CLI/WebSocket");
-                RespondJson(ctx.Response, 410, "{\"error\":\"Upgrade required: use CLI/WebSocket\"}");
-            }
-
-            // 继续接收下一个请求
-            BeginAccept();
         }
 
         // ─────────────────────── 主线程处理 ───────────────────────
@@ -2004,23 +1850,6 @@ namespace MagicWarrior.Editor.FigmaBridge
         private static void RespondJson(BridgeCommandResponse resp, int statusCode, string json)
         {
             resp.Complete(statusCode, "application/json; charset=utf-8", Encoding.UTF8.GetBytes(json));
-        }
-
-        private static void RespondJson(HttpListenerResponse resp, int statusCode, string json)
-        {
-            try
-            {
-                byte[] buffer = Encoding.UTF8.GetBytes(json);
-                resp.StatusCode = statusCode;
-                resp.ContentType = "application/json; charset=utf-8";
-                resp.ContentLength64 = buffer.Length;
-                resp.OutputStream.Write(buffer, 0, buffer.Length);
-                resp.Close();
-            }
-            catch (Exception ex)
-            {
-                BridgeLogger.Warn($"[FigmaBridge] 发送响应失败：{ex.Message}");
-            }
         }
 
         /// <summary>

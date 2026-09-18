@@ -25,7 +25,7 @@ test("Unity project HTTP routes only report upgrade and cannot mutate the regist
   assert.deepEqual(registry.list().projects, []);
 });
 
-test("shared Unity controls retain registry and project-scoped discovery validation", async (t) => {
+test("shared Unity controls keep registry validation and ignore legacy discovery records", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-project-control-"));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const projectPath = path.join(root, "ProjectA");
@@ -43,26 +43,16 @@ test("shared Unity controls retain registry and project-scoped discovery validat
   assert.equal((await control("unity.projects.select", {id})).lastSelectedProjectId, id);
   const installed = await control("unity.bridge.install", {id});
   assert.equal(installed.project.bridgeInstalled, true);
-  const discovery = path.join(projectPath, "Library", "FigmaBridge", "gateways");
-  fs.mkdirSync(discovery, {recursive: true});
-  function record(pid, url, updatedAtUtc, project = projectPath) {
-    fs.writeFileSync(path.join(discovery, `${pid}.json`), JSON.stringify({version: 1,
-      projectPath: project, gatewayUrl: url, processId: pid, updatedAtUtc}));
+  // 发现文件机制已删除：磁盘上残留的旧记录不再影响网关信息，网关信息只来自 Unity 的出站会话。
+  const legacyDiscovery = path.join(projectPath, "Library", "FigmaBridge", "gateways");
+  fs.mkdirSync(legacyDiscovery, {recursive: true});
+  for (const [pid, url] of [[12345, "http://localhost:32132"], [77777, "http://localhost:32133"]]) {
+    fs.writeFileSync(path.join(legacyDiscovery, `${pid}.json`), JSON.stringify({version: 1,
+      projectPath, gatewayUrl: url, processId: pid, updatedAtUtc: "2026-07-15T09:20:00.000Z"}));
   }
-  const gateway = () => control("unity.gateway.get", {id});
-  record(11111, "http://localhost:32131", "2026-07-15T09:19:00.000Z");
-  record(12345, "http://localhost:32132", "2026-07-15T09:20:00.000Z");
-  assert.equal((await gateway()).gatewayUrl, "http://localhost:32132");
-  fs.unlinkSync(path.join(discovery, "12345.json"));
-  assert.equal((await gateway()).gatewayUrl, "http://localhost:32131");
-  record(12345, "http://localhost:32132", "2026-07-15T09:20:00.000Z", path.join(root, "WrongProject"));
-  assert.equal((await gateway()).gatewayUrl, "http://localhost:32131");
-  record(99999, "https://example.com:32132", "not-a-date");
-  fs.unlinkSync(path.join(discovery, "11111.json"));
-  assert.deepEqual(await gateway(), {found: false});
-  record(77777, "http://localhost:32133", "2026-07-15T09:21:00.000Z");
+  assert.deepEqual(await control("unity.gateway.get", {id}), {found: false});
   fs.rmSync(path.join(projectPath, "Assets"), {recursive: true});
-  assert.deepEqual(await gateway(), {found: false});
+  assert.deepEqual(await control("unity.gateway.get", {id}), {found: false});
   assert.deepEqual((await control("unity.projects.remove", {id})).projects, []);
   assert.equal(fs.existsSync(path.join(projectPath, "ProjectSettings")), true);
 });

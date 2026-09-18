@@ -25,7 +25,7 @@ test("UnityLogCollector ingests Unity events once and preserves operationId", as
   };
   let fetchCount = 0;
   const collector = new UnityLogCollector(logging, {
-    discover: () => ({ found: true, gatewayUrl: "http://localhost:32129", updatedAtUtc: "2026-07-18T12:00:00Z" }),
+    connected: () => true,
     command: async (projectPath, action, body, options) => {
       assert.equal(projectPath, "E:/Unity");
       assert.equal(action, "unity.logs");

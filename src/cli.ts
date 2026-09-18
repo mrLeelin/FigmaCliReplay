@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { WebSocket } from "ws";
 
@@ -13,7 +14,7 @@ import { isRecord } from "./utils.js";
 
 const HELP = `Figma Relay CLI
 
-Usage: figma-relay <sessions|selection|figma-status|figma-children|figma-components|figma-pages|figma-command|control|task-status|task-cancel|task-wait> [options]
+Usage: figma-relay <sessions|selection|figma-status|figma-children|figma-components|figma-pages|figma-command|control|task-status|task-cancel|task-wait|serve> [options]
 
   sessions                 List connected Figma sessions
   selection                Query the selected Figma session
@@ -29,6 +30,10 @@ Usage: figma-relay <sessions|selection|figma-status|figma-children|figma-compone
   psd-status               Read PSD import status (--task-id required)
   psd-wait                 Wait for PSD completion or an actionable preview
   psd-cancel               Request cancellation; inspect result.accepted
+  serve                    Long-lived mode: one process and one Relay connection for many requests.
+                           stdin lines:  {"action":"relay.control","payload":{...},"timeout":15}
+                           stdout lines: {"requestId":"...","ok":true,"result":{...}}
+                           Ends on stdin EOF; payload keys must match the wire schema (strict).
   --session-id <id>         Target one plugin session
   --file-key <key>          Target one Figma file
   --url <ws-url>            Default: ws://${DEFAULT_HOST}:${DEFAULT_PORT}${RELAY_CLI_PATH}
@@ -71,7 +76,7 @@ async function main(): Promise<void> {
       operation.succeed("CLI help displayed");
       return;
     }
-    const commandNames = ["sessions", "selection", "figma-status", "figma-children", "figma-components", "figma-pages", "figma-command", "control", "task-status", "task-cancel", "task-wait", "psd-status", "psd-wait", "psd-cancel"];
+    const commandNames = ["sessions", "selection", "figma-status", "figma-children", "figma-components", "figma-pages", "figma-command", "control", "task-status", "task-cancel", "task-wait", "psd-status", "psd-wait", "psd-cancel", "serve"];
     if (positionals.length !== 1 || !commandNames.includes(positionals[0])) {
       throw new RelayProtocolError("USAGE", "Expected a supported Relay CLI command. Use --help for options.");
     }
@@ -115,6 +120,13 @@ async function main(): Promise<void> {
     }
     const tokenPath = process.env.FIGMA_RELAY_TOKEN_FILE ?? path.join(LOCAL_DIR, "admin-token.txt");
     const token = process.env.FIGMA_RELAY_TOKEN || (fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, "utf8").trim() : "");
+    if (positionals[0] === "serve") {
+      // 长驻模式：一个进程 + 一条连接处理多轮请求，消除每命令一次进程启动与握手。
+      operation.step("serve", "Serve requests from stdin over one Relay connection", { url: url.toString() });
+      const served = await runCliServe(url.toString(), token, timeout, (value) => logger.writeProtocolOutput(value));
+      operation.succeed("CLI serve loop completed", { requests: served });
+      return;
+    }
     const action = positionals[0] === "sessions" ? "relay.sessions"
       : positionals[0] === "selection" ? "figma.selection"
         : ["figma-status", "figma-children", "figma-components", "figma-pages", "figma-command"].includes(positionals[0]) ? "figma.command"
@@ -156,6 +168,152 @@ async function main(): Promise<void> {
   } finally {
     await logging.close();
   }
+}
+
+interface ServePending {
+  resolve: (value: Record<string, unknown>) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+/**
+ * 长驻模式：stdin 每行一个请求，stdout 每行一个响应，全程复用同一条 Relay 连接。
+ * 调用方（AI 包装脚本/批处理）因此不必为每条命令付一次进程启动 + 一次 WS 握手。
+ */
+async function runCliServe(
+  url: string, token: string, defaultTimeout: number, emit: (value: unknown) => void,
+): Promise<number> {
+  const socket = new WebSocket(url, { headers: token ? { Authorization: `Bearer ${token}` } : {}, handshakeTimeout: 5_000 });
+  const pending = new Map<string, ServePending>();
+  const failAll = (error: Error): void => {
+    for (const [requestId, entry] of pending) {
+      pending.delete(requestId);
+      clearTimeout(entry.timer);
+      entry.reject(error);
+    }
+  };
+  socket.on("message", (raw) => {
+    let message: unknown;
+    try { message = JSON.parse(String(raw)); } catch { return; }
+    if (!isRecord(message) || message.type !== "relay.response") return;
+    const requestId = String(message.requestId || "");
+    const entry = pending.get(requestId);
+    if (!entry) return;
+    pending.delete(requestId);
+    clearTimeout(entry.timer);
+    entry.resolve(message);
+  });
+  socket.on("close", () => failAll(new RelayProtocolError("CONNECTION_CLOSED", "Relay connection closed.")));
+  socket.on("error", (error) => failAll(new RelayProtocolError("CONNECTION_FAILED", error.message, error)));
+
+  await awaitCliHandshake(socket);
+  emit({ type: "serve.ready", url });
+
+  const reader = createInterface({ input: process.stdin });
+  let served = 0;
+  try {
+    for await (const rawLine of reader) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      // 顺序处理：stdout 的顺序与 stdin 一致，调用方无需自行配对。
+      emit(await serveOneLine(socket, pending, line, defaultTimeout));
+      served += 1;
+    }
+  } finally {
+    reader.close();
+    socket.terminate();
+  }
+  emit({ type: "serve.closed", requests: served });
+  return served;
+}
+
+function awaitCliHandshake(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new RelayProtocolError("TIMEOUT", "Relay handshake timed out.")), 10_000);
+    const onMessage = (raw: unknown): void => {
+      let message: unknown;
+      try { message = JSON.parse(String(raw)); } catch { return; }
+      if (!isRecord(message)) return;
+      if (message.type === "relay.error") {
+        clearTimeout(timer);
+        socket.off("message", onMessage);
+        const error = isRecord(message.error) ? message.error : {};
+        reject(new RelayProtocolError(String(error.code || "PROTOCOL_ERROR"), String(error.message || "Relay rejected connection")));
+        return;
+      }
+      if (message.type !== "relay.ready") return;
+      clearTimeout(timer);
+      socket.off("message", onMessage);
+      if (message.protocolVersion !== RELAY_PROTOCOL_VERSION || message.serverVersion !== SERVER_VERSION) {
+        reject(new RelayProtocolError("UPGRADE_REQUIRED", "Upgrade the CLI and Relay together to matching versions."));
+        return;
+      }
+      resolve();
+    };
+    socket.on("message", onMessage);
+    socket.once("open", () => socket.send(JSON.stringify({
+      type: "relay.hello", role: "cli", protocolVersion: RELAY_PROTOCOL_VERSION, clientVersion: SERVER_VERSION,
+    })));
+    socket.once("error", (error) => { clearTimeout(timer); reject(new RelayProtocolError("CONNECTION_FAILED", error.message, error)); });
+    socket.once("close", () => { clearTimeout(timer); reject(new RelayProtocolError("CONNECTION_CLOSED", "Relay closed the CLI connection during handshake.")); });
+  });
+}
+
+async function serveOneLine(
+  socket: WebSocket, pending: Map<string, ServePending>, line: string, defaultTimeout: number,
+): Promise<Record<string, unknown>> {
+  let spec: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (!isRecord(parsed)) throw new Error("line must be a JSON object");
+    spec = parsed;
+  } catch (error) {
+    return { ok: false, error: { code: "USAGE", message: "Invalid request line: " + (error instanceof Error ? error.message : String(error)) } };
+  }
+  const action = typeof spec.action === "string" ? spec.action : "";
+  if (!action) return { ok: false, error: { code: "USAGE", message: "Request line requires an action." } };
+  const requestId = typeof spec.requestId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(spec.requestId) ? spec.requestId : randomUUID();
+  const timeout = typeof spec.timeout === "number" && spec.timeout >= 0.1 && spec.timeout <= 120 ? spec.timeout : defaultTimeout;
+  const payload: Record<string, unknown> = isRecord(spec.payload) ? { ...spec.payload } : {};
+  if (payload.timeout === undefined) payload.timeout = timeout;
+  try {
+    const response = await sendServeRequest(socket, pending, {
+      type: "relay.request", requestId, operationId: randomUUID(), action, payload,
+    }, timeout);
+    if (response.ok !== true) {
+      const error = isRecord(response.error) ? response.error : {};
+      return { requestId, ok: false, error: { code: String(error.code || "QUERY_FAILED"), message: String(error.message || "Relay request failed") } };
+    }
+    return { requestId, ok: true, result: response.result };
+  } catch (error) {
+    return {
+      requestId, ok: false,
+      error: {
+        code: error instanceof RelayProtocolError ? error.code : "CLI_ERROR",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
+
+function sendServeRequest(
+  socket: WebSocket, pending: Map<string, ServePending>, request: Record<string, unknown>, timeout: number,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const requestId = String(request.requestId);
+    const timer = setTimeout(() => {
+      pending.delete(requestId);
+      reject(new RelayProtocolError("TIMEOUT", "Relay response timed out."));
+    }, timeout * 1000 + 5_000);
+    pending.set(requestId, { resolve, reject, timer });
+    try {
+      socket.send(JSON.stringify(request));
+    } catch (error) {
+      pending.delete(requestId);
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
 }
 
 function callRelay(
