@@ -10,8 +10,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const pythonTimeoutMs = 15_000;
 
 const portableCliScripts = [
-  "ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_hierarchy_cleanup_mcp_client.py",
-  "ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py",
+  "ai/skills/figma-hierarchy-cleanup/scripts/figma_hierarchy_cleanup_cli.py",
+  "ai/skills/prefab-to-figma/scripts/prefab_to_figma_cli.py",
   "ai/skills/psd-layer-to-figma/scripts/grid_component_creator.py",
   "ai/skills/psd-layer-to-figma/scripts/psd_import_phase_evidence.py",
   "ai/skills/figma-to-prefab/scripts/figma_to_prefab_phase_evidence.py",
@@ -22,7 +22,7 @@ const portableCliScripts = [
 const activeWorkflowFiles = [
   "README.md",
   "ui.html",
-  "client/figma_mcp_client.py",
+  "client/figma_relay_cli.py",
   "prompts/prefab-to-figma.md",
   "ai/skills/figma-to-prefab/SKILL.md",
   "ai/skills/figma-to-prefab/scripts/run_full_import.py",
@@ -110,7 +110,7 @@ function findNormalizedPortablePathViolations(relativeFiles) {
   for (const relativePath of relativeFiles) {
     const normalized = normalizePortablePathScanText(fs.readFileSync(path.join(repoRoot, relativePath), "utf8"));
     if (normalized.includes("jellybeanunity")) violations.push(`${relativePath} [fixed project name]`);
-    if (normalized.includes(".figma/plugins/figma-mcp-relay")) violations.push(`${relativePath} [fixed Relay root]`);
+    if (normalized.includes(".figma/plugins/figma-relay")) violations.push(`${relativePath} [fixed Relay root]`);
     if (/[a-z]:\/(?:project|users)\//.test(normalized)) violations.push(`${relativePath} [machine-local absolute path]`);
   }
   return violations;
@@ -175,7 +175,7 @@ test("legacy relay normalizes one generic project prefix to Assets paths", () =>
   const probe = [
     "import json, sys",
     `sys.path.insert(0, ${JSON.stringify(path.join(repoRoot, "server"))})`,
-    "from figma_mcp_relay_server import normalize_prefab_import_paths",
+    "from prefab_import_pipeline import normalize_prefab_import_paths",
     "print(json.dumps(normalize_prefab_import_paths(['Assets/UI/A.prefab', 'PortableGame/Assets/UI/B.prefab', '../Assets/UI/C.prefab', 'C:/Game/Assets/UI/D.prefab'])))"
   ].join("; ");
   const result = spawnSync("python", ["-c", probe], {
@@ -251,7 +251,7 @@ test("Unity Bridge emits Assets paths and accepts one generic legacy project pre
 test("executable workflows do not discover fixed JellybeanUnity or nested .figma roots", () => {
   const executableFiles = [
     "ui.html",
-    "client/figma_mcp_client.py",
+    "client/figma_relay_cli.py",
     ...collectFiles("ai", new Set([".py"])),
     ...collectFiles("server", new Set([".py"])),
     ...collectFiles("unity/Assets/Editor/FigmaBridge", new Set([".cs"]))
@@ -260,7 +260,7 @@ test("executable workflows do not discover fixed JellybeanUnity or nested .figma
     { label: "fixed project name", pattern: /JellybeanUnity/ },
     {
       label: "fixed Relay root",
-      pattern: /\.figma[\\/]plugins[\\/]figma-mcp-relay|["']\.figma["']\s*\/\s*["']plugins["']\s*\/\s*["']figma-mcp-relay["']/
+      pattern: /\.figma[\\/]plugins[\\/]figma-relay|["']\.figma["']\s*\/\s*["']plugins["']\s*\/\s*["']figma-relay["']/
     }
   ]);
 
@@ -271,7 +271,7 @@ test("current workflow documentation contains no machine-local or fixed reposito
   const violations = findViolations(activeWorkflowFiles, [
     { label: "machine-local absolute path", pattern: /[A-Za-z]:[\\/](?:Project|Users)[\\/]/ },
     { label: "fixed project name", pattern: /JellybeanUnity/ },
-    { label: "fixed Relay root", pattern: /\.figma[\\/]plugins[\\/]figma-mcp-relay/ }
+    { label: "fixed Relay root", pattern: /\.figma[\\/]plugins[\\/]figma-relay/ }
   ]);
 
   assert.deepEqual(violations, [], `Fixed workflow path dependencies:\n${violations.join("\n")}`);
@@ -289,15 +289,15 @@ test("all active Relay text surfaces reject normalized nested and machine-local 
   assert.deepEqual(violations, [], `Normalized fixed path dependencies:\n${violations.join("\n")}`);
 
   for (const fixture of [
-    'Path(".figma") / "plugins" / "figma-mcp-relay"',
-    '".figma/" + "plugins/" + "figma-mcp-relay"',
-    ".figma\\\\plugins\\\\figma-mcp-relay",
+    'Path(".figma") / "plugins" / "figma-relay"',
+    '".figma/" + "plugins/" + "figma-relay"',
+    ".figma\\\\plugins\\\\figma-relay",
     "Jellybean Unity marker: JellybeanUnity",
     "E:\\Project\\Game"
   ]) {
     const normalized = normalizePortablePathScanText(fixture);
     assert.ok(
-      normalized.includes(".figma/plugins/figma-mcp-relay")
+      normalized.includes(".figma/plugins/figma-relay")
         || normalized.includes("jellybeanunity")
         || /[a-z]:\/(?:project|users)\//.test(normalized),
       fixture
@@ -306,21 +306,21 @@ test("all active Relay text surfaces reject normalized nested and machine-local 
 });
 
 test("Python entry points resolve the standalone Relay root and client module", () => {
-  const clientProbe = runPython("client/figma_mcp_client.py", ["--help"]);
+  const clientProbe = runPython("client/figma_relay_cli.py", ["--help"]);
   assert.equal(clientProbe.status, 0, formatSpawnFailure(clientProbe));
   const rootProbe = spawnSync("python", ["-c", [
     "import sys",
     `sys.path.insert(0, ${JSON.stringify(path.join(repoRoot, "client"))})`,
-    "import figma_mcp_client as client",
+    "import figma_relay_cli as client",
     "print(client.RELAY_ROOT)",
-    "print(client.MCP_SERVER_SCRIPT)"
+    "print(client.CLI_PATH)"
   ].join("; ")], { cwd: repoRoot, encoding: "utf8", timeout: pythonTimeoutMs });
   assert.equal(rootProbe.status, 0, formatSpawnFailure(rootProbe));
   const [resolvedRoot, resolvedServer] = rootProbe.stdout.trim().split(/\r?\n/);
   assert.equal(path.resolve(resolvedRoot), repoRoot);
-  assert.equal(path.resolve(resolvedServer), path.join(repoRoot, "server", "figma_mcp_companion.py"));
-  const clientSource = fs.readFileSync(path.join(repoRoot, "client/figma_mcp_client.py"), "utf8");
-  assert.match(clientSource, /\[sys\.executable, str\(MCP_SERVER_SCRIPT\)/);
+  assert.equal(path.resolve(resolvedServer), path.join(repoRoot, "dist", "cli.js"));
+  const clientSource = fs.readFileSync(path.join(repoRoot, "client/figma_relay_cli.py"), "utf8");
+  assert.match(clientSource, /str\(CLI_PATH\)/);
   assert.match(clientSource, /cwd=str\(RELAY_ROOT\)/);
   assert.doesNotMatch(clientSource, /parents\[4\]/);
 
@@ -329,9 +329,9 @@ test("Python entry points resolve the standalone Relay root and client module", 
   assert.equal(help.status, 0, formatSpawnFailure(help));
   const refreshProbe = spawnSync("python", ["-c", [
     "import importlib.util, inspect, sys, types",
-    "fake = types.ModuleType('figma_mcp_client')",
+    "fake = types.ModuleType('figma_relay_cli')",
     "fake.query_components = lambda **kwargs: 'fake'",
-    "sys.modules['figma_mcp_client'] = fake",
+    "sys.modules['figma_relay_cli'] = fake",
     "before = list(sys.path)",
     `p = ${JSON.stringify(path.join(repoRoot, refreshScript))}`,
     "spec = importlib.util.spec_from_file_location('refresh_component_cache_probe', p)",
@@ -342,13 +342,13 @@ test("Python entry points resolve the standalone Relay root and client module", 
     "print(query_components.__module__)",
     "print(inspect.getsourcefile(query_components))",
     "print(before == sys.path)",
-    "print(sys.modules['figma_mcp_client'] is fake)"
+    "print(sys.modules['figma_relay_cli'] is fake)"
   ].join("; ")], { cwd: os.tmpdir(), encoding: "utf8", timeout: pythonTimeoutMs });
   assert.equal(refreshProbe.status, 0, formatSpawnFailure(refreshProbe));
   const [refreshRoot, queryModule, querySource, pathUnchanged, fakePreserved] = refreshProbe.stdout.trim().split(/\r?\n/);
   assert.equal(path.resolve(refreshRoot), repoRoot);
-  assert.match(queryModule, /^_figma_mcp_client_[a-f0-9]+$/);
-  assert.equal(path.resolve(querySource), path.join(repoRoot, "client", "figma_mcp_client.py"));
+  assert.match(queryModule, /^_figma_relay_cli_[a-f0-9]+$/);
+  assert.equal(path.resolve(querySource), path.join(repoRoot, "client", "figma_relay_cli.py"));
   assert.equal(pathUnchanged, "True");
   assert.equal(fakePreserved, "True");
 });
@@ -381,7 +381,7 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   const resolved = resolveRelayRuntimePaths({ gateway: { pluginRoot: "C:\\Portable Relay\\Folder\\..\\" } });
 
   assert.equal(resolved.pluginRoot, "C:/Portable Relay");
-  assert.equal(resolved.mcpStartBatPath, '"C:/Portable Relay/启动MCP.bat"');
+  assert.equal(resolved.relayStartBatPath, '"C:/Portable Relay/启动Relay.bat"');
   assert.equal(
     resolved.fullImportScriptPath,
     '"C:/Portable Relay/ai/skills/figma-to-prefab/scripts/run_full_import.py"'
@@ -400,21 +400,21 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   )(readTemplate);
   const rendered = renderTemplate("unity", { relayFullImportScriptPath: resolved.fullImportScriptPath });
 
-  assert.match(rendered, /\/health[\s\S]*gateway\.pluginRoot/);
+  assert.match(rendered, /relay.status[\s\S]*gateway\.pluginRoot/);
   assert.match(rendered, /python "C:\/Portable Relay\/ai\/skills\/figma-to-prefab\/scripts\/run_full_import\.py"/);
   assert.doesNotMatch(rendered, /python "ai\/skills\/figma-to-prefab\/scripts\/run_full_import\.py"/);
   assert.doesNotMatch(rendered, /\{\{relayFullImportScriptPath\}\}/);
   assert.match(ui, /if \(aiPromptTemplateSelect\.value === "unity"\)[\s\S]*?await refreshRelayRuntimePaths\(\)/);
   assert.match(ui, /relayFullImportScriptPath:\s*relayRuntimePaths\.fullImportScriptPath/);
   assert.match(ui, /python \{\{relayFullImportScriptPath\}\}/);
-  assert.doesNotMatch(ui, /const mcpStartBatPath = "<relay-root>/);
+  assert.doesNotMatch(ui, /const relayStartBatPath = "<relay-root>/);
 
   const unc = resolveRelayRuntimePaths({ gateway: { pluginRoot: "\\\\server\\share\\Relay Root\\" } });
   assert.equal(unc.pluginRoot, "//server/share/Relay Root");
-  assert.equal(unc.mcpStartBatPath, '"//server/share/Relay Root/启动MCP.bat"');
+  assert.equal(unc.relayStartBatPath, '"//server/share/Relay Root/启动Relay.bat"');
   assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "/opt/relay/../figma-relay/" } }).pluginRoot, "/opt/figma-relay");
-  assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "C:\\" } }).mcpStartBatPath, '"C:/启动MCP.bat"');
-  assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "/" } }).mcpStartBatPath, '"/启动MCP.bat"');
+  assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "C:\\" } }).relayStartBatPath, '"C:/启动Relay.bat"');
+  assert.equal(resolveRelayRuntimePaths({ gateway: { pluginRoot: "/" } }).relayStartBatPath, '"/启动Relay.bat"');
 
   for (const unsafeRoot of [
     "relative/path",
@@ -441,7 +441,7 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   const secondKey = relayPluginRootCacheKey("http://localhost:42130");
   assert.notEqual(firstKey, secondKey);
   const healthy = await loadRelayRuntimePaths(
-    async () => ({ ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "D:\\Relay Root\\" } }) }),
+    async () => ({ gateway: { pluginRoot: "D:\\Relay Root\\" } }),
     storage,
     firstKey
   );
@@ -454,7 +454,7 @@ test("UI derives quoted executable paths from Relay health and injects the full 
     firstKey
   );
   assert.equal(cachedAfterFailure.source, "cache");
-  assert.equal(cachedAfterFailure.paths.mcpStartBatPath, '"D:/Relay Root/启动MCP.bat"');
+  assert.equal(cachedAfterFailure.paths.relayStartBatPath, '"D:/Relay Root/启动Relay.bat"');
 
   const cachedAfterNonJson = await loadRelayRuntimePaths(
     async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("invalid JSON"); } }),
@@ -473,7 +473,7 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   const unsafeStorage = { getItem() { return null; }, setItem() { throw new Error("unsafe root must not persist"); }, removeItem() {} };
   await assert.rejects(
     loadRelayRuntimePaths(
-      async () => ({ ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "C:/bad&root" } }) }),
+      async () => ({ gateway: { pluginRoot: "C:/bad&root" } }),
       unsafeStorage,
       firstKey
     ),
@@ -497,8 +497,8 @@ test("UI derives quoted executable paths from Relay health and injects the full 
     requestContext,
     async (url) => {
       requestedUrls.push(url);
-      if (url.endsWith("/health")) return deferredHealth;
-      return { ok: true, status: 200, json: async () => ({ ok: true, path: "unused" }) };
+      if (url === "relay.status") return deferredHealth;
+      return { ok: true, path: "unused" };
     },
     () => currentContext === requestContext,
     (payload) => {
@@ -507,12 +507,12 @@ test("UI derives quoted executable paths from Relay health and injects the full 
     }
   );
   currentContext = { relayUrl: "http://relay-b:32130", generation: 2 };
-  resolveHealth({ ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "C:/RelayA" } }) });
+  resolveHealth({ gateway: { pluginRoot: "C:/RelayA" } });
   const staleResult = await request;
   assert.equal(staleResult.stale, true);
   assert.equal(publishedRoot, "B-safe");
   assert.deepEqual(persistedRoots, []);
-  assert.deepEqual(requestedUrls, ["http://relay-a:32130/health"]);
+  assert.deepEqual(requestedUrls, ["relay.status"]);
   assert.match(ui, /refreshRelayRuntimePaths[\s\S]*?requestRelayUrl[\s\S]*?requestGeneration[\s\S]*?stale/);
 
   let rejectHealth;
@@ -546,9 +546,9 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   const parseRequestContext = parseContext;
   const parseRequest = runRelayOpenFolderRequest(
     parseRequestContext,
-    async (url) => url.endsWith("/health")
-      ? { ok: true, status: 200, json: async () => ({ gateway: { pluginRoot: "C:/RelayA" } }) }
-      : { ok: true, status: 200, json: async () => folderBody },
+    async (url) => url === "relay.status"
+      ? { gateway: { pluginRoot: "C:/RelayA" } }
+      : folderBody,
     () => parseContext === parseRequestContext,
     () => {}
   );

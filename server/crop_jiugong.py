@@ -137,7 +137,7 @@ def _crop_jiugong_images(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def resolve_export_target_dir(target_dir: str, unity_project_root: Path) -> Optional[Path]:
-    """解析导出目标目录，兼容 MCP Relay 从插件目录启动时传入的 Unity 相对路径。"""
+    """解析导出目标目录，兼容 Relay 从插件目录启动时传入的 Unity 相对路径。"""
     raw_path = Path(target_dir).expanduser()
     candidates = [raw_path] if raw_path.is_absolute() else [unity_project_root / raw_path]
     assets_root = (unity_project_root / "Assets").resolve()

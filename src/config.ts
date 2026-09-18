@@ -4,25 +4,21 @@ import { fileURLToPath } from "node:url";
 
 import { RelayLogger } from "./logging/relayLogger.js";
 
-export const SERVER_NAME = "figmaMcpRelay";
+export const SERVER_NAME = "figmaRelay";
 // BEGIN_RELEASE_VERSION
 export const SERVER_VERSION = "0.1.48";
 // END_RELEASE_VERSION
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PUBLIC_HOST = "localhost";
 export const DEFAULT_PORT = 32130;
-export const DEFAULT_LEGACY_PORT = 32131;
-export const DEFAULT_MCP_PATH = "/mcp";
-export const DEFAULT_TRANSPORT = "auto";
+export const DEFAULT_TRANSPORT = "websocket";
 
-export type RelayTransport = "auto" | "websocket" | "polling";
+export type RelayTransport = "websocket";
 
 export interface GatewayConfig {
   host: string;
   publicHost: string;
   port: number;
-  legacyPort: number;
-  mcpPath: string;
   transport: RelayTransport;
   verbose: boolean;
   pythonWorker: boolean;
@@ -43,12 +39,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): GatewayConfig
     host: DEFAULT_HOST,
     publicHost: DEFAULT_PUBLIC_HOST,
     port: DEFAULT_PORT,
-    legacyPort: DEFAULT_LEGACY_PORT,
-    mcpPath: DEFAULT_MCP_PATH,
     transport: DEFAULT_TRANSPORT,
     verbose: false,
     pythonWorker: true,
-    adminToken: process.env.FIGMA_MCP_RELAY_TOKEN || "",
+    adminToken: process.env.FIGMA_RELAY_TOKEN || "",
     assetRoots: defaultAssetRoots()
   };
 
@@ -64,14 +58,8 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): GatewayConfig
     } else if (arg === "--port" && next) {
       config.port = Number.parseInt(next, 10);
       index += 1;
-    } else if (arg === "--legacy-port" && next) {
-      config.legacyPort = Number.parseInt(next, 10);
-      index += 1;
-    } else if (arg === "--mcp-path" && next) {
-      config.mcpPath = next.startsWith("/") ? next : `/${next}`;
-      index += 1;
     } else if (arg === "--transport" && next) {
-      if (!["auto", "websocket", "polling"].includes(next)) {
+      if (next !== "websocket") {
         throw new Error(`invalid --transport: ${next}`);
       }
       config.transport = next as RelayTransport;
@@ -89,17 +77,13 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): GatewayConfig
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
+    } else {
+      throw new Error(`Unknown or incomplete argument: ${arg}; upgrade to CLI/WebSocket options.`);
     }
   }
 
   if (!Number.isFinite(config.port) || config.port <= 0) {
     throw new Error(`invalid --port: ${config.port}`);
-  }
-  if (!Number.isFinite(config.legacyPort) || config.legacyPort <= 0) {
-    throw new Error(`invalid --legacy-port: ${config.legacyPort}`);
-  }
-  if (config.legacyPort === config.port) {
-    throw new Error("--legacy-port must be different from --port");
   }
   config.assetRoots = uniquePaths(config.assetRoots.map((item) => path.resolve(item)));
   return config;
@@ -110,16 +94,14 @@ export function publicUrl(config: GatewayConfig): string {
 }
 
 function printHelp(): void {
-  protocolLogger.writeProtocolOutput(`Figma MCP Relay Gateway
+  protocolLogger.writeProtocolOutput(`Figma Relay Gateway
 
 Options:
   --host <host>              Bind host. Default: ${DEFAULT_HOST}
   --public-host <host>       Host shown to plugin clients. Default: ${DEFAULT_PUBLIC_HOST}
   --port <port>              HTTP/WebSocket port. Default: ${DEFAULT_PORT}
-  --legacy-port <port>       Internal Python legacy relay port. Default: ${DEFAULT_LEGACY_PORT}
-  --mcp-path <path>          MCP endpoint path. Default: ${DEFAULT_MCP_PATH}
-  --transport <mode>         auto | websocket | polling. Default: ${DEFAULT_TRANSPORT}
-  --admin-token <token>      Token required by /mcp/config write/delete/open.
+  --transport <mode>         websocket. Default: ${DEFAULT_TRANSPORT}
+  --admin-token <token>      Token required by CLI WebSocket connections.
   --asset-root <path>        Additional local root allowed for /assets files.
   --no-python-worker         Disable optional Python worker probing.
   --verbose                  Enable verbose logging.
@@ -129,7 +111,7 @@ Options:
 function defaultAssetRoots(): string[] {
   return uniquePaths([
     path.join(PLUGIN_ROOT, ".tmp"),
-    path.join(os.tmpdir(), "figma-mcp-relay")
+    path.join(os.tmpdir(), "figma-relay")
   ].map((item) => path.resolve(item)));
 }
 

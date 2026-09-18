@@ -1,6 +1,5 @@
 param(
     [switch]$NoLaunch,
-    [switch]$NoOpenFigma,
     [switch]$NoVersionBump
 )
 
@@ -56,7 +55,19 @@ function Copy-ReleaseItem {
     $destination = Join-Path $DestinationRoot $RelativePath
     $destinationParent = Split-Path -Parent $destination
     New-Item -ItemType Directory -Force -Path $destinationParent | Out-Null
-    Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+    if (Test-Path -LiteralPath $source -PathType Leaf) {
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+        return
+    }
+    # Copy source files only; stale Python bytecode must never ship retired servers.
+    Get-ChildItem -LiteralPath $source -Recurse -File | Where-Object {
+        $_.FullName -notmatch '[\\/](__pycache__|\.git|node_modules)[\\/]' -and $_.Extension -notin @('.pyc', '.pyo')
+    } | ForEach-Object {
+        $relativeFile = $_.FullName.Substring($source.Length).TrimStart([char[]]'\/')
+        $targetFile = Join-Path $destination $relativeFile
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetFile) | Out-Null
+        Copy-Item -LiteralPath $_.FullName -Destination $targetFile -Force
+    }
 }
 
 function Ensure-NodeEnvironment {
@@ -95,53 +106,6 @@ function Ensure-NpmDependencies {
     }
 }
 
-function Stop-RelayFromPath {
-    param([string]$RelayPath)
-
-    $escapedRoot = [regex]::Escape((Resolve-Path -LiteralPath $RelayPath).Path)
-    $targets = Get-CimInstance Win32_Process | Where-Object {
-        $_.CommandLine -and
-        $_.CommandLine -match $escapedRoot -and
-        $_.CommandLine -match "dist\\index\.js|figma_mcp_companion\.py|figma_mcp_relay_server\.py"
-    }
-    $stoppedCount = 0
-    foreach ($target in $targets) {
-        Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue
-        if ($?) {
-            $stoppedCount++
-            Write-Host "Stopped previous Relay process: $($target.ProcessId)" -ForegroundColor Yellow
-        }
-    }
-    return $stoppedCount
-}
-
-function Wait-ForRelayStop {
-    param([string]$RelayPath)
-
-    $controlledRoot = (Resolve-Path -LiteralPath $RelayPath).Path.TrimEnd('\')
-    $deadline = (Get-Date).AddSeconds(10)
-    do {
-        try {
-            $health = Invoke-RestMethod -Uri "http://127.0.0.1:32130/health" -TimeoutSec 1
-            if (-not $health.gateway.pluginRoot) {
-                throw "Port 32130 is occupied by a gateway without a plugin root."
-            }
-            $activeRoot = (Resolve-Path -LiteralPath $health.gateway.pluginRoot).Path.TrimEnd('\')
-            if (-not $activeRoot.StartsWith($controlledRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw "Port 32130 is occupied by another Relay checkout: $activeRoot"
-            }
-        } catch {
-            if ($_.Exception.Message -notmatch "occupied by") {
-                return
-            }
-            throw
-        }
-        Start-Sleep -Milliseconds 250
-    } while ((Get-Date) -lt $deadline)
-
-    throw "Previous Relay did not stop within 10 seconds: $controlledRoot"
-}
-
 $unityBridge = Join-Path $PluginRoot "unity\Assets\Editor\FigmaBridge"
 $unityBridgeMeta = Join-Path $PluginRoot "unity\Assets\Editor\FigmaBridge.meta"
 if (-not (Test-Path -LiteralPath $unityBridge -PathType Container) -or -not (Test-Path -LiteralPath $unityBridgeMeta -PathType Leaf)) {
@@ -173,27 +137,22 @@ try {
 
     Write-Step "Building Relay"
     Invoke-Checked -FilePath "npm" -Arguments @("run", "build")
-    Invoke-Checked -FilePath "python" -Arguments @("scripts/build.py")
 } finally {
     Pop-Location
 }
 
 $outputRoot = Join-Path $PluginRoot "output"
-$releaseName = "figma-mcp-relay-$releaseVersion"
+$releaseName = "figma-relay-$releaseVersion"
 $releaseRoot = Join-Path $outputRoot $releaseName
 $zipPath = Join-Path $outputRoot "$releaseName.zip"
-$relayRoot = Join-Path $releaseRoot "figma-mcp-relay"
+$relayRoot = Join-Path $releaseRoot "figma-relay"
 $unityRoot = Join-Path $releaseRoot "unity"
 
 Assert-PathInside -Path $releaseRoot -Root $outputRoot
 Assert-PathInside -Path $zipPath -Root $outputRoot
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 if (Test-Path -LiteralPath $releaseRoot) {
-    $stoppedReleaseCount = Stop-RelayFromPath -RelayPath $releaseRoot
-    if ($stoppedReleaseCount -gt 0) {
-        Wait-ForRelayStop -RelayPath $releaseRoot
-    }
-    Remove-Item -LiteralPath $releaseRoot -Recurse -Force
+    throw "Release directory already exists; choose a new version or remove the reviewed output manually."
 }
 if (Test-Path -LiteralPath $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force
@@ -231,13 +190,8 @@ Write-Host "Release archive:   $zipPath" -ForegroundColor Green
 
 if (-not $NoLaunch) {
     Write-Step "Launching packaged Relay"
-    [void](Stop-RelayFromPath -RelayPath $PluginRoot)
-    Wait-ForRelayStop -RelayPath $PluginRoot
-    $launcher = Join-Path $relayRoot "scripts\start_mcp_oneclick.ps1"
-    $launchArguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $launcher, "-NoPause")
-    if (-not $NoOpenFigma) {
-        $launchArguments += "-OpenFigma"
-    }
+    $launcher = Join-Path $relayRoot "scripts\start_relay.ps1"
+    $launchArguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $launcher)
     & powershell.exe @launchArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Packaged Relay launcher failed with exit code $LASTEXITCODE"

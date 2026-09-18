@@ -30,7 +30,7 @@ test("Unity AI task carries the selected project snapshot and explicit script pa
 
 test("Prefab-to-Figma import sends the selected Unity project root", () => {
   const functionStart = ui.indexOf("async function startPrefabImportToFigma(");
-  const functionEnd = ui.indexOf("async function pollPrefabImportTask()", functionStart);
+  const functionEnd = ui.indexOf("async function subscribePrefabImportTask()", functionStart);
   const source = ui.slice(functionStart, functionEnd);
 
   assert.match(source, /unityProjectPath:\s*selectedUnityProject\.path/);
@@ -41,14 +41,14 @@ test("nine-slice crop sends the selected Unity project root", () => {
   const functionEnd = ui.indexOf("function renderUnityImportResult", functionStart);
   const source = ui.slice(functionStart, functionEnd);
 
-  assert.match(source, /relayEndpoint\("\/crop-jiugong"\)/);
+  assert.match(source, /sendRelaySocketRequest\("image\.crop"/);
   assert.match(source, /var unityProjectPath = selectedUnityProject\s*\?\s*selectedUnityProject\.path\s*:\s*unityGatewayProjectPath/);
   assert.match(source, /unityProjectPath:\s*unityProjectPath/);
   assert.match(source, /if \(!unityProjectPath\)/);
 });
 
 test("Prefab-to-Figma import records terminal task errors in the live log", () => {
-  const functionStart = ui.indexOf("async function pollPrefabImportTask()");
+  const functionStart = ui.indexOf("function handlePrefabImportEvent(message)");
   const functionEnd = ui.indexOf("function renderPrefabImportTaskStatus", functionStart);
   const source = ui.slice(functionStart, functionEnd);
 
@@ -61,11 +61,11 @@ test("adding a Unity project gives immediate progress and always restores the bu
   const functionEnd = ui.indexOf("async function selectUnityProject()", functionStart);
   const source = ui.slice(functionStart, functionEnd);
   const progressIndex = source.indexOf('unityProjectStatus.textContent = "正在添加 Unity 工程');
-  const fetchIndex = source.indexOf('fetchWithTimeout(relayEndpoint("/unity-projects/add")');
+  const fetchIndex = source.indexOf('sendRelaySocketRequest("unity.projects.add"');
 
   assert.ok(progressIndex >= 0, "add flow should show progress immediately");
   assert.ok(fetchIndex > progressIndex, "progress should be visible before the network request starts");
   assert.match(source, /addUnityProjectBtn\.disabled = true/);
   assert.match(source, /finally\s*\{[\s\S]*?addUnityProjectBtn\.disabled = false/);
-  assert.match(source, /本地 MCP Companion 未连接，无法添加 Unity 工程/);
+  assert.match(source, /本地 Relay 未连接，无法添加 Unity 工程/);
 });

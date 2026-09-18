@@ -49,7 +49,7 @@
 2. `h3slice` 只压缩横向中心段：`width = left + right + 2`，高度必须保留父节点 `sourceVisibleSize.height`。
 3. `v3slice` 只压缩纵向中心段：宽度必须保留父节点 `sourceVisibleSize.width`，`height = top + bottom + 2`。
 4. Figma 可见九宫节点的尺寸用于 Unity `RectTransform.sizeDelta`，但 h3/v3 的非拉伸轴也必须用于 PNG 输出尺寸，不能被压成 2px。
-5. `image_download_plan.json` 中的 `expectedSize` 必须填写 MCP Relay 实际导出的目标 PNG 尺寸，并携带 `sliceKind` 供校验。
+5. `image_download_plan.json` 中的 `expectedSize` 必须填写 Relay 实际导出的目标 PNG 尺寸，并携带 `sliceKind` 供校验。
 6. 执行 `FigmaPrefabGenerator.Generate()` 前必须检查每张九宫 PNG 的实际尺寸是否符合 `sliceKind` 规则；不相等时必须先裁剪或重新导出，不能继续生成 Prefab。
 7. 生成后验证必须逐张列出九宫图：文件名、实际尺寸、border、sliceKind、期望尺寸、是否通过。
 
@@ -171,7 +171,7 @@
 **规则**：
 
 1. Figma 文本节点名包含 `__text(<materialName>)` 时，`<materialName>` 就是 Unity TMP Material Preset 的精确资产名。
-2. 旧 MCP 流程中的 `get_design_context` 可能只返回节点 ID、字体和颜色，不一定返回完整图层名；标准流程必须改由 MCP Relay manifest / metadata 字段提供材质标记。若 MCP Relay 没有返回材质标记，应停止并补 MCP Relay 字段或询问用户，不要切回 MCP 主流程。
+2. 旧 MCP 流程中的 `get_design_context` 可能只返回节点 ID、字体和颜色，不一定返回完整图层名；标准流程必须改由 Relay manifest / metadata 字段提供材质标记。若 Relay 没有返回材质标记，应停止并补 Relay 字段或询问用户，不要切回 MCP 主流程。
 3. 回写 Unity 前必须精确反查 `<materialName>.mat.meta`，拿到路径和 GUID 后再写 Prefab 的 `m_sharedMaterial`。
 4. 找不到同名材质时必须停止询问用户，禁止按颜色、截图、更新时间、命名相似度或“看起来更接近”选择替代材质。
 5. 修改计划和最终报告必须写明：`Figma 节点名 -> Unity 材质路径 -> guid -> 写入字段`。
@@ -184,9 +184,9 @@ Figma 九宫格切片（`__slice_top`、`__slice_center` 等）使用 CROP 变�
 
 **正确规则**：
 
-1. 图片是否需要写回 Unity，必须以 MCP Relay/脚本导出的源图 MD5 与 Unity 本地文件 MD5 对比为准。
+1. 图片是否需要写回 Unity，必须以 Relay/脚本导出的源图 MD5 与 Unity 本地文件 MD5 对比为准。
 2. `imageHash` 不同只能作为“需要导出并校验”的信号，不能单独判定必须替换。
-3. 标准流程的截图由 MCP Relay 导出，只允许用于人工视觉验证，例如确认九宫格切片刷新后在 Figma/Unity 里的显示是否符合预期。
+3. 标准流程的截图由 Relay 导出，只允许用于人工视觉验证，例如确认九宫格切片刷新后在 Figma/Unity 里的显示是否符合预期。
 4. 生成或覆盖 Unity PNG 时，严禁使用截图、`figma.flatten()`、切片拼接图作为 Sprite 来源。
 5. 九宫格父节点源图 fill 与 `__slice_*` 的 imageHash 不一致时，以父节点源图 fill 作为导出源，并记录 warning 提醒切片可能未同步；必要时先运行 `.figma/nine-slice-sync/` 刷新切片后再同步。
 
@@ -210,14 +210,14 @@ Figma → Unity 制作完成后，必须截图验证实际渲染结果。静态�
 
 **导出原始图片的正确方式**：
 
-1. Figma MCP Relay 插件在 Figma 内读取目标 IMAGE 的原始图片数据、真实尺寸、imageHash 和 base64/下载 URL。
+1. Figma Relay 插件在 Figma 内读取目标 IMAGE 的原始图片数据、真实尺寸、imageHash 和 base64/下载 URL。
 2. `gen_spec.py` 从 `image_export_manifest.json` 生成 `image_download_plan.json`，并计算可用的 `expectedMD5`。
 3. `process_images.py` 原样写入普通 PNG，合成最小九宫 PNG，并生成 `image_process_report.json`。
 4. 由脚本计算 MD5，与 Unity 本地图片对比。
 
 **严禁用 `get_screenshot` 导出图片再保存为 Unity Sprite。** 截图 API 的用途是视觉对比验证，不是图片资源导出。
 
-踩坑案例：TwoBtnTips_2 的 Bg(1) 源图被替换为 488×100 的蓝色半圆图。导出时创建了 185×181（旧图尺寸）的临时节点并用 `get_screenshot` 截图，结果图片被 FILL 拉伸为纯蓝色，丢失了所有细节。现在必须通过 MCP Relay/脚本导出真实源图并校验 MD5。
+踩坑案例：TwoBtnTips_2 的 Bg(1) 源图被替换为 488×100 的蓝色半圆图。导出时创建了 185×181（旧图尺寸）的临时节点并用 `get_screenshot` 截图，结果图片被 FILL 拉伸为纯蓝色，丢失了所有细节。现在必须通过 Relay/脚本导出真实源图并校验 MD5。
 
 ## Figma → Unity 同步时新图尺寸可能与旧图不同
 
@@ -241,7 +241,7 @@ Figma → Unity 制作完成后，必须截图验证实际渲染结果。静态�
 从 Figma 同步设计到 Unity 时，必须对 Figma 中每张图片资源执行以下步骤：
 
 1. 读取 Figma 节点的 `imageHash`，将 hash 变化作为需要导出并校验的信号。
-2. 按“导出原始图片严禁使用 get_screenshot”规则由 MCP Relay/脚本导出真实图片字节到 `.tmp/` 或目标图片目录。
+2. 按“导出原始图片严禁使用 get_screenshot”规则由 Relay/脚本导出真实图片字节到 `.tmp/` 或目标图片目录。
 3. 通过 GUID 找到 Unity Prefab 中引用的对应图片文件路径。
 4. 对已经导出的真实图片字节和 Unity 现有图片计算 MD5，MD5 才是是否需要写回的最终依据。
 5. 如果 MD5 相同，保留原 Sprite 引用和原文件，不新建也不覆盖。
@@ -324,8 +324,8 @@ Figma → Unity 制作完成后，必须截图验证实际渲染结果。静态�
 **原因**：父节点 metadata 中子节点的 width/height 可能是包含 overflow/clip 区域的 visual bounds，不是子节点 frame 的实际尺寸。当子节点设置了 `clipContent: true`（overflow clip）时，其内部子节点可能超出 frame 边界，导致 bounds 比 frame 尺寸大。
 
 **规则**：
-1. 获取节点尺寸时，**必须使用 MCP Relay manifest 中目标节点自身的 bounds/relativeBounds**，不能使用父节点 metadata 中返回的子节点尺寸。
-2. 如果父节点 metadata 返回的子节点尺寸与 MCP Relay manifest 直接节点尺寸不同，以 MCP Relay manifest 直接节点尺寸为准。
+1. 获取节点尺寸时，**必须使用 Relay manifest 中目标节点自身的 bounds/relativeBounds**，不能使用父节点 metadata 中返回的子节点尺寸。
+2. 如果父节点 metadata 返回的子节点尺寸与 Relay manifest 直接节点尺寸不同，以 Relay manifest 直接节点尺寸为准。
 3. 特别注意九宫格容器（有 `__slice_*` 子节点的 frame）——它们通常设置了 overflow clip，bounds 可能远大于 frame 尺寸。
 
 ## 严禁混用不同 Prefab 的参考值
@@ -353,8 +353,8 @@ Figma → Unity 制作完成后，必须截图验证实际渲染结果。静态�
 **规则**：
 
 1. 旧 MCP 流程中的 `get_design_context` 返回节点 ID 可能包含组件内部节点（Component 定义层），不一定是目标节点的直接子节点。
-2. 计算 Unity anchoredPosition 时，**必须使用 MCP Relay manifest 中目标父节点的 `childIds` 列表**，确认直接子节点的 ID。
-3. 只使用 MCP Relay manifest 中直接子节点的 `x`、`y`、`width`、`height` 做坐标转换，严禁使用旧 `get_design_context` 代码中出现的任意节点坐标。
+2. 计算 Unity anchoredPosition 时，**必须使用 Relay manifest 中目标父节点的 `childIds` 列表**，确认直接子节点的 ID。
+3. 只使用 Relay manifest 中直接子节点的 `x`、`y`、`width`、`height` 做坐标转换，严禁使用旧 `get_design_context` 代码中出现的任意节点坐标。
 4. 对于 `type === "INSTANCE"` 的子节点，其内部子节点的坐标是相对于实例本身的，不能用于计算相对于父节点的位置。
 
 
@@ -488,7 +488,7 @@ Figma 的 `boolean-operation` / `flatten` 表示合层后的视觉结果。拆�
 
 ## Prefab first generation has empty Sprite references: check TextureImporter refresh timing first
 
-Case: while importing `UI_Attack (2649:32)`, MCP Relay export, PNG writes, and the first `FigmaPrefabGenerator.Generate()` call all appeared successful. Static Prefab checks still found several `m_Sprite: {fileID: 0}` residues, and the new PNG `.meta` files still had `textureType: 0`, `spriteMode: 0`, and `alphaIsTransparency: 0`. In that state, `AssetDatabase.LoadAssetAtPath<Sprite>(path)` returns null, so Image components are saved without Sprite references.
+Case: while importing `UI_Attack (2649:32)`, Relay export, PNG writes, and the first `FigmaPrefabGenerator.Generate()` call all appeared successful. Static Prefab checks still found several `m_Sprite: {fileID: 0}` residues, and the new PNG `.meta` files still had `textureType: 0`, `spriteMode: 0`, and `alphaIsTransparency: 0`. In that state, `AssetDatabase.LoadAssetAtPath<Sprite>(path)` returns null, so Image components are saved without Sprite references.
 
 Rules:
 
@@ -546,10 +546,10 @@ Then call `FigmaPrefabGenerator.Generate()` once. The Sprite assets are already 
 
 ## Efficiency: batch confirmation windows to reduce round-trips
 
-**Problem**: The figma-to-prefab skill requires user confirmation at every gate: inputs → MCP Relay → Spec → phase-II → verify → post-analysis. Each round-trip adds 15-30s of context switching.
+**Problem**: The figma-to-prefab skill requires user confirmation at every gate: inputs → Relay → Spec → phase-II → verify → post-analysis. Each round-trip adds 15-30s of context switching.
 
 **Solution**: In the Spec review step, batch the following into a single confirmation request:
-  - MCP Relay result summary (status, blockingErrors, image count, nine-slice stats)
+  - Relay result summary (status, blockingErrors, image count, nine-slice stats)
   - JSON Spec lint results (all validations)
   - Nine-slice PNG min-size verification table
   - PrefabInstance mapping table (exact + fuzzy matches)
@@ -647,7 +647,7 @@ elif has_v or ratio < 0.33 or (w < 80 and h > w * 3):
 
 ### Border 必须从 Figma __slice 子节点尺寸计算
 
-不依赖 MCP Relay 导出中的 border 字段（该字段可能缺失或为 0）。
+不依赖 Relay 导出中的 border 字段（该字段可能缺失或为 0）。
 Border 格式: `{left, bottom, right, top}` → Unity `.meta`: `{x: left, y: bottom, z: right, w: top}`。
 
 ```python
@@ -786,21 +786,21 @@ if not image_hash_for_node:
 
 ### h3slice/v3slice 导出必须保留完整显示尺寸
 
-踩坑案例：MCP Relay 为 v3slice 导出了 2×275 的预裁剪图（left=right=0），在 Unity 中被拉伸到 500px 宽后视觉不正确。
+踩坑案例：Relay 为 v3slice 导出了 2×275 的预裁剪图（left=right=0），在 Unity 中被拉伸到 500px 宽后视觉不正确。
 
 **规则**：
 1. h3slice 合成后必须保留完整显示高度（不能因 `top+bottom+2=2` 而把高度切成 2）
 2. v3slice 合成后必须保留完整显示宽度（不能因 `left+right+2=2` 而把宽度切成 2）
-3. MCP Relay Figma→Prefab 通道必须携带 `sliceKind` 和 `sourceVisibleSize`，父节点有 IMAGE fill 时优先使用父节点 `imageHash` 直接导出正确尺寸。
+3. Relay Figma→Prefab 通道必须携带 `sliceKind` 和 `sourceVisibleSize`，父节点有 IMAGE fill 时优先使用父节点 `imageHash` 直接导出正确尺寸。
 4. 只有旧 manifest 或父节点缺图时，`process_images.py` 才 fallback 到 synthesize；fallback 需要从父节点可用源图或 `__slice_*` 子节点共享 imageHash 获取完整源图，按 slice bounds 手动裁剪各区域。
 
 ### base64 传播方向禁止父→子，只能子→子
 
-踩坑案例：把 FRAME 父节点的 base64（MCP Relay 预裁剪的 2×275 结果图）复制给切片子节点，导致 synthesize_v3slice 用预裁剪图当"源图"，提取的 top/bottom/center 区域完全错位。
+踩坑案例：把 FRAME 父节点的 base64（Relay 预裁剪的 2×275 结果图）复制给切片子节点，导致 synthesize_v3slice 用预裁剪图当"源图"，提取的 top/bottom/center 区域完全错位。
 
 **规则**：
-- 旧 MCP Relay manifest 中 FRAME 父节点的 base64 可能是错误预裁剪结果图，不能盲目传播给切片子节点。
-- 新 MCP Relay manifest 中 FRAME 父节点若带 `sliceKind/sourceVisibleSize` 且尺寸门禁通过，可以作为最终 PNG 直接写入。
+- 旧 Relay manifest 中 FRAME 父节点的 base64 可能是错误预裁剪结果图，不能盲目传播给切片子节点。
+- 新 Relay manifest 中 FRAME 父节点若带 `sliceKind/sourceVisibleSize` 且尺寸门禁通过，可以作为最终 PNG 直接写入。
 - 切片 fallback 的源图传播方向是**子→子**（`__slice_top → __slice_center → __slice_bottom`），因为它们共享同一个 imageHash。
 - 禁止把父节点的 base64 传播给子节点```
 
@@ -831,14 +831,14 @@ const bytes = await node.exportAsync({
 });
 ```
 
-### 严禁给 MCP Relay 已导出 PNG 的 Image 节点叠加 m_Color
+### 严禁给 Relay 已导出 PNG 的 Image 节点叠加 m_Color
 
 **错误做法**：在 spec 中给 Image 节点设置 Figma 填充色，例如 `color: {r: 0.949, g: 0.957, b: 0.945, a: 0.9}`
-**后果**：MCP Relay 导出 PNG 时已将填充色+描边+效果烘焙到像素中。Unity 的 `Image.m_Color` 会与像素色值相乘，造成**双重染色**——颜色过深、透明度偏低。
+**后果**：Relay 导出 PNG 时已将填充色+描边+效果烘焙到像素中。Unity 的 `Image.m_Color` 会与像素色值相乘，造成**双重染色**——颜色过深、透明度偏低。
 
 **正确做法**：所有 Image 节点的 `m_Color` 必须保持 `(1, 1, 1, 1)`。PNG 自带颜色，`gen_spec.py` 的白色默认值是正确的。
 
-**适用条件**：此规则适用于 MCP Relay `exportAsync` 导出的节点（包括 IMAGE fill 帧尺寸导出和 SOLID fill 节点导出）。对于纯 1×1 白色像素 PNG（由 gen_spec 创建），m_Color 可以设置为 Figma 填充色。
+**适用条件**：此规则适用于 Relay `exportAsync` 导出的节点（包括 IMAGE fill 帧尺寸导出和 SOLID fill 节点导出）。对于纯 1×1 白色像素 PNG（由 gen_spec 创建），m_Color 可以设置为 Figma 填充色。
 
 ### 新增文件
 

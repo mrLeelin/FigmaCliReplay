@@ -4,9 +4,9 @@
 PSD 导入 Figma Job 提交脚本。
 
 读取 export_psd_layers.py 导出的 manifest_summary.json，自动生成
-正确的 IMPORT_PSD_JOB 格式 payload，作为无 MCP tool 暴露时的 CLI fallback
-提交到本地 MCP Relay gateway。Agent 标准入口优先使用 figmaMcpRelay.figma_submit_job；
-本脚本通过共享 MCP client 调用 figmaMcpRelay；本地 HTTP/WebSocket 仅属于 companion 内部 transport。
+正确的 IMPORT_PSD_JOB 格式 payload，作为标准 CLI 入口
+提交到本地 Relay gateway。Agent 标准入口优先使用 figmaRelay.figma_submit_job；
+本脚本通过共享 CLI client 调用 figmaRelay；业务请求和结果仅使用 WebSocket。
 
 用法：
   python "<relay-root>/ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py" ^
@@ -17,7 +17,7 @@ PSD 导入 Figma Job 提交脚本。
 参数：
   manifest_path  必需。manifest_summary.json 的路径。
   --root-name    可选。Figma 中根 Frame 的名称。默认 "source.psd_layers"。
-  --relay-url    可选。MCP Relay 地址。默认 "http://localhost:32130"。
+  --relay-url    可选。Relay 地址。默认 "http://localhost:32130"。
   --file-key     强烈建议。目标 Figma 文件 key，用于稳定路由到正确插件会话。
   --session-id   可选。目标插件 sessionId；多 Figma 窗口时比 fileKey 更精确。
   --target-node-id 可选。导入根 Frame 的 parent nodeId；不传则当前 Page。
@@ -31,7 +31,7 @@ PSD 导入 Figma Job 提交脚本。
   - job.type 必须精确为 "IMPORT_PSD_JOB"，不允许用任何变体。
   - manifest 必须内嵌完整 JSON，不能传文件路径。
   - assets 数组的 path 必须是绝对路径。
-  - Agent 标准入口优先走 figmaMcpRelay.figma_submit_job。
+  - Agent 标准入口优先走 figmaRelay.figma_submit_job。
   - CLI fallback 必须显式传 --file-key 或 --session-id，避免写到错误 Figma 会话。
 
 示例：
@@ -57,20 +57,20 @@ from typing import Any, Iterable
 
 def find_relay_root() -> Path:
     for parent in Path(__file__).resolve().parents:
-        if (parent / "client" / "figma_mcp_client.py").is_file():
+        if (parent / "client" / "figma_relay_cli.py").is_file():
             return parent
-    raise RuntimeError("Unable to locate the Figma MCP Relay root.")
+    raise RuntimeError("Unable to locate the Figma Relay root.")
 
 
 RELAY_ROOT = find_relay_root()
-MCP_CLIENT_DIR = RELAY_ROOT / "client"
-if str(MCP_CLIENT_DIR) not in sys.path:
-    sys.path.insert(0, str(MCP_CLIENT_DIR))
+CLI_CLIENT_DIR = RELAY_ROOT / "client"
+if str(CLI_CLIENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CLI_CLIENT_DIR))
 
-from figma_mcp_client import (  # noqa: E402
-    health as mcp_health,
-    query_selection as mcp_query_selection,
-    submit_job as mcp_submit_job,
+from figma_relay_cli import (  # noqa: E402
+    health as relay_health,
+    query_selection as relay_query_selection,
+    submit_job as relay_submit_job,
 )
 
 
@@ -265,8 +265,8 @@ def build_payload(
 
 
 def fetch_health(relay_url: str) -> dict:
-    """Read relay health through the MCP client surface."""
-    return mcp_health(relay_url=relay_url.rstrip("/"))
+    """Read relay health through the CLI client surface."""
+    return relay_health(relay_url=relay_url.rstrip("/"))
 
 
 def plugin_sessions(health: dict) -> list[dict]:
@@ -303,7 +303,7 @@ def preflight_target(relay_url: str, file_key: str, session_id: str) -> dict:
         matches = [s for s in sessions if str(s.get("fileKey") or "") == file_key]
         if not matches:
             fallback_session_id = session_id or str(plugin.get("activeSessionId") or "")
-            selection = mcp_query_selection(
+            selection = relay_query_selection(
                 relay_url=relay_url,
                 session_id=fallback_session_id,
                 timeout=15,
@@ -336,12 +336,12 @@ def apply_resolved_session(payload: dict, health: dict, explicit_session_id: str
 
 def default_result_output_path(manifest_abs: str) -> str:
     """Return the default full-result path next to manifest_summary.json."""
-    return os.path.join(os.path.dirname(manifest_abs), "figma_mcp_result.json")
+    return os.path.join(os.path.dirname(manifest_abs), "figma_relay_result.json")
 
 
 def submit_psd_job(payload: dict, relay_url: str, request_id: str, wait: bool, timeout: int) -> dict:
-    """Submit through figmaMcpRelay MCP tooling; CLI is only a fallback wrapper."""
-    result = mcp_submit_job(
+    """Submit through figmaRelay CLI over WebSocket."""
+    result = relay_submit_job(
         payload["job"],
         payload.get("assetPaths", {}),
         relay_url=relay_url.rstrip("/"),
@@ -636,7 +636,7 @@ def main() -> int:
     )
     parser.add_argument("manifest_path", help="manifest_summary.json 路径")
     parser.add_argument("--root-name", default="source.psd_layers", help="Figma 根 Frame 名称")
-    parser.add_argument("--relay-url", default="http://localhost:32130", help="MCP Relay 地址")
+    parser.add_argument("--relay-url", default="http://localhost:32130", help="Relay 地址")
     parser.add_argument("--file-key", default="", help="目标 Figma fileKey；建议始终传入以稳定路由")
     parser.add_argument("--session-id", default="", help="目标 Figma 插件 sessionId；多窗口时优先级最高")
     parser.add_argument("--target-node-id", default="", help="导入根 Frame 的目标 parent nodeId；不传则当前 Page")
@@ -659,14 +659,14 @@ def main() -> int:
     parser.add_argument(
         "--fast-repeat",
         action="store_true",
-        help="Skip duplicate script preflight after this run already verified Figma context with MCP tools; result gates and screenshot validation still run.",
+        help="Skip duplicate script preflight after this run already verified Figma context with the project CLI; result gates and screenshot validation still run.",
     )
     parser.add_argument("--wait", action="store_true", help="提交后轮询等待结果")
     parser.add_argument("--timeout", type=int, default=120, help="等待超时秒数")
     parser.add_argument("--component-common", default="62:115", help="通用组件库根节点 ID")
     parser.add_argument("--component-image", default="2896:32", help="通用图片库根节点 ID")
     parser.add_argument("--output", default="", help="将 payload 写入此文件（不提交）")
-    parser.add_argument("--result-output", default="", help="Full result JSON output path; defaults to figma_mcp_result.json next to manifest")
+    parser.add_argument("--result-output", default="", help="Full result JSON output path; defaults to figma_relay_result.json next to manifest")
     parser.add_argument("--timeline-output", default="", help="Timeline JSON output path; defaults to timeline.json next to result")
     parser.add_argument("--max-samples", type=int, default=5, help="Max warning/error samples in compact stdout")
     parser.add_argument("--verbose-result", action="store_true", help="Print full wait result to stdout; default prints compact summary")
@@ -743,7 +743,7 @@ def main() -> int:
 
     # 提交
     if args.fast_repeat:
-        print("[FAST] Skipping duplicate script preflight; caller must have verified file/page/selection with MCP tools in this run.")
+        print("[FAST] Skipping duplicate script preflight; caller must have verified file/page/selection with the project CLI in this run.")
         add_timeline_instant(
             timeline,
             "preflight_target_skipped",
@@ -769,7 +769,7 @@ def main() -> int:
             return 1
 
     request_id = f"psd-import-{int(time.time() * 1000)}"
-    print(f"[SUBMIT] job via figmaMcpRelay MCP ...")
+    print(f"[SUBMIT] job via Relay CLI ...")
     try:
         with timeline.step("submit_import_job", requestId=request_id, wait=args.wait, timeout=args.timeout):
             result = submit_psd_job(payload, args.relay_url, request_id, wait=args.wait, timeout=args.timeout)
@@ -784,7 +784,7 @@ def main() -> int:
 
     if not args.wait:
         print(f"[OK] Job submitted (async). Check result at:")
-        print(f"   Use figmaMcpRelay.figma_wait_result requestId={request_id}")
+        print(f"   Use figmaRelay.figma_wait_result requestId={request_id}")
         return 0
 
     # 轮询等待

@@ -1,13 +1,13 @@
 """
 PSD → Figma 组件缓存刷新工具。
-标准流程使用 figmaMcpRelay 查询组件库，写入新鲜缓存。
+标准流程使用 figmaRelay 查询组件库，写入新鲜缓存。
 
 用法:
 
-  1. 标准入口：通过 figmaMcpRelay 插件查询并写入缓存：
-     python refresh_component_cache.py <cache_dir> --from-mcp
+  1. 标准入口：通过 figmaRelay 插件查询并写入缓存：
+     python refresh_component_cache.py <cache_dir> --from-cli
 
-  2. 从 MCP Relay 查询结果 JSON 文件构建缓存：
+  2. 从 Relay 查询结果 JSON 文件构建缓存：
      python refresh_component_cache.py <cache_dir> --components <comp.json> --images <img.json>
 
   3. 直接传入已知的组件数据 JSON 字符串构建缓存：
@@ -35,25 +35,25 @@ finally:
         sys.path.remove(_SCRIPT_DIR)
 
 
-GENERATE_JS_HELP = "--generate-js is deprecated. Use --from-mcp."
+GENERATE_JS_HELP = "--generate-js is deprecated. Use --from-cli."
 
 
 def resolve_relay_root() -> Path:
     """Locate the standalone Relay checkout that owns this bundled skill."""
     script_path = Path(__file__).resolve()
     for candidate in script_path.parents:
-        if (candidate / "client" / "figma_mcp_client.py").is_file():
+        if (candidate / "client" / "figma_relay_cli.py").is_file():
             return candidate
-    raise RuntimeError("Unable to locate standalone Figma MCP Relay root")
+    raise RuntimeError("Unable to locate standalone Figma Relay root")
 
 
 def load_query_components():
     """Import the Relay client from the standalone checkout."""
-    client_file = (resolve_relay_root() / "client" / "figma_mcp_client.py").resolve()
+    client_file = (resolve_relay_root() / "client" / "figma_relay_cli.py").resolve()
     if not client_file.is_file():
         raise RuntimeError(f"Relay client module not found: {client_file}")
     module_hash = hashlib.sha256(str(client_file).encode("utf-8")).hexdigest()[:12]
-    module_name = f"_figma_mcp_client_{module_hash}"
+    module_name = f"_figma_relay_cli_{module_hash}"
     spec = importlib.util.spec_from_file_location(module_name, client_file)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load Relay client module: {client_file}")
@@ -131,7 +131,7 @@ def main():
     if "--generate-js" in sys.argv:
         print(json.dumps({
             "status": "deprecated",
-            "message": "--generate-js is deprecated. Use --from-mcp; standard PSD import must not query components via use_figma.",
+            "message": "--generate-js is deprecated. Use --from-cli; standard PSD import must not query components via use_figma.",
         }, ensure_ascii=False))
         return
 
@@ -141,9 +141,9 @@ def main():
 
     cache_dir = sys.argv[1]
 
-    # 支持 --from-mcp 直接从 MCP Relay 插件查询组件库（无需 MCP use_figma）。
+    # 支持 --from-cli 直接从 Relay 插件查询组件库（无需 MCP use_figma）。
     # --from-bridge 仅作为旧命令兼容别名保留。
-    if "--from-mcp" in sys.argv or "--from-bridge" in sys.argv:
+    if "--from-cli" in sys.argv or "--from-bridge" in sys.argv:
         relay_url = "http://localhost:32130"
         if "--relay-url" in sys.argv:
             idx = sys.argv.index("--relay-url")
@@ -156,7 +156,7 @@ def main():
         query_result = query_components(relay_url=relay_url)
         libs = extract_libraries(query_result)
         if not libs:
-            raise RuntimeError("MCP Relay query_components returned no libraries payload")
+            raise RuntimeError("Relay query_components returned no libraries payload")
         print(json.dumps({
             "status": "mcp-relay-components-received",
             "componentCount": len(library_components(libs, "62:115")),

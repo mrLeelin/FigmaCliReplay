@@ -17,9 +17,9 @@ PSD 文件：
 - 不要直接覆盖或删除我选中的 Frame；请先确认导入方式。如果需要在该 Frame 下新建 PSD 根 Frame，先说明计划和影响。
 
 执行要求：
-- 必须使用 `figmaMcpRelay` 驱动 `<relay-root>` 下的插件执行批量导入、验证和截图，不要用官方/通用 Figma MCP upload_assets/use_figma/get_screenshot 承担标准导入流程。
+- 必须使用 `figmaRelay` 驱动 `<relay-root>` 下的插件执行批量导入、验证和截图，不要用官方/通用 Figma MCP upload_assets/use_figma/get_screenshot 承担标准导入流程。
 - 先调用 `figma_health`，再 `figma_query_selection` 回显当前 Figma 文件 key、页面名、选区数量、节点名称、类型和 nodePath，确认与上方信息一致。
-- 如果目标是当前页面，导入前必须只读确认当前 Figma 文件 key、页面名与上方信息一致，且 MCP Relay 可访问当前页面。
+- 如果目标是当前页面，导入前必须只读确认当前 Figma 文件 key、页面名与上方信息一致，且 Relay 可访问当前页面。
 - 如果目标是当前选区 FRAME，导入前必须只读验证当前选区只有 1 个 FRAME，且目标可承载新导入根 Frame。
 - Text 层优先创建可编辑 Figma Text；fillColor、strokeColor、描边和阴影必须从 manifest 程序化读取。
 - AI 必须自动推断并设置每个导入节点的 Figma Constraints。优先使用 manifest 的 `layer.constraints`；如果缺失，必须根据 PSD canvas 和 layer bounds 自动推断，不要向我询问。普通图片、Text、common/auto Instance、九宫/三切片父 Frame 都要设置；`__slice_*` 子层使用切片固定 Constraints。
@@ -29,5 +29,5 @@ PSD 文件：
 - MCP/插件 result 必须 status == completed。
 - missingNodeCount、emptyImageFillCount、badTransformCount、textClipRiskCount、textColorMismatchCount、textStrokeMismatchCount、sliceProblemCount、indexOrderBad 必须全部为 0。
 - Constraints 不得缺失；如果 manifest 缺失导致现场推断，必须说明推断规则和影响节点范围。
-- 必须导出 MCP Relay 截图并说明截图路径。
+- 必须导出 Relay 截图并说明截图路径。
 - 如果 PSD 路径、目标 Figma key、目标页面/选区、组件库查询或九宫参数无法确认，直接报错提示我，不要猜测执行。

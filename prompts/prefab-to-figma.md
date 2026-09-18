@@ -22,9 +22,9 @@ Unity Prefab 路径：
 - 先检查 Unity 网关 health，确认当前选中的 Prefab 路径列表有效。
 - 如果存在多个 Prefab 路径，按 prefab-to-figma skill 要求先生成 UTF-8 `.tmp/prefab-to-figma/prefab-list.txt`，每行一个路径，再使用 `--prefab-list` 批量导出；不要要求我手工创建列表文件。
 - 多选列表中如果混入非 `.prefab`、不存在路径或重复路径，先报告并让我确认重选或去重策略。
-- 执行前必须通过 MCP Relay 确认当前 Figma 文件 key、页面名和选区上下文。
+- 执行前必须通过项目 CLI + WebSocket 确认当前 Figma 文件 key、页面名和选区上下文。
 - 如果缺少 Figma 目标 key 或用户未指定组件模式，先向我确认；Canvas 使用选中 Prefab 根 RectTransform 自动推导，不再要求手动输入。
 - 先给出导入计划、影响范围和验证方式。
 - 等我确认后再执行 Prefab 解析器和 Figma 写入。
 - 不要直接修改 Unity Prefab、资源或 .meta，除非我确认。
-- 完成后必须做 MCP Relay 验证和截图。
+- 完成后必须通过项目 CLI 获取 Relay 验证和截图结果。

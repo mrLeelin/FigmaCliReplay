@@ -35,10 +35,10 @@ PHASE_ORDER = [
 def relay_root() -> Path:
     script_path = Path(__file__).resolve()
     for parent in script_path.parents:
-        if (parent / "client" / "figma_mcp_client.py").is_file():
+        if (parent / "client" / "figma_relay_cli.py").is_file():
             return parent
     raise RuntimeError(
-        f"Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py from {script_path}."
+        f"Unable to locate the Figma Relay root containing client/figma_relay_cli.py from {script_path}."
     )
 
 
@@ -198,7 +198,7 @@ def build_hierarchy_phase(node_manifest_path: Path | None, max_direct_children: 
         return phase(
             "stop",
             evidence,
-            "Run figma-hierarchy-cleanup-mcp and verify before generating export/spec/images.",
+            "Run figma-hierarchy-cleanup and verify before generating export/spec/images.",
         ), manifest
     return phase("go", evidence), manifest
 
@@ -208,7 +208,7 @@ def build_figma_export_phase(result_path: Path | None, image_manifest_path: Path
         return phase(
             "unknown",
             {"mcpResultPath": ""},
-            "Run figma_to_prefab_mcp_client.py or run_full_import.py MCP export.",
+            "Run figma_to_prefab_cli.py or run_full_import.py MCP export.",
         )
     payload = read_json(result_path)
     if payload.get("__readError"):
@@ -501,7 +501,7 @@ def main() -> int:
     parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--unity-tmp", default="", help="Explicit Unity temporary artifact directory")
     parser.add_argument("--request", default="")
-    parser.add_argument("--mcp-result", default="")
+    parser.add_argument("--relay-result", default="")
     parser.add_argument("--node-manifest", default="")
     parser.add_argument("--image-manifest", default="")
     parser.add_argument("--spec-audit", default="")
@@ -520,7 +520,7 @@ def main() -> int:
     unity_tmp = requested_unity_tmp(args.unity_project, args.unity_tmp)
 
     request_path = resolve_path(args.request, manifest_dir) if args.request else first_existing([manifest_dir / "figma_to_prefab_request.json"])
-    result_path = resolve_path(args.mcp_result, manifest_dir) if args.mcp_result else first_existing([manifest_dir / "figma_to_prefab_mcp_result.json"])
+    result_path = resolve_path(args.relay_result, manifest_dir) if args.relay_result else first_existing([manifest_dir / "figma_to_prefab_relay_result.json"])
     node_manifest_path = resolve_path(args.node_manifest, manifest_dir) if args.node_manifest else first_existing([manifest_dir / "figma_node_manifest.json"])
     image_manifest_path = resolve_path(args.image_manifest, manifest_dir) if args.image_manifest else first_existing([manifest_dir / "image_export_manifest.json"])
     audit_path = resolve_path(args.spec_audit, unity_tmp) if args.spec_audit else first_existing([unity_tmp / "spec_audit_report.json"])

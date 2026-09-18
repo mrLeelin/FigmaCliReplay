@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>LKS Figma MCP Relay</title>
+  <title>LKS Figma Relay</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -74,6 +74,7 @@
     }
     .global-section .row {
       margin: 5px 0;
+      flex-wrap: wrap;
     }
     .global-section .status-box {
       padding: 6px 8px;
@@ -85,7 +86,7 @@
       gap: 6px;
       margin: 6px 0;
     }
-    .row input { flex: 1; }
+    .row input { flex: 1; min-width: 0; }
     .grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -184,6 +185,11 @@
       color: var(--text);
       background: rgba(255,255,255,0.08);
       border: 1px solid var(--border);
+    }
+    button.copy-success {
+      color: #081018;
+      background: var(--accent-2);
+      border-color: var(--accent-2);
     }
     button.danger {
       color: var(--danger);
@@ -650,24 +656,24 @@
       color: var(--muted);
       background: rgba(255,255,255,0.06);
     }
-    .mcp-config-panel {
+    .ai-config-panel {
       margin-top: 8px;
       padding-top: 8px;
       border-top: 1px solid rgba(255,255,255,0.08);
     }
-    .mcp-config-head,
-    .mcp-server-row {
+    .ai-config-head,
+    .ai-server-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
     }
-    .mcp-config-title-row {
+    .ai-config-title-row {
       display: flex;
       align-items: center;
       gap: 8px;
     }
-    .mcp-config-toggle {
+    .ai-config-toggle {
       width: 24px;
       height: 24px;
       border-radius: 8px;
@@ -682,51 +688,51 @@
       justify-content: center;
       flex: 0 0 auto;
     }
-    .mcp-config-toggle:hover {
+    .ai-config-toggle:hover {
       color: var(--text);
       background: rgba(255,255,255,0.1);
     }
-    .mcp-config-toggle::before {
+    .ai-config-toggle::before {
       content: "▸";
     }
-    .mcp-config-panel.expanded .mcp-config-toggle::before {
+    .ai-config-panel.expanded .ai-config-toggle::before {
       content: "▾";
     }
-    .mcp-config-body {
+    .ai-config-body {
       display: none;
     }
-    .mcp-config-panel.expanded .mcp-config-body {
+    .ai-config-panel.expanded .ai-config-body {
       display: block;
     }
-    .mcp-title {
+    .ai-title {
       font-size: 12px;
       font-weight: 700;
       color: var(--text);
     }
-    .mcp-subtitle,
-    .mcp-server-meta {
+    .ai-subtitle,
+    .ai-server-meta {
       margin-top: 2px;
       color: var(--muted);
       font-size: 11px;
       line-height: 1.35;
       word-break: break-all;
     }
-    .mcp-config-controls {
+    .ai-config-controls {
       margin: 8px 0 6px;
     }
-    .mcp-server-row {
+    .ai-server-row {
       margin-top: 6px;
       padding: 8px 10px;
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 10px;
       background: rgba(0,0,0,0.12);
     }
-    .mcp-server-name {
+    .ai-server-name {
       color: var(--text);
       font-size: 12px;
       font-weight: 700;
     }
-    .mcp-server-toggle {
+    .ai-server-toggle {
       width: 34px;
       height: 18px;
       border-radius: 999px;
@@ -734,7 +740,7 @@
       background: rgba(255,255,255,0.16);
       flex: 0 0 auto;
     }
-    .mcp-server-toggle::after {
+    .ai-server-toggle::after {
       content: "";
       display: block;
       width: 14px;
@@ -743,10 +749,10 @@
       background: rgba(255,255,255,0.9);
       transition: transform 0.16s ease, background 0.16s ease;
     }
-    .mcp-server-toggle.online {
+    .ai-server-toggle.online {
       background: rgba(100,210,255,0.55);
     }
-    .mcp-server-toggle.online::after {
+    .ai-server-toggle.online::after {
       transform: translateX(16px);
       background: #fff;
     }
@@ -755,7 +761,7 @@
 <body>
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
   <div class="app-title-row">
-    <h1>LKS Figma MCP Relay</h1>
+    <h1>LKS Figma Relay</h1>
     <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.48<!-- END_RELEASE_VERSION --></span>
     <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
   </div>
@@ -769,6 +775,7 @@
         <input id="aiPromptFigmaKeyInput" placeholder="自动读取当前文件 key，也可粘贴覆盖" />
         <button id="readFigmaKeyBtn" class="secondary" type="button">读取 Key</button>
         <button id="copyFigmaLinkBtn" class="secondary" type="button">复制链接</button>
+        <button id="copyFigmaAiContextBtn" class="secondary" type="button">复制给 AI</button>
       </div>
       <div class="key-context" id="aiPromptFigmaKeyContext">当前定位：未读取</div>
     </div>
@@ -784,10 +791,10 @@
 
   <!-- ========== 设置区域 ========== -->
   <div class="tab-page" id="settings-tab">
-    <!-- ========== 本地 MCP Companion / 插件 Runtime Relay 区域 ========== -->
+    <!-- ========== 本地 Relay / 插件 Runtime Relay 区域 ========== -->
     <div class="section global-section" id="ai-section">
       <div class="flex">
-        <h2>本地 MCP Companion</h2>
+        <h2>本地 Relay</h2>
         <span class="badge offline" id="ai-badge">未连接</span>
       </div>
       <div class="row">
@@ -795,47 +802,7 @@
         <button id="connectBtn">连接</button>
         <button id="openServerBtn" class="secondary">插件目录</button>
       </div>
-      <div class="status-box" id="ai-status">等待连接本地 MCP Companion...</div>
-      <div class="mcp-config-panel" id="mcp-config-panel">
-        <div class="mcp-config-head">
-          <div class="mcp-config-title-row">
-            <button id="mcpConfigToggleBtn" class="mcp-config-toggle" type="button" title="展开/收起 MCP 配置"></button>
-            <div>
-              <div class="mcp-title">MCP 服务器</div>
-              <div class="mcp-subtitle">Codex App 用户级配置</div>
-            </div>
-          </div>
-          <span class="badge offline" id="mcp-config-badge">未配置</span>
-        </div>
-        <div class="mcp-config-body" id="mcpConfigBody">
-          <div class="control-grid mcp-config-controls">
-            <div class="control-card">
-              <label for="mcpClientSelect">目标客户端</label>
-              <select id="mcpClientSelect">
-                <option value="codex">Codex App</option>
-                <option value="claude">Claude Code</option>
-              </select>
-            </div>
-            <div class="control-card">
-              <label for="mcpServerNameInput">服务器名</label>
-              <input id="mcpServerNameInput" value="figmaMcpRelay" readonly />
-            </div>
-          </div>
-          <div class="button-row">
-            <button id="writeMcpConfigBtn" class="secondary" type="button">写入配置</button>
-            <button id="openMcpConfigBtn" class="secondary" type="button">打开配置</button>
-            <button id="deleteMcpConfigBtn" class="danger" type="button">删除配置</button>
-          </div>
-          <div class="mcp-server-row">
-            <div>
-              <div class="mcp-server-name" id="mcpServerRowName">figmaMcpRelay</div>
-              <div class="mcp-server-meta" id="mcpServerRowMeta">http://127.0.0.1:32130/mcp</div>
-            </div>
-            <div class="mcp-server-toggle" id="mcpServerToggle"></div>
-          </div>
-          <div class="status-box" id="mcp-config-status">等待读取 MCP 配置...</div>
-        </div>
-      </div>
+      <div class="status-box" id="ai-status">等待连接本地 Relay...</div>
     </div>
 
     <!-- ========== Unity 网关区域 ========== -->
@@ -890,16 +857,11 @@
     <div class="sync-sub-page" id="hierarchy-export-tab">
       <div class="section" id="hierarchy-export-section">
         <h2>Figma导入Prefab</h2>
-        <div class="folder-box missing" id="hierarchyPrefabBox">Unity 当前 Prefab：未连接</div>
-        <div class="folder-box missing" id="hierarchyImageTargetBox">Unity 图片目标：未连接</div>
-        <label class="option">
-          <input id="createHierarchyBackupCheck" type="checkbox" />
-          应用前生成 Prefab 备份
-        </label>
-        <div class="status-box" id="hierarchy-export-status">Figma 选择 1 个根节点，Unity Project 选择 1 个 Prefab。已有 Unity 节点只同步层级、顺序、显示状态和字号，根节点不移动；图片资源默认同步，应用时可选择是否先生成 Prefab 备份。</div>
+        <div class="folder-box missing" id="hierarchyImageTargetBox">Unity 导入目标：未连接</div>
+        <div class="status-box" id="hierarchy-export-status">选择 Unity Project 中的空文件夹后，当前 Figma 根节点会直接导入；输出自动分为 Prefab、Texture、UiAtlas。</div>
         <div class="button-row">
-          <button id="previewHierarchyBtn" class="export-btn secondary" disabled>预览层级变更</button>
-          <button id="exportHierarchyBtn" class="export-btn secondary" disabled>应用层级变更</button>
+          <button id="previewHierarchyBtn" class="export-btn secondary" style="display:none" disabled>预览层级变更</button>
+          <button id="exportHierarchyBtn" class="export-btn secondary" disabled>直接导入 Prefab</button>
         </div>
       </div>
     </div>
@@ -928,7 +890,7 @@
         <div class="folder-box missing" id="prefabImportPrefabBox">Unity Prefab：未连接</div>
         <button id="prefabImportBtn" class="export-btn" disabled>导出选中 Prefab 到 Figma</button>
         <div class="progress"><div class="progress-bar" id="prefabImportProgressBar"></div></div>
-        <div class="status-box" id="prefab-import-status">连接 Unity 网关和本地 MCP Companion 后，选择一个或多个 Prefab，再点击导出。该流程不生成提示词、不调用大模型。</div>
+        <div class="status-box" id="prefab-import-status">连接 Unity 网关和本地 Relay 后，选择一个或多个 Prefab，再点击导出。该流程不生成提示词、不调用大模型。</div>
       </div>
     </div>
 
@@ -1040,10 +1002,10 @@
         <button id="openAiTerminalBtn" class="secondary" type="button">在终端继续</button>
         <button id="runAiCleanupBtn" class="export-btn">开始 AI 整理对话</button>
       </div>
-      <div class="mcp-config-panel expanded" id="aiRunnerPanel">
-        <div class="mcp-config-head"><div class="mcp-title">AI</div></div>
-        <div class="mcp-config-body">
-          <div class="control-grid mcp-config-controls">
+      <div class="ai-config-panel expanded" id="aiRunnerPanel">
+        <div class="ai-config-head"><div class="ai-title">AI</div></div>
+        <div class="ai-config-body">
+          <div class="control-grid ai-config-controls">
           <div class="control-card" id="cleanupProviderField"><label for="cleanupProviderSelect">AI</label><select id="cleanupProviderSelect"><option value="codex">Codex CLI</option><option value="claude-code">Claude Code</option></select></div>
           <div class="control-card" hidden><label for="aiRunnerSelect" hidden>AI runner</label><select id="aiRunnerSelect" hidden><option value="codex">Codex CLI</option><option value="claude">Claude Code</option></select></div>
           </div>
@@ -1159,18 +1121,6 @@
     const openServerBtn = document.getElementById("openServerBtn");
     const aiStatusEl = document.getElementById("ai-status");
     const aiBadge = document.getElementById("ai-badge");
-    const mcpConfigPanel = document.getElementById("mcp-config-panel");
-    const mcpConfigToggleBtn = document.getElementById("mcpConfigToggleBtn");
-    const mcpConfigBadge = document.getElementById("mcp-config-badge");
-    const mcpClientSelect = document.getElementById("mcpClientSelect");
-    const mcpServerNameInput = document.getElementById("mcpServerNameInput");
-    const writeMcpConfigBtn = document.getElementById("writeMcpConfigBtn");
-    const openMcpConfigBtn = document.getElementById("openMcpConfigBtn");
-    const deleteMcpConfigBtn = document.getElementById("deleteMcpConfigBtn");
-    const mcpServerRowName = document.getElementById("mcpServerRowName");
-    const mcpServerRowMeta = document.getElementById("mcpServerRowMeta");
-    const mcpServerToggle = document.getElementById("mcpServerToggle");
-    const mcpConfigStatusEl = document.getElementById("mcp-config-status");
 
     const unityUrlInput = document.getElementById("unityUrl");
     const unityConnectBtn = document.getElementById("unityConnectBtn");
@@ -1252,6 +1202,8 @@
     const aiPromptFigmaKeyContext = document.getElementById("aiPromptFigmaKeyContext");
     const readFigmaKeyBtn = document.getElementById("readFigmaKeyBtn");
     const copyFigmaLinkBtn = document.getElementById("copyFigmaLinkBtn");
+    const copyFigmaAiContextBtn = document.getElementById("copyFigmaAiContextBtn");
+    let copyFigmaAiContextFeedbackTimer = null;
     const aiPromptSubAgentCheck = document.getElementById("aiPromptSubAgentCheck");
     const RemovedAiPromptTemplateValues = new Set(["psdImport", "prefabToFigma", "syncToUnity"]);
     const prefabImportComponentModeSelect = document.getElementById("prefabImportComponentModeSelect");
@@ -1270,13 +1222,12 @@
     const syncTabButtons = Array.prototype.slice.call(document.querySelectorAll(".sync-tab-button"));
     const syncSubPages = Array.prototype.slice.call(document.querySelectorAll(".sync-sub-page"));
 
-    // ─── 本地 MCP Companion 状态 ───
+    // ─── 本地 Relay 状态 ───
     let relayUrl = normalizeRelayUrl(relayUrlInput.value);
     let relayConnected = false;
     let isExecuting = false;
     let consecutiveFailures = 0;
     let lastResultPayload = null;
-    let pollTimer = null;
     let relaySocket = null;
     let relaySocketRegistered = false;
     let relaySocketHeartbeat = null;
@@ -1287,7 +1238,7 @@
     let relaySocketJobQueue = [];
     let relayOperations = {};
     let relaySocketRequests = {};
-    let mcpConfigRefreshInFlight = false;
+    let relaySocketResultRequests = Object.create(null);
     let executingRequestId = "";
     let executingJobType = "";
     let executionWatchdogTimer = null;
@@ -1338,13 +1289,13 @@
       var pluginPathPrefix = pluginRoot && (pluginRoot.endsWith("/") ? pluginRoot : pluginRoot + "/");
       return {
         pluginRoot: pluginRoot,
-        mcpStartBatPath: pluginRoot ? quoteWindowsCommandPath(pluginPathPrefix + "启动MCP.bat") : "",
+        relayStartBatPath: pluginRoot ? quoteWindowsCommandPath(pluginPathPrefix + "启动Relay.bat") : "",
         fullImportScriptPath: pluginRoot ? quoteWindowsCommandPath(pluginPathPrefix + "ai/skills/figma-to-prefab/scripts/run_full_import.py") : ""
       };
     }
 
     function relayPluginRootCacheKey(url) {
-      return "figma-mcp-relay:validated-plugin-root:" + encodeURIComponent(String(url || "").trim().replace(/\/+$/, ""));
+      return "figma-relay:validated-plugin-root:" + encodeURIComponent(String(url || "").trim().replace(/\/+$/, ""));
     }
 
     function readCachedRelayRuntimePaths(storage, cacheKey) {
@@ -1361,14 +1312,7 @@
     async function loadRelayRuntimePaths(fetchHealth, storage, cacheKey, isCurrent) {
       var healthError = null;
       try {
-        var response = await fetchHealth();
-        if (!response || !response.ok) throw new Error("health HTTP " + (response && response.status || "unknown"));
-        var payload;
-        try {
-          payload = await response.json();
-        } catch (error) {
-          throw new Error("Relay health 返回的不是有效 JSON：" + (error.message || error));
-        }
+        var payload = await fetchHealth();
         var resolved = resolveRelayRuntimePaths(payload);
         if (!resolved.pluginRoot) throw new Error("Relay health 未返回 gateway.pluginRoot");
         if (isCurrent && !isCurrent()) return { paths: resolveRelayRuntimePaths(null), source: "stale", stale: true };
@@ -1417,7 +1361,7 @@
       var requestRelayUrl = requestContext.relayUrl;
       var requestGeneration = requestContext.generation;
       var loaded = await loadRelayRuntimePaths(function () {
-        return fetchWithTimeout(requestRelayUrl.replace(/\/+$/, "") + "/health", { method: "GET" }, 2500);
+        return sendRelaySocketRequest("relay.status", {}, "", 5000);
       }, relayRuntimeStorage, requestContext.cacheKey, function () {
         return relayRequestIsCurrent(requestContext) && requestGeneration === relayRuntimeGeneration;
       });
@@ -1431,8 +1375,6 @@
     }
 
     // ─── Unity 网关状态 ───
-    const unityPortMin = 32129;
-    const unityPortMax = 32135;
     let unityUrl = unityUrlInput.value.trim();
     let unityConnected = false;
     let unityGatewayProjectPath = "";
@@ -1444,6 +1386,8 @@
     let selectedUnityFolder = "";
     let selectedUnityImageTargetMode = "";
     let selectedUnityReplaceAssetPath = "";
+    let selectedUnityObjectIsFolder = false;
+    let selectedUnityFolderIsEmpty = false;
     let selectedUnityTextTarget = "";
     let selectedUnityPrefabPath = "";
     let selectedUnityPrefabPaths = [];
@@ -1453,6 +1397,10 @@
     let exportTimeoutTimer = null;
     let hierarchyExportTimeoutTimer = null;
     let pendingHierarchyDryRun = false;
+    let figmaPrefabImportTaskId = "";
+    let figmaPrefabSubscriptionId = "";
+    let figmaPrefabEventSequence = 0;
+    let figmaPrefabImportBusy = false;
     let nineSliceBusy = false;
     let nineSliceTimeoutTimer = null;
     let syncingTextStyle = false;
@@ -1486,7 +1434,7 @@
     let psdImportBusy = false;
     let psdImportQueueActive = false;
     let psdImportTaskId = "";
-    let psdImportPollTimer = null;
+    let psdImportSubscriptionId = "";
     let psdImportCurrentContext = null;
     let psdImportCompletionResolve = null;
     let psdImportCompletionReject = null;
@@ -1513,7 +1461,7 @@
     ];
     let prefabImportBusy = false;
     let prefabImportTaskId = "";
-    let prefabImportPollTimer = null;
+    let prefabImportSubscriptionId = "";
     let prefabImportSmoothTimer = null;
     let prefabImportDisplayedPercent = 0;
     let prefabImportTargetPercent = 0;
@@ -1661,6 +1609,7 @@
     }
 
     function clearAiCleanupPollTimer() {
+      unsubscribeAiRun(activeAiCleanupRun);
       if (aiCleanupPollTimer) {
         clearTimeout(aiCleanupPollTimer);
         aiCleanupPollTimer = null;
@@ -1940,15 +1889,17 @@
     }
 
     function clearPsdImportPollTimer() {
-      if (psdImportPollTimer) {
-        clearTimeout(psdImportPollTimer);
-        psdImportPollTimer = null;
+      if (psdImportSubscriptionId) {
+        psdImportSubscriptionId = "";
+        sendRelaySocketRequest("psd.import.unsubscribe", {}, "", 5000).catch(function (error) {
+          appendLog("PSD unsubscribe: " + (error.message || error), true);
+        });
       }
     }
 
     function refreshSettingsConnectionAlert() {
       var missing = [];
-      if (!relayConnected) missing.push("本地 MCP Companion");
+      if (!relayConnected) missing.push("本地 Relay");
       if (unityBridgeVersionMismatch) missing.push("Unity Bridge 版本不一致");
       else if (!unityConnected) missing.push("Unity 网关");
       var hasError = missing.length > 0;
@@ -2023,6 +1974,8 @@
       if (isError) {
         selectedUnityImageTargetMode = "";
         selectedUnityReplaceAssetPath = "";
+        selectedUnityObjectIsFolder = false;
+        selectedUnityFolderIsEmpty = false;
       }
       selectedFolderBox.textContent = "Unity 图片目标：" + (display || path || "未选择");
       selectedFolderBox.className = "folder-box" + (selectedUnityFolder ? "" : " missing");
@@ -2035,6 +1988,8 @@
     function setSelectedImageTargetInfo(data) {
       selectedUnityImageTargetMode = data && data.imageTargetMode ? String(data.imageTargetMode) : "";
       selectedUnityReplaceAssetPath = data && data.replaceAssetPath ? String(data.replaceAssetPath) : "";
+      selectedUnityObjectIsFolder = !!(data && data.selectedObjectIsFolder);
+      selectedUnityFolderIsEmpty = !!(data && data.selectedFolderIsEmpty);
     }
 
     // 更新 Unity 当前选中的字体同步目标显示。
@@ -2073,7 +2028,7 @@
     }
 
     function relayRuntimeHeaders(extraHeaders) {
-      return Object.assign({ "X-Figma-Mcp-Relay-Internal": "plugin-runtime" }, extraHeaders || {});
+      return Object.assign({ "X-Figma-Relay-Internal": "plugin-runtime" }, extraHeaders || {});
     }
 
     function buildLogQuery() {
@@ -2111,12 +2066,7 @@
       try {
         const query = buildLogQuery();
         operation.step("request", "查询 Relay 日志", { query: query.toString() });
-        const response = await fetchWithTimeout(relayEndpoint("/logs?" + query.toString()), {
-          method: "GET",
-          headers: relayRuntimeHeaders()
-        }, 8000);
-        const payload = await response.json().catch(function () { return {}; });
-        if (!response.ok) throw new Error(payload.error || ("HTTP " + response.status));
+        const payload = await sendRelaySocketRequest("logs.query", { query: Object.fromEntries(query) }, "", 8000);
         const events = Array.isArray(payload.events) ? payload.events : [];
         renderStructuredLogs(events);
         logViewerMeta.textContent = "显示 " + events.length + " / 匹配 " + Number(payload.totalMatched || events.length) + " 条";
@@ -2135,16 +2085,12 @@
       try {
         const query = buildLogQuery();
         operation.step("request", "下载 Relay 日志", { query: query.toString() });
-        const response = await fetchWithTimeout(relayEndpoint("/logs/download?" + query.toString()), {
-          method: "GET",
-          headers: relayRuntimeHeaders()
-        }, 15000);
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        const blob = await response.blob();
+        const payload = await sendRelaySocketRequest("logs.query", { query: Object.fromEntries(query) }, "", 15000);
+        const blob = new Blob([(payload.events || []).map(function (event) { return JSON.stringify(event); }).join("\n")], { type: "application/x-ndjson" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = "figma-mcp-relay-logs-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jsonl";
+        link.download = "figma-relay-logs-" + new Date().toISOString().replace(/[:.]/g, "-") + ".jsonl";
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -2224,11 +2170,8 @@
 
     async function refreshUnityProjects() {
       try {
-        var response = await fetchWithTimeout(relayEndpoint("/unity-projects"), {
-          headers: relayRuntimeHeaders()
-        }, 5000);
-        var result = await response.json();
-        if (!response.ok) throw new Error(result.error || "读取 Unity 工程失败");
+        var result = await sendRelaySocketRequest("unity.projects.list", {}, "", 5000);
+        if (result.ok === false) throw new Error(result.error || "读取 Unity 工程失败");
         renderUnityProjects(result);
       } catch (error) {
         unityProjectStatus.textContent = "读取 Unity 工程失败：" + (error.message || error);
@@ -2242,8 +2185,8 @@
         return;
       }
       if (!relaySocket || relaySocket.readyState !== WebSocket.OPEN) {
-        unityProjectStatus.textContent = "本地 MCP Companion 未连接，无法添加 Unity 工程。";
-        appendLog("添加 Unity 工程失败：本地 MCP Companion 未连接。", true);
+        unityProjectStatus.textContent = "本地 Relay 未连接，无法添加 Unity 工程。";
+        appendLog("添加 Unity 工程失败：本地 Relay 未连接。", true);
         return;
       }
       var operation = uiLogger.startOperation("unity.project.add", "添加 Unity 工程", {
@@ -2252,13 +2195,8 @@
       unityProjectStatus.textContent = "正在添加 Unity 工程...";
       addUnityProjectBtn.disabled = true;
       try {
-        var response = await fetchWithTimeout(relayEndpoint("/unity-projects/add"), {
-          method: "POST",
-          headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ path: projectPath, sessionId: relaySessionId })
-        }, 8000);
-        var result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || "添加 Unity 工程失败");
+        var result = await sendRelaySocketRequest("unity.projects.add", { path: projectPath }, "", 8000);
+        if (!result.ok) throw new Error(result.error || "添加 Unity 工程失败");
         unityProjectPathInput.value = "";
         renderUnityProjects(result);
         operation.succeed("Unity 工程已添加");
@@ -2273,13 +2211,8 @@
     async function selectUnityProject() {
       var projectId = unityProjectSelect.value;
       if (!projectId) return;
-      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/select"), {
-        method: "POST",
-        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ id: projectId, sessionId: relaySessionId })
-      }, 8000);
-      var result = await response.json();
-      if (!response.ok || !result.ok) throw new Error(result.error || "选择 Unity 工程失败");
+      var result = await sendRelaySocketRequest("unity.projects.select", { id: projectId }, "", 8000);
+      if (!result.ok) throw new Error(result.error || "选择 Unity 工程失败");
       if (unityConnected) disconnectUnity();
       unityBridgeVersionMismatch = null;
       setBridgeVersionBadge("", "disconnected");
@@ -2288,26 +2221,16 @@
 
     async function removeUnityProject() {
       if (!selectedUnityProject) return;
-      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/remove"), {
-        method: "POST",
-        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ id: selectedUnityProject.id, sessionId: relaySessionId })
-      }, 8000);
-      var result = await response.json();
-      if (!response.ok || !result.ok) throw new Error(result.error || "移除 Unity 工程失败");
+      var result = await sendRelaySocketRequest("unity.projects.remove", { id: selectedUnityProject.id }, "", 8000);
+      if (!result.ok) throw new Error(result.error || "移除 Unity 工程失败");
       renderUnityProjects(result);
     }
 
     async function installSelectedUnityBridge() {
       if (!selectedUnityProject) return;
       unityProjectStatus.textContent = "正在安装/更新 FigmaBridge：\n" + selectedUnityProject.path;
-      var response = await fetchWithTimeout(relayEndpoint("/unity-projects/install-bridge"), {
-        method: "POST",
-        headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ id: selectedUnityProject.id, sessionId: relaySessionId })
-      }, 30000);
-      var result = await response.json();
-      if (!response.ok || !result.ok) throw new Error(result.error || "安装 FigmaBridge 失败");
+      var result = await sendRelaySocketRequest("unity.bridge.install", { id: selectedUnityProject.id }, "", 30000);
+      if (!result.ok) throw new Error(result.error || "安装 FigmaBridge 失败");
       renderUnityProjects(result);
       if (unityBridgeVersionMismatch) {
         unityProjectStatus.textContent += "\nBridge 已同步到 " + pluginReleaseVersion + "，等待 Unity 编译后重新连接。";
@@ -2315,8 +2238,23 @@
         unityProjectStatus.textContent += "\nBridge 文件已写入，等待 Unity 编译。";
       }
     }
-    function unityEndpoint(path) {
-      return (unityUrl.replace(/\/+$/, "")) + path;
+    async function requestUnityCommand(action, body, timeoutMs) {
+      if (!selectedUnityProject || !selectedUnityProject.id) throw new Error("请先选择 Unity 工程");
+      var projectId = selectedUnityProject.id;
+      var requestId = "unity-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      var deadline = timeoutMs || 3000;
+      try {
+        var response = await sendRelaySocketRequest("unity.command", {
+          id: projectId, requestId: requestId, action: action, body: body || {}, timeoutMs: deadline
+        }, "", deadline + 2000);
+        if (!selectedUnityProject || selectedUnityProject.id !== projectId) throw new Error("Unity 工程已切换，请核对原工程执行结果");
+        if (!response || !response.ok || !response.result) throw new Error(response && response.error || "Unity 返回无效结果");
+        return response.result;
+      } catch (error) {
+        var failure = new Error((error.message || String(error)) + "；projectId=" + projectId + "；requestId=" + requestId + "。结果不明时查询原请求，不要重复提交。");
+        failure.bridgeVersionMismatch = /Unity Bridge version mismatch/.test(error.message || "");
+        throw failure;
+      }
     }
 
     function normalizeSyncRootName(value) {
@@ -2358,10 +2296,9 @@
         return { figmaRootName: figmaRootName, unityRootName: explicitUnityRootName };
       }
 
-      var resp = await fetchWithTimeout(unityEndpoint("/health"), { method: "GET" }, 3000);
-      var data = await resp.json().catch(function () { return {}; });
-      if (!resp.ok || data.connected !== true) {
-        throw new Error(data.error || ("Unity 网关未连接，停止同步：HTTP " + resp.status));
+      var data = await requestUnityCommand("unity.health");
+      if (data.connected !== true) {
+        throw new Error(data.error || "Unity 网关未连接，停止同步");
       }
 
       var prefabPaths = normalizeUnityPrefabPaths(data.currentPrefabPaths || data.selectedPrefabPaths || data.prefabPaths || data.currentPrefabPath || "");
@@ -2445,6 +2382,7 @@
       aiPromptPreviewField.style.display = "";
       readFigmaKeyBtn.disabled = !!pendingFigmaKeyRequestId;
       copyFigmaLinkBtn.disabled = !aiPromptFigmaKeyInput.value.trim();
+      copyFigmaAiContextBtn.disabled = !(lastSelectionData && (lastSelectionData.fileKey || (lastSelectionData.nodes && lastSelectionData.nodes.length)));
       refreshAiPromptPsdFileControls();
       refreshUnityFolderDisplay();
       refreshTemplateCardStatuses();
@@ -2508,6 +2446,98 @@
     }
 
     // 根据 fileKey、文件名和当前定位节点拼出接近 Share 的完整 Figma 链接。
+    function buildFigmaAiContext(selectionInfo) {
+      var info = selectionInfo || {};
+      var nodes = Array.isArray(info.nodes) ? info.nodes : [];
+      var figmaLink = info.fileKey ? buildFigmaShareUrlFromSelection(info) : "";
+      var pluginRoot = relayRuntimePaths && relayRuntimePaths.pluginRoot
+        ? relayRuntimePaths.pluginRoot
+        : "未读取（请先连接 Relay 查询 relay.status）";
+      var skillPath = pluginRoot.indexOf("未读取") === 0
+        ? "未解析绝对路径（请先连接 Relay 查询 relay.status）"
+        : pluginRoot.replace(/[\\/]$/, "") + "/ai/skills/figma-hierarchy-cleanup/SKILL.md";
+      var cleanupClientPath = pluginRoot.indexOf("未读取") === 0
+        ? "未解析绝对路径（请先连接 Relay 查询 relay.status）"
+        : pluginRoot.replace(/[\\/]$/, "") + "/ai/skills/figma-hierarchy-cleanup/scripts/figma_hierarchy_cleanup_cli.py";
+      var prefabSkillPath = pluginRoot.indexOf("未读取") === 0
+        ? "未解析绝对路径（请先连接 Relay 查询 relay.status）"
+        : pluginRoot.replace(/[\\/]$/, "") + "/ai/skills/figma-to-prefab/SKILL.md";
+      var fullImportScriptPath = relayRuntimePaths && relayRuntimePaths.fullImportScriptPath
+        ? relayRuntimePaths.fullImportScriptPath
+        : "未解析绝对路径（请先连接 Relay 查询 relay.status）";
+      var nodeLines = nodes.length ? nodes.map(function (node, index) {
+        return (index + 1) + ". name=" + (node.name || "<未命名>")
+          + "; type=" + (node.type || "NODE")
+          + "; id=" + (node.id || "-")
+          + "; urlNodeId=" + (node.urlNodeId || "-")
+          + "; parentId=" + (node.parentId || "-")
+          + "; path=" + (node.path || "-")
+          + "; size=" + Math.round(Number(node.width || 0)) + "x" + Math.round(Number(node.height || 0));
+      }).join("\n") : "未选中节点（当前定位为页面）";
+      return [
+        "# Figma 操作上下文",
+        "请把这段内容作为当前任务的精确定位上下文。你可以直接使用项目 CLI 或项目 Skill 操作下面的 Figma 目标。",
+        "",
+        "## Figma 定位",
+        "- 分享链接：" + (figmaLink || (aiPromptFigmaKeyInput.value || "未提供")),
+        "- 文件名：" + (info.docName || info.fileName || "未读取"),
+        "- 文件 Key：" + (info.fileKey || "未读取"),
+        "- 页面：" + (info.pageName || "未读取"),
+        "- 页面 ID：" + (info.pageId || "未读取"),
+        "- 选中节点数：" + nodes.length,
+        nodeLines,
+        "",
+        "## 本地操作环境",
+        "- CLI：node dist/cli.js；Relay：figmaRelay",
+        "- Relay 地址：" + (normalizeRelayUrl(relayUrl || relayUrlInput.value || "") || "未配置"),
+        "- Relay 插件根目录：" + pluginRoot,
+        "- Figma 整理 Skill：" + skillPath,
+        "- Figma 整理 CLI 客户端：" + cleanupClientPath,
+        "- Figma 导入 Unity Skill：" + prefabSkillPath,
+        "- Unity 工程文件夹：" + ((selectedUnityProject && selectedUnityProject.path) || "未选择 Unity 工程"),
+        "- Unity 当前目标文件夹：" + (selectedUnityFolder || "未选择 Unity 目标文件夹"),
+        "- Full import 脚本：" + fullImportScriptPath,
+        "",
+        "## 执行约束",
+        "- 使用项目 CLI；独立任务通过 sessions 和 selection 校验 file/page/node，再执行任务。插件窗口任务以 Relay 接单为预检。",
+        "- 需要层级整理或命名时，直接读取并遵守上面的 Figma 整理 Skill，按 analyze -> plan -> apply -> verify 完成。",
+        "- 只操作上述文件、页面和节点；定位校验失败时停止并报告，不要猜测或扩展范围。",
+        "- 这是可执行上下文，不要只给建议；在当前 AI 入口具备 CLI/Skill 能力时直接完成修改并验证结果。",
+        "",
+        "## 用户下一步任务",
+        "请在这段上下文之后继续描述任务:"
+      ].join("\n");
+    }
+
+    async function copyFigmaAiContext() {
+      if (!lastSelectionData) {
+        setAiPromptStatus("当前没有可复制的 Figma 选区上下文。");
+        appendLog("复制给 AI 失败：当前没有 Figma 选区。", true);
+        return;
+      }
+      try {
+        var copied = await copyTextWithFallback(buildFigmaAiContext(lastSelectionData));
+        if (copied) {
+          copyFigmaAiContextBtn.textContent = "已复制给 AI";
+          copyFigmaAiContextBtn.classList.add("copy-success");
+          if (copyFigmaAiContextFeedbackTimer) clearTimeout(copyFigmaAiContextFeedbackTimer);
+          copyFigmaAiContextFeedbackTimer = setTimeout(function () {
+            copyFigmaAiContextBtn.textContent = "复制给 AI";
+            copyFigmaAiContextBtn.classList.remove("copy-success");
+            copyFigmaAiContextFeedbackTimer = null;
+          }, 1800);
+          setAiPromptStatus("Figma 节点上下文已复制，可粘贴到任意 AI 入口继续描述任务。");
+          appendLog("Figma 节点上下文已复制给 AI。");
+        } else {
+          setAiPromptStatus("自动复制不可用，请重试或检查浏览器剪贴板权限。");
+          appendLog("复制给 AI 失败：浏览器未允许剪贴板操作。", true);
+        }
+      } catch (error) {
+        setAiPromptStatus("复制给 AI 失败：" + (error.message || error));
+        appendLog("复制给 AI 失败：" + (error.message || error), true);
+      }
+    }
+
     function buildFigmaShareUrl(result) {
       var fileKey = String(result.fileKey || "").trim();
       var docName = encodeURIComponent(result.docName || "Figma");
@@ -2785,15 +2815,10 @@
     }
 
     async function resolveDroppedPrefabPaths(files) {
-      var resp = await fetchWithTimeout(relayEndpoint("/prefab-to-figma/resolve-dropped"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: files })
-      }, 10000);
-      var data = await parseJsonResponseWithFallback(resp);
-      if (!resp.ok) {
-        throw new Error(data.error || ("HTTP " + resp.status));
-      }
+      if (!selectedUnityProject || !selectedUnityProject.id) throw new Error("请先选择 Unity 工程");
+      var projectId = selectedUnityProject.id;
+      var data = await sendRelaySocketRequest("prefab.resolve-dropped", { files: files, projectId: projectId }, "", 10000);
+      if (!selectedUnityProject || selectedUnityProject.id !== projectId) throw new Error("Unity 工程已切换，忽略旧工程的路径解析结果");
       if (data.conflicts && data.conflicts.length > 0) {
         throw new Error("存在同名 Prefab，无法自动选择：" + data.conflicts.map(function (item) {
           return item.fileName + " -> " + (item.candidates || []).join(", ");
@@ -2934,10 +2959,9 @@
         var fileBase64 = await readFileAsBase64(file);
         setAiPromptStatus("PSD 导入：上传 PSD 并启动任务... " + formatPsdImportContext(psdImportCurrentContext));
 
-        var resp = await fetchWithTimeout(relayEndpoint("/psd-to-figma/import"), {
-          method: "POST",
-          headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({
+        psdImportTaskId = "psd-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        var data = await sendRelaySocketRequest("psd.import.start", {
+            clientRequestId: psdImportTaskId,
             fileName: file.name,
             fileBase64: fileBase64,
             sourceFile: {
@@ -2946,20 +2970,25 @@
             },
             mode: dropMode.mode,
             target: target
-          })
-        }, 30000);
-        var data = await resp.json().catch(function () { return {}; });
-        if (!resp.ok || data.ok === false) {
-          throw new Error(data.error || ("HTTP " + resp.status));
+        }, "", 30000);
+        if (data.ok === false) {
+          throw new Error(data.error || "PSD import rejected");
         }
         psdImportTaskId = data.task && data.task.taskId ? data.task.taskId : "";
         if (!psdImportTaskId) {
           throw new Error("PSD 导入任务未返回 taskId");
         }
         renderPsdImportTaskStatus(data.task);
+        var completion = waitForPsdImportTaskCompletion();
         pollPsdImportTaskStatus();
-        return await waitForPsdImportTaskCompletion();
+        return await completion;
       } catch (error) {
+        if (error && error.relayTransportFailure && psdImportTaskId) {
+          setAiPromptStatus("PSD 提交结果待核对，请勿重复提交；重连后查询原任务。");
+          var pendingCompletion = waitForPsdImportTaskCompletion();
+          if (relaySocketRegistered) pollPsdImportTaskStatus();
+          return await pendingCompletion;
+        }
         psdImportBusy = false;
         clearPsdImportPollTimer();
         finishPsdImportTaskPromise(error);
@@ -3071,16 +3100,25 @@
 
     async function pollPsdImportTaskStatus() {
       if (!psdImportTaskId) return;
+      var subscriptionId = "psd-sub-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      psdImportSubscriptionId = subscriptionId;
       try {
-        var resp = await fetchWithTimeout(relayEndpoint("/psd-to-figma/import/" + encodeURIComponent(psdImportTaskId) + "/status"), {
-          method: "GET",
-          headers: relayRuntimeHeaders()
-        }, 5000);
-        var data = await resp.json().catch(function () { return {}; });
-        if (!resp.ok || data.ok === false) {
-          throw new Error(data.error || ("HTTP " + resp.status));
-        }
-        var task = data.task || {};
+        await sendRelaySocketRequest("psd.import.subscribe", { taskId: psdImportTaskId }, "", 10000, subscriptionId);
+      } catch (error) {
+        if (psdImportSubscriptionId !== subscriptionId) return;
+        setAiPromptStatus("PSD 状态待核对，请勿重复提交：" + (error.message || error));
+      }
+    }
+
+    function handlePsdImportEvent(message) {
+      if (message.subscriptionId !== psdImportSubscriptionId || message.taskId !== psdImportTaskId) return;
+      if (message.error) {
+        setAiPromptStatus("PSD 状态待核对，请勿重复提交：" + message.error);
+        return;
+      }
+      var data = message.result;
+      if (data && data.task) {
+        var task = data.task;
         renderPsdImportTaskStatus(task);
         if (PSD_PREVIEW_TERMINAL_STATUSES.has(task.status)) {
           psdImportBusy = false;
@@ -3106,25 +3144,17 @@
           finishPsdImportTaskPromise(null, task);
           return;
         }
-        if (task.status === "completed" || task.status === "error") {
+        if (task.status === "completed" || task.status === "error" || task.status === "cancelled") {
           psdImportBusy = false;
           clearPsdImportPollTimer();
           activePsdIncrementalPreview = null;
-          if (task.status === "completed") {
+          if (task.status === "completed" || task.status === "cancelled") {
             finishPsdImportTaskPromise(null, task);
           } else {
             finishPsdImportTaskPromise(new Error(task.error || "PSD 导入失败"));
           }
           return;
         }
-        psdImportPollTimer = setTimeout(pollPsdImportTaskStatus, 1000);
-      } catch (error) {
-        psdImportBusy = false;
-        clearPsdImportPollTimer();
-        finishPsdImportTaskPromise(error);
-        var message = error && error.message ? error.message : String(error);
-        setAiPromptStatus("PSD 导入状态读取失败：" + message);
-        appendLog("PSD 导入状态读取失败：" + message, true);
       }
     }
 
@@ -3331,24 +3361,23 @@
       adoptPsdBaselineBtn.disabled = true;
       cancelPsdIncrementalBtn.disabled = true;
       try {
-        var response = await fetchWithTimeout(
-          relayEndpoint("/psd-to-figma/import/" + encodeURIComponent(active.taskId) + "/adopt-baseline"),
-          {
-            method: "POST",
-            headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify({ baselineFingerprint: active.baselineFingerprint })
-          },
-          30000
-        );
-        var data = await response.json().catch(function () { return {}; });
-        if (!response.ok || data.ok === false) {
-          throw new Error(data.error || ("HTTP " + response.status));
+        var data = await sendRelaySocketRequest("psd.import.adopt-baseline", {
+          taskId: active.taskId, baselineFingerprint: active.baselineFingerprint
+        }, "", 30000);
+        if (data.ok === false) {
+          throw new Error(data.error || "PSD baseline adoption rejected");
         }
         psdIncrementalDialog.hidden = true;
         psdImportBusy = true;
         renderPsdImportTaskStatus(data.task);
         pollPsdImportTaskStatus();
       } catch (error) {
+        if (error && error.relayTransportFailure) {
+          psdImportBusy = true;
+          psdIncrementalDialog.hidden = true;
+          pollPsdImportTaskStatus();
+          return;
+        }
         var message = error && error.message ? error.message : String(error);
         psdIncrementalDialogSummary.textContent += "\n基线认领失败：" + message;
         adoptPsdBaselineBtn.disabled = false;
@@ -3364,20 +3393,23 @@
       confirmPsdIncrementalBtn.disabled = true;
       cancelPsdIncrementalBtn.disabled = true;
       try {
-        var resp = await fetchWithTimeout(relayEndpoint("/psd-to-figma/import/" + encodeURIComponent(active.taskId) + "/apply"), {
-          method: "POST",
-          headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ baselineFingerprint: active.baselineFingerprint })
-        }, 30000);
-        var data = await resp.json().catch(function () { return {}; });
-        if (!resp.ok || data.ok === false) {
-          throw new Error(data.error || ("HTTP " + resp.status));
+        var data = await sendRelaySocketRequest("psd.import.apply", {
+          taskId: active.taskId, baselineFingerprint: active.baselineFingerprint
+        }, "", 30000);
+        if (data.ok === false) {
+          throw new Error(data.error || "PSD apply rejected");
         }
         psdIncrementalDialog.hidden = true;
         psdImportBusy = true;
         renderPsdImportTaskStatus(data.task);
         pollPsdImportTaskStatus();
       } catch (error) {
+        if (error && error.relayTransportFailure) {
+          psdImportBusy = true;
+          psdIncrementalDialog.hidden = true;
+          pollPsdImportTaskStatus();
+          return;
+        }
         var message = error && error.message ? error.message : String(error);
         psdIncrementalDialogSummary.textContent += "\n应用失败：" + message;
         confirmPsdIncrementalBtn.disabled = false;
@@ -3406,8 +3438,8 @@
           await refreshRelayRuntimePaths();
           setAiPromptStatus("正在读取 Unity 当前图片目标...");
           var folder = await fetchSelectedUnityFolder();
-          if (!folder || selectedUnityImageTargetMode === "replaceImage") {
-            throw new Error("请先在 Unity Project 中选择图片导入目标文件夹，不能选择单个图片资源。");
+          if (!folder || selectedUnityImageTargetMode === "replaceImage" || !selectedUnityObjectIsFolder || !selectedUnityFolderIsEmpty) {
+            throw new Error("请先在 Unity Project 中选择一个空的 Assets 文件夹作为导入目标。");
           }
         }
         if (aiPromptTemplateSelect.value === "syncToUnity") {
@@ -3573,9 +3605,8 @@
 
     async function refreshCleanupProviders() {
       try {
-        var response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/providers", {}, 5000);
-        var result = await response.json();
-        if (!response.ok || !result.ok || !Array.isArray(result.providers)) throw new Error(result.error || "Provider 列表无效");
+        var result = await requestAiControlWithRetry("ai.providers", {}, "", null, true);
+        if (!result.ok || !Array.isArray(result.providers)) throw new Error(result.error || "Provider 列表无效");
         cleanupProviders = result.providers;
         var selected = cleanupPreferredProviderId || cleanupProviderSelect.value || "codex";
         cleanupProviderSelect.textContent = "";
@@ -3643,7 +3674,7 @@
 
     async function refreshAiRunner() {
       try {
-        var result = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/status", {}, 5000).then(function (r) { return r.json(); });
+        var result = await requestAiControlWithRetry("ai.status", {}, "", null, true);
         var config = result.config || {};
         aiRunnerSelect.value = config.runner || "codex";
         aiRunnerStatusEl.textContent = result.available ? "当前 AI：" + aiRunnerSelect.options[aiRunnerSelect.selectedIndex].text : "当前 AI 不可用。";
@@ -3651,142 +3682,32 @@
     }
 
     async function writeAiRunnerConfigWithLiveSessionRetry(payload, operation) {
-      var maxAttempts = 4;
-      var requestPayload = { runner: payload.runner, sessionId: relaySessionId };
-      var registrationReady = await waitForRelaySocketRegistration(5000);
-      operation.step("plugin-session-registration", registrationReady ? "Figma 插件会话已完成 Relay 注册" : "等待 Figma 插件会话注册超时，将继续有限重试", {
-        runner: requestPayload.runner,
-        sessionId: requestPayload.sessionId,
-        socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
-        socketRegistered: relaySocketRegistered
-      }, registrationReady ? "info" : "warn");
-      for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        operation.step("config-attempt", "提交本机 AI 配置", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          runner: requestPayload.runner,
-          sessionId: requestPayload.sessionId,
-          socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
-          socketRegistered: relaySocketRegistered
-        });
-        var response;
-        try {
-          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(requestPayload)
-          }, 6000);
-        } catch (networkError) {
-          operation.step("config-network-retry", "提交本机 AI 配置时网络连接失败，将重试同一配置请求", {
-            attempt: attempt,
-            maxAttempts: maxAttempts,
-            runner: requestPayload.runner,
-            sessionId: requestPayload.sessionId,
-            socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
-            socketRegistered: relaySocketRegistered,
-            error: networkError && networkError.message ? networkError.message : String(networkError)
-          }, "warn");
-          if (attempt >= maxAttempts) throw networkError;
-          await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
-          continue;
-        }
-        var result = await response.json().catch(function () { return {}; });
-        if (response.ok && result.ok) return result;
-        var error = new Error(result.error || "本机 AI 请求失败（HTTP " + response.status + "）");
-        error.status = response.status;
-        if (response.status !== 403 || attempt >= maxAttempts) throw error;
-        operation.step("plugin-session-retry", "Figma 插件会话注册尚未生效，稍后重试同一配置请求", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          runner: requestPayload.runner,
-          sessionId: requestPayload.sessionId,
-          status: response.status
-        }, "warn");
-        await new Promise(function (resolve) { setTimeout(resolve, 250); });
-      }
-      throw new Error("本机 AI 配置重试已耗尽");
+      return requestAiControlWithRetry("ai.config", { runner: payload.runner, sessionId: relaySessionId }, "", operation, true);
     }
 
-    async function postIdempotentAiStartWithRetry(endpoint, payload, operation) {
-      var maxAttempts = 4;
-      var registrationReady = await waitForRelaySocketRegistration(5000);
-      operation.step("plugin-session-registration", registrationReady ? "Figma 插件会话已完成 Relay 注册" : "等待 Figma 插件会话注册超时，将继续有限重试", {
-        endpoint: endpoint,
-        clientRequestId: payload.clientRequestId,
-        sessionId: payload.sessionId,
-        socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
-        socketRegistered: relaySocketRegistered
-      }, registrationReady ? "info" : "warn");
-      if (registrationReady) {
-        operation.step("start-websocket-attempt", "通过已注册 WebSocket 提交 AI 启动请求", {
-          clientRequestId: payload.clientRequestId,
-          sessionId: payload.sessionId,
-          action: "ai.run.start"
-        });
-        try {
-          var socketResult = await sendRelaySocketRequest("ai.run.start", payload, "", 12000);
-          if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket AI 启动失败");
-          operation.step("start-websocket-succeeded", "AI 启动请求已由 Relay WebSocket 接收", {
-            clientRequestId: payload.clientRequestId,
-            runId: socketResult.runId || ""
-          });
-          return socketResult;
-        } catch (socketError) {
-          operation.step("start-websocket-fallback", "WebSocket AI 启动未完成，降级为有限 HTTP 重试", {
-            clientRequestId: payload.clientRequestId,
-            sessionId: payload.sessionId,
-            error: socketError && socketError.message ? socketError.message : String(socketError)
-          }, "warn");
-        }
-      }
+    async function requestAiControlWithRetry(action, payload, capabilityToken, operation, idempotent) {
+      var maxAttempts = idempotent ? 4 : 1;
       for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        operation.step("start-attempt", "提交 AI 启动请求", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          clientRequestId: payload.clientRequestId,
-          sessionId: payload.sessionId,
-          providerId: payload.providerId || payload.runner,
-          socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
-          socketRegistered: relaySocketRegistered
-        });
-        var response;
         try {
-          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          }, 8000);
-        } catch (networkError) {
-          operation.step("start-network-retry", "启动 AI 时网络连接失败，将使用同一 clientRequestId 重试", {
-            attempt: attempt,
-            maxAttempts: maxAttempts,
-            clientRequestId: payload.clientRequestId,
-            sessionId: payload.sessionId,
-            socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
-            socketRegistered: relaySocketRegistered,
-            error: networkError && networkError.message ? networkError.message : String(networkError)
-          }, "warn");
-          if (attempt >= maxAttempts) throw networkError;
+          if (!await waitForRelaySocketRegistration(5000)) {
+            var unavailable = new Error("Relay WebSocket registration timed out.");
+            unavailable.relayTransportFailure = true;
+            throw unavailable;
+          }
+          operation?.step("websocket-request", "通过 WebSocket 提交 AI 请求", { action: action, attempt: attempt, clientRequestId: payload.clientRequestId });
+          var result = await sendRelaySocketRequest(action, payload, capabilityToken, 12000);
+          if (!result || !result.ok) throw Object.assign(new Error(result && result.error || "AI 请求失败"), { relayTransportFailure: false });
+          return result;
+        } catch (error) {
+          if (error.relayTransportFailure !== true || attempt >= maxAttempts) throw error;
+          operation?.step("websocket-retry", "连接中断，复用同一请求重试", { action: action, attempt: attempt, clientRequestId: payload.clientRequestId }, "warn");
           await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
-          continue;
         }
-        var result = await response.json().catch(function () { return {}; });
-        if (response.ok && result.ok) return result;
-        var error = new Error(result.error || "启动失败（HTTP " + response.status + "）");
-        error.status = response.status;
-        var retryableStatus = response.status === 403 || response.status === 502 || response.status === 503;
-        if (!retryableStatus || attempt >= maxAttempts) throw error;
-        operation.step("start-http-retry", "Relay 暂时无法接受 AI 启动请求，将使用同一 clientRequestId 重试", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          clientRequestId: payload.clientRequestId,
-          sessionId: payload.sessionId,
-          status: response.status,
-          error: error.message
-        }, "warn");
-        await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
       }
-      throw new Error("AI 启动请求重试已耗尽");
+    }
+
+    async function postIdempotentAiStartWithRetry(payload, operation) {
+      return requestAiControlWithRetry("ai.run.start", payload, "", operation, payload.template === "cleanup");
     }
 
     async function selectAiRunner(operation) {
@@ -3822,54 +3743,8 @@
     }
 
     async function postAiTerminalWithLiveSessionRetry(payload, operation) {
-      var maxAttempts = 3;
-      var registrationReady = await waitForRelaySocketRegistration(5000);
-      operation.step("plugin-session-registration", registrationReady ? "Figma 插件会话已完成 Relay 注册" : "等待 Figma 插件会话注册超时，将继续有限重试", {
-        sessionId: payload.sessionId,
-        runner: payload.runner,
-        socketOpen: Boolean(relaySocket && relaySocket.readyState === WebSocket.OPEN),
-        socketRegistered: relaySocketRegistered
-      }, registrationReady ? "info" : "warn");
-      for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        operation.step("terminal-request", "请求打开本地 AI 交互终端", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          template: payload.template,
-          runner: payload.runner,
-          sessionId: payload.sessionId,
-          promptChars: payload.prompt.length
-        });
-        var response;
-        try {
-          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/ai-runner/open-terminal", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          }, 8000);
-        } catch (networkError) {
-          if (attempt >= maxAttempts) throw networkError;
-          operation.step("terminal-network-retry", "请求打开终端时网络连接失败，将重试", {
-            attempt: attempt,
-            maxAttempts: maxAttempts,
-            error: networkError && networkError.message ? networkError.message : String(networkError)
-          }, "warn");
-          await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
-          continue;
-        }
-        var result = await response.json().catch(function () { return {}; });
-        if (response.ok && result.ok) return result;
-        var error = new Error(result.error || "打开终端失败（HTTP " + response.status + "）");
-        error.status = response.status;
-        if (![403, 502, 503].includes(response.status) || attempt >= maxAttempts) throw error;
-        operation.step("terminal-http-retry", "Relay 暂时无法打开终端，将重试同一请求", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          status: response.status,
-          error: error.message
-        }, "warn");
-        await new Promise(function (resolve) { setTimeout(resolve, 400 * attempt); });
-      }
-      throw new Error("打开终端请求重试已耗尽");
+      // Opening a terminal is not idempotent: a lost acknowledgement must not launch another.
+      return requestAiControlWithRetry("ai.open-terminal", payload, "", operation, false);
     }
 
     async function openAiTerminal() {
@@ -3925,7 +3800,6 @@
       pendingAutoAiTemplate = "";
       var taskLabel = aiTemplateTaskLabel(template);
       var cleanupProviderId = cleanupProviderSelect.value;
-      var endpoint = "/ai-runner/run-prompt";
       var clientRequestId = "ai-run-" + Date.now() + "-" + Math.random().toString(16).slice(2);
       var payload = {
         template: template,
@@ -3943,7 +3817,7 @@
       var startOperation = uiLogger.startOperation("ai.start-request", "提交 AI 启动请求", {
         data: { template: template, providerId: payload.providerId || payload.runner, runner: payload.runner, sessionId: relaySessionId, clientRequestId: clientRequestId }
       });
-      postIdempotentAiStartWithRetry(endpoint, payload, startOperation)
+      postIdempotentAiStartWithRetry(payload, startOperation)
         .then(function (result) {
           startOperation.succeed("AI 启动请求已接受", {
             runId: result.runId,
@@ -3951,7 +3825,7 @@
             runner: result.runner || payload.runner,
             phase: result.phase || "analysis"
           });
-          activeAiCleanupRun = { runId: result.runId, capabilityToken: result.capabilityToken, runner: result.runner || aiRunnerSelect.value, template: template, status: "starting", phase: result.phase || "analysis", planReady: false, planSummary: null, sessionAvailable: false, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "", clientRequestId: clientRequestId };
+          activeAiCleanupRun = { runId: result.runId, capabilityToken: result.capabilityToken, runner: result.runner || aiRunnerSelect.value, template: template, cleanupSnapshotRootNodeId: result.rootNodeId || (selection && selection.rootNodeId) || "", status: "starting", phase: result.phase || "analysis", planReady: false, planSummary: null, sessionAvailable: false, lastSequence: 0, pollFailures: 0, startedAt: new Date().toISOString(), lastOutputAt: "", clientRequestId: clientRequestId };
           activeAiCleanupOperation = uiLogger.startOperation(template === "cleanup" ? "ai.cleanup-conversation" : "ai.run", template === "cleanup" ? "AI 整理对话已启动" : "AI 任务已启动", {
             operationId: result.runId,
             data: { template: template, providerId: template === "cleanup" ? cleanupProviderId : aiRunnerSelect.value, conversation: template === "cleanup", writeAuthorised: false }
@@ -3993,10 +3867,11 @@
     }
 
     function scheduleAiCleanupPoll(delayMs) {
-      clearAiCleanupPollTimer();
-      if (!activeAiCleanupRun) return;
-      var boundedDelayMs = Math.max(1000, Math.min(10000, Number(delayMs) || 4000));
-      aiCleanupPollTimer = setTimeout(pollAiCleanupRun, boundedDelayMs);
+      if (aiCleanupPollTimer) clearTimeout(aiCleanupPollTimer);
+      aiCleanupPollTimer = null;
+      if (!activeAiCleanupRun || activeAiCleanupRun.subscriptionId) return;
+      if (delayMs) aiCleanupPollTimer = setTimeout(pollAiCleanupRun, Math.max(1000, Math.min(10000, delayMs)));
+      else pollAiCleanupRun();
     }
 
     function applyCleanupRunView(run, result) {
@@ -4015,51 +3890,38 @@
       return status === 401 || status === 403 || status === 404 || /unknown run or invalid capability/i.test(message);
     }
 
-    function getAiRunViewWithSocketFallback(run, isCleanup) {
-      var endpoint = isCleanup ? "/cleanup/runs/" : "/ai-runner/runs/";
-      var action = isCleanup ? "cleanup.run.get" : "ai.run.get";
-      var readOverHttp = function () {
-        return fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint + encodeURIComponent(run.runId) + "?afterSequence=" + run.lastSequence, {
-          headers: { "X-AI-Run-Capability": run.capabilityToken }
-        }, 5000);
-      };
-      if (!relaySocketRegistered || !relaySocket || relaySocket.readyState !== WebSocket.OPEN) return readOverHttp();
-      return sendRelaySocketRequest(action, {
-        runId: run.runId,
-        afterSequence: run.lastSequence
-      }, run.capabilityToken, 6500).then(function (result) {
-        if (!result || !result.ok) throw new Error((result && result.error) || "WebSocket status request failed");
-        return {
-          ok: true,
-          status: 200,
-          json: function () { return Promise.resolve(result); }
-        };
-      }).catch(function (socketError) {
-        activeAiCleanupOperation?.step("poll-websocket-fallback", "WebSocket 状态读取失败，降级为 HTTP 轮询", {
-          runId: run.runId,
-          action: action,
-          error: socketError && socketError.message ? socketError.message : String(socketError)
-        }, "warn");
-        return readOverHttp();
-      });
+    function unsubscribeAiRun(run) {
+      if (!run || !run.subscriptionId) return;
+      run.subscriptionId = null;
+      sendRelaySocketRequest(isTransactionCleanupRun(run) ? "cleanup.run.unsubscribe" : "ai.run.unsubscribe", { runId: run.runId }, run.capabilityToken, 3000).catch(function () {});
     }
 
     function pollAiCleanupRun() {
-      if (!activeAiCleanupRun) return;
       var currentRun = activeAiCleanupRun;
-      var taskLabel = aiTemplateTaskLabel(currentRun.template);
+      if (!currentRun || currentRun.subscriptionId || !relaySocketRegistered) return;
+      var subscriptionId = "ai-view-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      currentRun.subscriptionId = subscriptionId;
+      var action = isTransactionCleanupRun(currentRun) ? "cleanup.run.subscribe" : "ai.run.subscribe";
+      sendRelaySocketRequest(action, { runId: currentRun.runId, afterSequence: currentRun.lastSequence }, currentRun.capabilityToken, 12000, subscriptionId)
+        .catch(function (error) {
+          if (currentRun.subscriptionId !== subscriptionId) return;
+          currentRun.subscriptionId = null;
+          handleAiRunError(currentRun, error);
+        });
+    }
+
+    function handleAiRunEvent(message) {
+      var currentRun = activeAiCleanupRun;
+      if (!currentRun || message.runId !== currentRun.runId || message.subscriptionId !== currentRun.subscriptionId) return;
+      if (message.error) { handleAiRunError(currentRun, new Error(message.error)); return; }
+      if (!message.result || message.result.runId !== currentRun.runId) return;
+      applyAiRunView(currentRun, message.result);
+    }
+
+    function applyAiRunView(currentRun, result) {
       var isCleanup = isTransactionCleanupRun(currentRun);
-      var endpoint = isCleanup ? "/cleanup/runs/" : "/ai-runner/runs/";
-      getAiRunViewWithSocketFallback(currentRun, isCleanup)
-        .then(function (response) { return response.json().then(function (result) {
-          if (!response.ok || !result.ok) {
-            var error = new Error(result.error || "状态读取失败");
-            error.status = response.status;
-            throw error;
-          }
-          return result;
-        }); })
-        .then(function (result) {
+      var taskLabel = aiTemplateTaskLabel(currentRun.template);
+
           if (!activeAiCleanupRun || activeAiCleanupRun.runId !== currentRun.runId) return;
           currentRun.pollFailures = 0;
           if (isCleanup) {
@@ -4077,10 +3939,11 @@
           }
           appendAiExecutionOutput(result.output);
           refreshAiExecutionControls();
+          // The server pages output; retain the subscription until all final output is delivered.
+          if (Number(result.nextSequence) > currentRun.lastSequence + 1) return;
           if (isCleanup && cleanupRunIsActive(currentRun.state)) {
             activeAiCleanupOperation?.step("poll", "AI 整理进度更新", { state: currentRun.state });
             setAiPromptStatus(taskLabel + "正在" + cleanupRunStateText(currentRun.state) + "。\n" + currentRun.runId);
-            scheduleAiCleanupPoll();
             return;
           }
           if (isCleanup && currentRun.state === "awaiting_component_confirmation") {
@@ -4093,7 +3956,6 @@
           }
           if (!isCleanup && (result.status === "running" || result.status === "starting")) {
             setAiPromptStatus(taskLabel + "正在执行；详情见“AI 执行”页。\n" + currentRun.runId);
-            scheduleAiCleanupPoll();
             return;
           }
           clearAiCleanupPollTimer();
@@ -4141,8 +4003,13 @@
             activeAiCleanupOperation = null;
             setAiPromptStatus(taskLabel + "失败，请查看“AI 执行”页日志。");
           }
-        })
-        .catch(function (error) {
+    }
+
+    function handleAiRunError(currentRun, error) {
+      var isCleanup = isTransactionCleanupRun(currentRun);
+      var taskLabel = aiTemplateTaskLabel(currentRun.template);
+      unsubscribeAiRun(currentRun);
+
           if (!activeAiCleanupRun || activeAiCleanupRun.runId !== currentRun.runId) return;
           if (isTerminalAiRunPollError(error)) {
             var terminalMessage = error.message || String(error);
@@ -4173,36 +4040,13 @@
             }, "warn");
           }
           scheduleAiCleanupPoll(aiCleanupPollRetryDelayMs(currentRun.pollFailures));
-        });
     }
 
     async function confirmCleanupComponentSetsWithSocketFallback(run, payload, operation) {
-      if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-        try {
-          var socketResult = await sendRelaySocketRequest("cleanup.run.confirm-component-sets", {
-            runId: run.runId,
-            satisfied: payload.satisfied === true,
-            feedback: payload.feedback
-          }, run.capabilityToken, 10000);
-          if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket cleanup confirmation failed");
-          operation?.step("component-confirmation-websocket-succeeded", "最终满意度已通过 Relay WebSocket 提交", {
-            runId: run.runId,
-            satisfied: payload.satisfied === true
-          });
-          return { ok: true, status: 200, json: function () { return Promise.resolve(socketResult); } };
-        } catch (socketError) {
-          operation?.step("component-confirmation-websocket-fallback", "WebSocket 最终满意度提交失败，降级为 HTTP", {
-            runId: run.runId,
-            satisfied: payload.satisfied === true,
-            error: socketError && socketError.message ? socketError.message : String(socketError)
-          }, "warn");
-        }
-      }
-      return fetchWithTimeout(normalizeRelayUrl(relayUrl) + "/cleanup/runs/" + encodeURIComponent(run.runId) + "/confirm-component-sets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-        body: JSON.stringify(payload)
-      }, 8000);
+      var result = await requestAiControlWithRetry("cleanup.run.confirm-component-sets", {
+        runId: run.runId, satisfied: payload.satisfied === true, feedback: payload.feedback
+      }, run.capabilityToken, operation, false);
+      return { ok: true, status: 200, json: function () { return Promise.resolve(result); } };
     }
 
     async function recordCleanupSatisfaction(satisfied) {
@@ -4276,88 +4120,17 @@
         parent.postMessage({
           pluginMessage: {
             type: "QUERY_CLEANUP_SNAPSHOT",
-            requestId: requestId
+            requestId: requestId,
+            rootNodeId: run.cleanupSnapshotRootNodeId || ""
           }
         }, "*");
       });
     }
 
     async function postIdempotentAiFollowupWithRetry(run, text, clientRequestId, operation, cleanupSnapshot) {
-      var maxAttempts = 4;
-      var endpoint = "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/followup";
-      if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-        operation.step("followup-websocket-attempt", "通过已注册 WebSocket 提交 AI 后续消息", {
-          runId: run.runId,
-          clientRequestId: clientRequestId,
-          inputChars: text.length,
-          action: "ai.run.followup"
-        });
-        try {
-          var socketResult = await sendRelaySocketRequest("ai.run.followup", {
-            runId: run.runId,
-            text: text,
-            clientRequestId: clientRequestId,
-            cleanupSnapshot: cleanupSnapshot
-          }, run.capabilityToken, 12000);
-          if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket AI follow-up failed");
-          operation.step("followup-websocket-succeeded", "AI 后续消息已由 Relay WebSocket 接收", {
-            runId: run.runId,
-            clientRequestId: clientRequestId,
-            status: socketResult.status || ""
-          });
-          return socketResult;
-        } catch (socketError) {
-          operation.step("followup-websocket-fallback", "WebSocket AI 后续消息未完成，降级为有限 HTTP 重试", {
-            runId: run.runId,
-            clientRequestId: clientRequestId,
-            error: socketError && socketError.message ? socketError.message : String(socketError)
-          }, "warn");
-        }
-      }
-      for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        operation.step("followup-attempt", "提交 AI 后续消息", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          runId: run.runId,
-          clientRequestId: clientRequestId,
-          inputChars: text.length
-        });
-        var response;
-        try {
-          response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-            body: JSON.stringify({ text: text, clientRequestId: clientRequestId, cleanupSnapshot: cleanupSnapshot })
-          }, 8000);
-        } catch (networkError) {
-          operation.step("followup-network-retry", "发送 AI 后续消息时网络连接失败，将复用同一请求编号重试", {
-            attempt: attempt,
-            maxAttempts: maxAttempts,
-            runId: run.runId,
-            clientRequestId: clientRequestId,
-            error: networkError && networkError.message ? networkError.message : String(networkError)
-          }, "warn");
-          if (attempt >= maxAttempts) throw networkError;
-          await new Promise(function (resolve) { setTimeout(resolve, 500 * attempt); });
-          continue;
-        }
-        var result = await response.json().catch(function () { return {}; });
-        if (response.ok && result.ok) return result;
-        var error = new Error(result.error || "继续执行失败（HTTP " + response.status + "）");
-        error.status = response.status;
-        var retryableStatus = response.status === 502 || response.status === 503;
-        if (!retryableStatus || attempt >= maxAttempts) throw error;
-        operation.step("followup-http-retry", "Relay 暂时无法接受 AI 后续消息，将复用同一请求编号重试", {
-          attempt: attempt,
-          maxAttempts: maxAttempts,
-          runId: run.runId,
-          clientRequestId: clientRequestId,
-          status: response.status,
-          error: error.message
-        }, "warn");
-        await new Promise(function (resolve) { setTimeout(resolve, 500 * attempt); });
-      }
-      throw new Error("AI 后续消息重试已耗尽");
+      return requestAiControlWithRetry("ai.run.followup", {
+        runId: run.runId, text: text, clientRequestId: clientRequestId, cleanupSnapshot: cleanupSnapshot
+      }, run.capabilityToken, operation, true);
     }
 
     async function continueAiCleanup() {
@@ -4442,36 +4215,9 @@
       if (!run || (isCleanup ? !cleanupRunCanBeCancelled(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
       try {
         aiExecutionStopBtn.disabled = true;
-        var endpoint = isCleanup
-          ? "/cleanup/runs/" + encodeURIComponent(run.runId) + "/cancel"
-          : "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/stop";
-        var response;
-        if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-          try {
-            var socketResult = await sendRelaySocketRequest(isCleanup ? "cleanup.run.cancel" : "ai.run.stop", {
-              runId: run.runId
-            }, run.capabilityToken, 8000);
-            if (!socketResult || !socketResult.ok) throw new Error((socketResult && socketResult.error) || "WebSocket AI stop failed");
-            response = { ok: true, status: 200, json: function () { return Promise.resolve(socketResult); } };
-            activeAiCleanupOperation?.step("stop-websocket-succeeded", "AI 停止请求已由 Relay WebSocket 接收", {
-              runId: run.runId,
-              isCleanup: isCleanup
-            });
-          } catch (socketError) {
-            activeAiCleanupOperation?.step("stop-websocket-fallback", "WebSocket 停止请求失败，降级为 HTTP", {
-              runId: run.runId,
-              isCleanup: isCleanup,
-              error: socketError && socketError.message ? socketError.message : String(socketError)
-            }, "warn");
-          }
-        }
-        if (!response) response = await fetchWithTimeout(normalizeRelayUrl(relayUrl) + endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-          body: JSON.stringify({ sessionId: relaySessionId })
-        }, 8000);
-        var result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || "停止失败");
+        var result = await requestAiControlWithRetry(isCleanup ? "cleanup.run.cancel" : "ai.run.stop", {
+          runId: run.runId
+        }, run.capabilityToken, activeAiCleanupOperation, false);
         if (isCleanup) applyCleanupRunView(run, result);
         else run.status = result.status || "cancelled";
         scheduleAiCleanupPoll();
@@ -4487,19 +4233,9 @@
       var isCleanup = isTransactionCleanupRun(run);
       if (aiCleanupUnloadStopSent || !run || (isCleanup ? !cleanupRunCanBeCancelled(run.state) : (run.status !== "starting" && run.status !== "running"))) return;
       aiCleanupUnloadStopSent = true;
-      try {
-        var endpoint = isCleanup
-          ? "/cleanup/runs/" + encodeURIComponent(run.runId) + "/cancel"
-          : "/ai-runner/runs/" + encodeURIComponent(run.runId) + "/stop";
-        fetch(normalizeRelayUrl(relayUrl) + endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-AI-Run-Capability": run.capabilityToken },
-          body: JSON.stringify({ sessionId: relaySessionId }),
-          keepalive: true
-        });
-      } catch (_) {
-        // WebSocket disconnect is the server-side fallback.
-      }
+      sendRelaySocketRequest(isCleanup ? "cleanup.run.cancel" : "ai.run.stop", { runId: run.runId }, run.capabilityToken, 1000).catch(function () {
+        // Relay stops associated AI runs after the disconnected session grace period.
+      });
     }
 
     function requestAiRun() {
@@ -4570,7 +4306,6 @@
           } catch (error) {
             appendLog("Relay 层级快照回传失败：" + (error.message || error), true);
           }
-          scheduleNextPoll(500);
           processRelaySocketQueue();
         })();
         return;
@@ -4638,9 +4373,9 @@
 
     // BEGIN_AI_PROMPT_TEMPLATES
     const AiPromptTemplates = {
-      "cleanup": "使用 Relay 内置整理技能：$figma-hierarchy-cleanup-mcp。\n\n不要使用 `Skill()` 或 `ToolSearch` 查找该技能。直接读取项目中的 `ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md`，并按技能的 `analyze → plan → apply` 标准流程执行；标准入口脚本为 `ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_hierarchy_cleanup_mcp_client.py`。此技能为项目自定义技能，不在 `.claude/skills/` 中。\n\n整理当前选中的 Figma 节点。\n\n目标选区：\n\n- {{selectionBlock}}\n\nRelay 会在启动 AI 前生成唯一的执行规则和权威快照；此模板只表达用户的初始整理意图，不能再包含执行规则、JSON 示例或确认流程。",
-      "componentVariants": "请使用 $figma-hierarchy-cleanup-mcp，根据我当前选中的多个 Figma 节点，规划 ComponentSet 变体。\n\n{{selectionBlock}}\n\n重要前提：\n- 当前选中的节点可以是多个模板节点。\n- 这些节点不一定是根节点，也不一定同父级。\n- 不要假设它们都是同级列表项或同级 Tab 项。\n\n目标：\n- 先 query-selection，回显当前选中节点的 name/type/count/nodePath。\n- 再分析相关父级结构，判断这些选中节点应该作为手动 ComponentSet 的多个变体来源，还是跨父级节点组 ComponentSet 的一组或多组来源。\n- 如果适合手动选择 ComponentSet 流程，请规划 component-set --from-selection；该流程默认只创建 ComponentSet，不删除、不移动、不替换源节点。\n- 如果目标是替换原有重复项，必须先 analyze 相关父级或目标容器，明确哪些同类节点要被替换，再规划 component-set-from-node-groups 或其它合适流程。\n- 如果适合跨父级节点组流程，请规划 component-set-from-node-groups，并显式列出每组节点的名称、类型和 nodePath；实际写入以 MCP Relay 当前选区和分析结果为准。\n- 如果变体值、分组关系或替换范围无法从节点名和结构可靠推断，必须先问我，不要猜。\n\n执行规则：\n- 只先给计划，不要直接执行。\n- 等我确认后再调用 MCP Relay 写入。\n- 只有计划明确要替换原有重复项时，才设置 replaceOriginalsWithInstances=true。\n- 发生替换时默认 createBackup=true，源节点必须备份到隐藏备份 Frame。\n- 禁止删除原节点。\n- 禁止 flatten、detach instance、拆散 __slice_ / jiugong / nine-slice 节点。\n\n验收要求：\n- 执行后验证 ComponentSet 创建成功。\n- 如果计划包含替换，验证原节点已备份、实例替换成功、bounds 不漂移。\n- 如果计划只是 component-set --from-selection，验证源选中节点仍保留且未被移动。\n- 验证九宫切片在变体内被保留。\n- 重新 analyze 目标结构，确认替换后的节点数量、顺序和 Instance 状态符合计划。",
-      "unity": "请将当前 Figma 节点快速直接导入 Unity。\n\n使用项目导入技能：$figma-to-prefab。\n\n不要使用 `Skill()` 或 `ToolSearch` 查找该技能。直接读取项目中的 `ai/skills/figma-to-prefab/SKILL.md`，并使用标准入口 `ai/skills/figma-to-prefab/scripts/figma_to_prefab_mcp_client.py` 与 `ai/skills/figma-to-prefab/scripts/run_full_import.py`。此技能为项目自定义技能，不在 `.claude/skills/` 中。\n\n这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。\n\nfigma 路径:\n- {{selectionBlock}}\n\n目标 Unity 工程：{{unityProjectPath}}\n\n执行边界：\n- 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。\n- 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 MCP 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。\n- 默认新建且不覆盖：`{{unityImageTargetFolder}}/FigmaImports/<规范化根节点名>/<规范化根节点名>.prefab`，图片写入同目录的 `Images/`。不得搜索或猜测业务 Prefab 路径。\n- 不整理 Figma 层级、不写回 Figma；直接导出当前节点。不要因为层级不完美而开启 cleanup 流程。\n- 不修改 C#、场景、Addressables、既有 Prefab、既有资源或既有 `.meta`。\n\n固定流水线（必须执行，不要自行拆解或增加检查）：\n1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。\n2. 立即执行唯一的导入命令：`python \"ai/skills/figma-to-prefab/scripts/run_full_import.py\" --unity-project \"{{unityProjectPath}}\" --figma-url \"https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>\" --file-key <fileKey> --infer-formal-names --formal-output-dir \"{{unityImageTargetFolder}}/FigmaImports\" --target-prefab \"Assets/FigmaImports/Pending.prefab\" --target-image-dir \"Assets/FigmaImports/Images\" --yes --wall-clock-report \".tmp/figma_to_prefab_wall_clock.json\"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。\n3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。\n\n禁止项：\n- 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。\n- 不要调用 `Skill`、`ToolSearch`、`Glob` 或 `Grep`。唯一允许的直接读取是上面指定的 `ai/skills/figma-to-prefab/SKILL.md`；不要手工拆开 MCP、图片处理、uLoop 或验证命令。\n- 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。\n- 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。\n\n完成时只报告：生成的 Prefab/图片路径、导入验证结果、冲突或 blockingErrors（如有）。"
+      "cleanup": "使用 Relay 内置整理技能：$figma-hierarchy-cleanup。\n\n不要使用 `Skill()` 或 `ToolSearch` 查找该技能。直接读取项目中的 `ai/skills/figma-hierarchy-cleanup/SKILL.md`，并按技能的 `analyze → plan → apply` 标准流程执行；通过项目 CLI 提交任务并使用 task-wait 等待结果。\n\n整理当前选中的 Figma 节点。\n\n目标选区：\n\n- {{selectionBlock}}\n\nRelay 会在启动 AI 前生成唯一的执行规则和权威快照；此模板只表达用户的初始整理意图，不能再包含执行规则、JSON 示例或确认流程。所有 Figma 业务调用通过项目 CLI + WebSocket 完成。",
+      "componentVariants": "请使用 $figma-hierarchy-cleanup，根据我当前选中的多个 Figma 节点，规划 ComponentSet 变体。\n\n{{selectionBlock}}\n\n重要前提：\n- 当前选中的节点可以是多个模板节点。\n- 这些节点不一定是根节点，也不一定同父级。\n- 不要假设它们都是同级列表项或同级 Tab 项。\n\n目标：\n- 先 query-selection，回显当前选中节点的 name/type/count/nodePath。\n- 再分析相关父级结构，判断这些选中节点应该作为手动 ComponentSet 的多个变体来源，还是跨父级节点组 ComponentSet 的一组或多组来源。\n- 如果适合手动选择 ComponentSet 流程，请规划 component-set --from-selection；该流程默认只创建 ComponentSet，不删除、不移动、不替换源节点。\n- 如果目标是替换原有重复项，必须先 analyze 相关父级或目标容器，明确哪些同类节点要被替换，再规划 component-set-from-node-groups 或其它合适流程。\n- 如果适合跨父级节点组流程，请规划 component-set-from-node-groups，并显式列出每组节点的名称、类型和 nodePath；实际写入以 Relay 当前选区和分析结果为准。\n- 如果变体值、分组关系或替换范围无法从节点名和结构可靠推断，必须先问我，不要猜。\n\n执行规则：\n- 只先给计划，不要直接执行。\n- 等我确认后再通过项目 CLI 提交 WebSocket 写入任务。\n- 只有计划明确要替换原有重复项时，才设置 replaceOriginalsWithInstances=true。\n- 发生替换时默认 createBackup=true，源节点必须备份到隐藏备份 Frame。\n- 禁止删除原节点。\n- 禁止 flatten、detach instance、拆散 __slice_ / jiugong / nine-slice 节点。\n\n验收要求：\n- 执行后验证 ComponentSet 创建成功。\n- 如果计划包含替换，验证原节点已备份、实例替换成功、bounds 不漂移。\n- 如果计划只是 component-set --from-selection，验证源选中节点仍保留且未被移动。\n- 验证九宫切片在变体内被保留。\n- 重新 analyze 目标结构，确认替换后的节点数量、顺序和 Instance 状态符合计划。",
+      "unity": "请将当前 Figma 节点快速直接导入 Unity。\n\n使用项目导入技能：$figma-to-prefab。\n\n不要使用 `Skill()` 或 `ToolSearch` 查找该技能。直接读取项目中的 `ai/skills/figma-to-prefab/SKILL.md`，并使用标准入口 `ai/skills/figma-to-prefab/scripts/figma_to_prefab_cli.py` 与 `ai/skills/figma-to-prefab/scripts/run_full_import.py`。此技能为项目自定义技能，不在 `.claude/skills/` 中。\n\n这是快速直接导入模式：用户点击按钮即已授权本次写入，不要给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。目标在 5 分钟左右完成；超过 5 分钟只报告当前阶段和阻塞点，继续执行直到完成、用户停止或遇到明确阻塞，不要自行终止。\n\nfigma 路径:\n- {{selectionBlock}}\n\n目标 Unity 工程：{{unityProjectPath}}\n\n执行边界：\n- 使用上面的 Figma 快照作为唯一输入；只做一次 `figma_query_selection` 回显，实时选区不同也继续使用快照。\n- 图片目标文件夹固定为：{{unityImageTargetFolder}}。该路径无效、目标文件冲突或 CLI 导出出现 blockingErrors 时立即停止并报告；除此之外不提问。\n- 默认新建且不覆盖：Prefab 写入 `{{unityImageTargetFolder}}/Prefab/<规范化根节点名>.prefab`，图片写入 `{{unityImageTargetFolder}}/Texture/`，Atlas 目录统一命名为 `{{unityImageTargetFolder}}/UiAtlas/`。不得搜索或猜测业务 Prefab 路径。\n- 不整理 Figma 层级、不写回 Figma；直接导出当前节点。不要因为层级不完美而开启 cleanup 流程。\n- 不修改 C#、场景、Addressables、既有 Prefab、既有资源或既有 `.meta`。\n\n固定流水线（必须执行，不要自行拆解或增加检查）：\n1. 只调用一次 `figma_query_selection`，取得当前选中根节点的 fileKey、nodeId 和 sessionId。\n2. 立即执行唯一的导入命令：`python \"ai/skills/figma-to-prefab/scripts/run_full_import.py\" --unity-project \"{{unityProjectPath}}\" --figma-url \"https://www.figma.com/design/<fileKey>/import?node-id=<nodeId中冒号替换为连字符>\" --file-key <fileKey> --infer-formal-names --formal-layout split --formal-output-dir \"{{unityImageTargetFolder}}\" --target-prefab \"Assets/FigmaImports/Pending.prefab\" --target-image-dir \"Assets/FigmaImports/Texture\" --yes --wall-clock-report \".tmp/figma_to_prefab_wall_clock.json\"`。不要传 `--session-id`；本任务 ID 不是 Figma 插件会话 ID。\n3. 只读取该命令输出中的 `[SUMMARY_JSON]`；成功即结束，失败只报告其 blockingErrors。\n\n禁止项：\n- 不读取无关 Skills、不创建子代理、不做全项目 Grep/Glob 审计。\n- 不要调用 `Skill`、`ToolSearch`、`Glob` 或 `Grep`。唯一允许的直接读取是上面指定的 `ai/skills/figma-to-prefab/SKILL.md`；不要手工拆开 CLI、图片处理、uLoop 或验证命令。\n- 不运行全项目 Unity 编译、不排查既有编译错误、不做截图比对或业务脚本绑定分析。\n- 不因默认路径已可推导而再次询问 Prefab 路径、覆盖策略或执行许可。\n\n完成时只报告：生成的 Prefab/图片路径、导入验证结果、冲突或 blockingErrors（如有）。"
     };
     // END_AI_PROMPT_TEMPLATES
 
@@ -4661,7 +4396,7 @@
       var headerParts = [
         "Figma 文件：" + (selectionInfo.docName || "-"),
         "Figma Key：" + (figmaKey || "未获取，请从 Figma 文件链接中复制 key 后粘贴到插件输入框"),
-        isPsdPageTarget ? "定位方式：当前 Figma 页面；执行前必须通过 MCP Relay 确认当前文件和当前页面上下文" : "定位方式：当前 Figma 插件选区；执行前必须通过 MCP Relay query-selection 校验当前文件、页面和选区是否一致",
+        isPsdPageTarget ? "定位方式：当前 Figma 页面；执行前必须通过 Relay 确认当前文件和当前页面上下文" : "定位方式：当前 Figma 插件选区；执行前必须通过 Relay query-selection 校验当前文件、页面和选区是否一致",
         "页面：" + (selectionInfo.pageName || "-"),
         "选中节点数：" + nodes.length,
         "选中节点：",
@@ -4703,11 +4438,19 @@
       if (template === "unity") {
         text = text.replace(
           '2. 立即执行唯一的导入命令：`python "ai/skills/figma-to-prefab/scripts/run_full_import.py"',
-          '2. 先调用本地 MCP Relay `/health`，确认响应的 `gateway.pluginRoot` 与以下由 UI 解析出的绝对脚本路径前缀一致；不一致或缺失时立即停止。不得依赖调用方 cwd。然后执行唯一的导入命令：`python {{relayFullImportScriptPath}}'
+          '2. 先调用本地 Relay CLI `control --job-type relay.status --payload {} `，确认响应的 `gateway.pluginRoot` 与以下由 UI 解析出的绝对脚本路径前缀一致；不一致或缺失时立即停止。不得依赖调用方 cwd。然后执行唯一的导入命令：`python {{relayFullImportScriptPath}}'
+        );
+        text = text.replace(
+          '--infer-formal-names --formal-output-dir "{{unityImageTargetFolder}}/FigmaImports" --target-prefab "Assets/FigmaImports/Pending.prefab" --target-image-dir "Assets/FigmaImports/Images"',
+          '--infer-formal-names --formal-layout split --formal-output-dir "{{unityImageTargetFolder}}" --target-prefab "Assets/FigmaImports/Pending.prefab" --target-image-dir "Assets/FigmaImports/Texture"'
+        );
+        text = text.replace(
+          '`{{unityImageTargetFolder}}/FigmaImports/<规范化根节点名>/<规范化根节点名>.prefab`，图片写入同目录的 `Images/`',
+          '`{{unityImageTargetFolder}}/Prefab/<规范化根节点名>.prefab`，图片写入 `{{unityImageTargetFolder}}/Texture/`，Atlas 目录自动使用 `{{unityImageTargetFolder}}/UiAtlas/`'
         );
       }
       return text
-        .replaceAll("$figma-hierarchy-cleanup-mcp", "读取并遵守当前工作区的 `ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md`")
+        .replaceAll("$figma-hierarchy-cleanup", "读取并遵守当前工作区的 `ai/skills/figma-hierarchy-cleanup/SKILL.md`")
         .replaceAll("$figma-to-prefab", "项目自定义技能 `$figma-to-prefab`：直接读取 `ai/skills/figma-to-prefab/SKILL.md`，不要调用 Skill() 或 ToolSearch 查找");
     }
 
@@ -4746,6 +4489,16 @@
         await navigator.clipboard.writeText(text);
         return true;
       }
+      var temporaryElement = null;
+      if (!sourceElement) {
+        temporaryElement = document.createElement("textarea");
+        temporaryElement.value = text;
+        temporaryElement.setAttribute("readonly", "readonly");
+        temporaryElement.style.position = "fixed";
+        temporaryElement.style.opacity = "0";
+        document.body.appendChild(temporaryElement);
+        sourceElement = temporaryElement;
+      }
       if (sourceElement && typeof sourceElement.select === "function") {
         sourceElement.focus();
         sourceElement.select();
@@ -4760,6 +4513,8 @@
         return document.execCommand("copy");
       } catch (error) {
         return false;
+      } finally {
+        if (temporaryElement && temporaryElement.parentNode) temporaryElement.parentNode.removeChild(temporaryElement);
       }
     }
 
@@ -4775,49 +4530,35 @@
       }
     }
 
-    // ─── 本地 MCP Companion 连接 ───
+    // ─── 本地 Relay 连接 ───
     async function tryCopyStartPath() {
       if (!navigator.clipboard || !navigator.clipboard.writeText) return false;
       try {
-        if (!relayRuntimePaths.mcpStartBatPath) await refreshRelayRuntimePaths();
-        await navigator.clipboard.writeText(relayRuntimePaths.mcpStartBatPath);
+        if (!relayRuntimePaths.relayStartBatPath) await refreshRelayRuntimePaths();
+        await navigator.clipboard.writeText(relayRuntimePaths.relayStartBatPath);
         return true;
       } catch (e) { return false; }
     }
 
     async function showManualStartHint(error) {
       const copied = await tryCopyStartPath();
-      const mcpStartBatPath = relayRuntimePaths.mcpStartBatPath || "请打开 Relay 安装目录并双击 启动MCP.bat；连接成功后将自动记住经过验证的路径。";
+      const relayStartBatPath = relayRuntimePaths.relayStartBatPath || "请打开 Relay 安装目录并双击 启动Relay.bat；连接成功后将自动记住经过验证的路径。";
       const hint = [
-        "本地 MCP Companion 未连接",
+        "本地 Relay 未连接",
         copied ? "已复制启动脚本路径，请在资源管理器粘贴后双击：" : "请手动双击：",
-        mcpStartBatPath
+        relayStartBatPath
       ].join("\n");
       setAiStatus(error ? hint + "\n\n错误：" + (error.message || error) : hint);
-      appendLog(copied ? "本地 MCP Companion 未连接，已复制启动路径。" : "本地 MCP Companion 未连接。");
+      appendLog(copied ? "本地 Relay 未连接，已复制启动路径。" : "本地 Relay 未连接。");
     }
 
-    async function runRelayOpenFolderRequest(context, fetchRequest, isCurrent, acceptHealth) {
-      var baseUrl = context.relayUrl.replace(/\/+$/, "");
-      var health = await fetchRequest(baseUrl + "/health", { method: "GET" }, 2500);
-      if (!isCurrent()) return { stale: true };
-      if (!health.ok) throw new Error("health HTTP " + health.status);
-      var payload;
-      try {
-        payload = await health.json();
-      } catch (error) {
-        throw new Error("Relay health 返回的不是有效 JSON：" + (error.message || error));
-      }
+    async function runRelayOpenFolderRequest(context, requestControl, isCurrent, acceptHealth) {
+      var payload = await requestControl("relay.status", {}, "", 5000);
       if (!isCurrent()) return { stale: true };
       acceptHealth(payload);
+      var result = await requestControl("plugin.open-folder", {}, "", 5000);
       if (!isCurrent()) return { stale: true };
-      var response = await fetchRequest(baseUrl + "/open-plugin-folder", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
-      }, 5000);
-      if (!isCurrent()) return { stale: true };
-      var result = await response.json().catch(function () { return {}; });
-      if (!isCurrent()) return { stale: true };
-      if (!response.ok || result.ok === false) throw new Error(result.error || "HTTP " + response.status);
+      if (result.ok === false) throw new Error(result.error || "Open folder failed");
       return { stale: false, payload: payload, result: result };
     }
 
@@ -4837,12 +4578,12 @@
     async function openServerOrFolder() {
       syncRelayUrlInput();
       var requestContext = captureRelayRequestContext();
-      appendLog("检查本地 MCP Companion：" + requestContext.relayUrl);
+      appendLog("检查本地 Relay：" + requestContext.relayUrl);
       var guarded = await runRelayRequestWithStaleFailureGuard(
         requestContext,
         function () { return runRelayOpenFolderRequest(
           requestContext,
-          fetchWithTimeout,
+          sendRelaySocketRequest,
           function () { return relayRequestIsCurrent(requestContext); },
           applyRelayRuntimePaths
         ); },
@@ -4858,195 +4599,9 @@
       }
       const payload = opened.payload;
       const result = opened.result;
-      appendLog("本地 MCP Companion 已运行：pending=" + (payload.pending || 0) + ", done=" + (payload.done || 0));
-      setAiStatus("本地 MCP Companion 已运行\n已尝试打开插件文件夹：" + (result.path || ""));
+      appendLog("本地 Relay 已运行：pending=" + (payload.pending || 0) + ", done=" + (payload.done || 0));
+      setAiStatus("本地 Relay 已运行\n已尝试打开插件文件夹：" + (result.path || ""));
       appendLog("已请求打开插件文件夹：" + (result.path || ""));
-    }
-
-    function setMcpConfigBadge(configured) {
-      if (!mcpConfigBadge) return;
-      mcpConfigBadge.textContent = configured ? "已配置" : "未配置";
-      mcpConfigBadge.className = "badge " + (configured ? "online" : "offline");
-    }
-
-    function setMcpConfigExpanded(expanded) {
-      if (!mcpConfigPanel) return;
-      mcpConfigPanel.classList.toggle("expanded", !!expanded);
-      if (mcpConfigToggleBtn) {
-        mcpConfigToggleBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
-        mcpConfigToggleBtn.title = expanded ? "收起 MCP 配置" : "展开 MCP 配置";
-      }
-    }
-
-    function toggleMcpConfigPanel() {
-      var expanded = mcpConfigPanel && mcpConfigPanel.classList.contains("expanded");
-      setMcpConfigExpanded(!expanded);
-    }
-
-    function setMcpConfigControlsBusy(busy) {
-      if (writeMcpConfigBtn) writeMcpConfigBtn.disabled = busy;
-      if (openMcpConfigBtn) openMcpConfigBtn.disabled = busy;
-      if (deleteMcpConfigBtn) deleteMcpConfigBtn.disabled = busy;
-      if (mcpClientSelect) mcpClientSelect.disabled = busy;
-    }
-
-    function selectedMcpClient() {
-      return mcpClientSelect ? (mcpClientSelect.value || "codex") : "codex";
-    }
-
-    function selectedMcpClientLabel() {
-      if (!mcpClientSelect) return "Codex App";
-      var option = mcpClientSelect.options[mcpClientSelect.selectedIndex];
-      return option ? option.textContent : "Codex App";
-    }
-
-    function mcpConfigRequestBody(extra) {
-      var payload = extra || {};
-      payload.client = selectedMcpClient();
-      payload.sessionId = relaySessionId;
-      return JSON.stringify(payload);
-    }
-
-    function formatMcpClientSummary(clientsPayload) {
-      var clients = clientsPayload && Array.isArray(clientsPayload.clients) ? clientsPayload.clients : [];
-      if (!clients.length) return "最近 MCP 客户端：无请求记录";
-      return "最近 MCP 客户端：" + clients.slice(0, 3).map(function (client) {
-        var name = client.name || "unknown";
-        var method = client.lastMethod ? " " + client.lastMethod : "";
-        return name + method;
-      }).join("，");
-    }
-
-    function applyMcpConfigStatus(status, clientsPayload) {
-      status = status || {};
-      var clientLabel = status.clientLabel || selectedMcpClientLabel();
-      if (mcpServerNameInput) mcpServerNameInput.value = status.serverName || "figmaMcpRelay";
-      if (mcpServerRowName) mcpServerRowName.textContent = status.serverName || "figmaMcpRelay";
-      if (mcpServerRowMeta) mcpServerRowMeta.textContent = status.desiredUrl || "http://localhost:32130/mcp";
-      if (mcpServerToggle) {
-        mcpServerToggle.className = "mcp-server-toggle" + (status.configured ? " online" : "");
-      }
-      setMcpConfigBadge(!!status.configured);
-
-      var lines = [];
-      lines.push(clientLabel + " 配置：" + (status.configured ? "已写入并启用" : "未配置或 URL 不匹配"));
-      if (status.managedBy) lines.push("管理方式：" + status.managedBy);
-      lines.push("配置文件：" + (status.configPath || "-"));
-      lines.push("目标 URL：" + (status.desiredUrl || "-"));
-      if (status.entryExists) {
-        lines.push("当前条目：url=" + (status.entryUrl || "-") + "，enabled=" + String(status.entryEnabled));
-        if (status.scope || status.transport || status.cliStatus) {
-          lines.push("来源：" + (status.scope || "-") + "，transport=" + (status.transport || "-") + "，status=" + (status.cliStatus || "-"));
-        }
-      } else {
-        lines.push("当前条目：不存在");
-      }
-      lines.push("MCP endpoint：" + (status.mcpMounted ? "已挂载" : "未挂载，请用 start_mcp.bat 启动 companion"));
-      if (status.legacyFigma && status.legacyFigma.exists) {
-        lines.push("提示：检测到旧 figma MCP 条目，当前不会自动删除。");
-      }
-      if (status.warnings && status.warnings.length) {
-        lines.push("提示：" + status.warnings.join(" | "));
-      }
-      lines.push(formatMcpClientSummary(clientsPayload));
-      if (mcpConfigStatusEl) mcpConfigStatusEl.textContent = lines.join("\n");
-    }
-
-    async function refreshMcpConfigStatus() {
-      if (mcpConfigRefreshInFlight) return;
-      mcpConfigRefreshInFlight = true;
-      syncRelayUrlInput();
-      try {
-        var statusResp = await fetchWithTimeout(relayEndpoint("/mcp/config/status?client=" + encodeURIComponent(selectedMcpClient())), { method: "GET" }, 3500);
-        if (!statusResp.ok) throw new Error("config status HTTP " + statusResp.status);
-        var status = await statusResp.json();
-        var clientsPayload = {};
-        try {
-          var clientsResp = await fetchWithTimeout(relayEndpoint("/mcp/clients"), { method: "GET" }, 2500);
-          if (clientsResp.ok) clientsPayload = await clientsResp.json();
-        } catch (clientError) {
-          clientsPayload = { clients: [] };
-        }
-        applyMcpConfigStatus(status, clientsPayload);
-      } catch (error) {
-        setMcpConfigBadge(false);
-        if (mcpServerToggle) mcpServerToggle.className = "mcp-server-toggle";
-        if (mcpConfigStatusEl) {
-          mcpConfigStatusEl.textContent = "无法读取 MCP 配置状态。\n请先启动本地 MCP Companion。\n错误：" + (error.message || error);
-        }
-      } finally {
-        mcpConfigRefreshInFlight = false;
-      }
-    }
-
-    async function writeMcpConfig() {
-      syncRelayUrlInput();
-      var clientLabel = selectedMcpClientLabel();
-      setMcpConfigControlsBusy(true);
-      try {
-        var resp = await fetchWithTimeout(relayEndpoint("/mcp/config/write"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: mcpConfigRequestBody({})
-        }, 6000);
-        var result = await resp.json().catch(function () { return {}; });
-        if (!resp.ok || result.ok === false) throw new Error(result.error || "HTTP " + resp.status);
-        applyMcpConfigStatus(result, {});
-        appendLog("已写入 " + clientLabel + " MCP 配置：" + (result.desiredUrl || ""));
-        if (result.backupPath) appendLog("已备份 " + clientLabel + " 配置：" + result.backupPath);
-      } catch (error) {
-        if (mcpConfigStatusEl) mcpConfigStatusEl.textContent = "写入 " + clientLabel + " MCP 配置失败：" + (error.message || error);
-        appendLog("写入 " + clientLabel + " MCP 配置失败：" + (error.message || error), true);
-      } finally {
-        setMcpConfigControlsBusy(false);
-        refreshMcpConfigStatus();
-      }
-    }
-
-    async function openMcpConfig() {
-      syncRelayUrlInput();
-      var clientLabel = selectedMcpClientLabel();
-      setMcpConfigControlsBusy(true);
-      try {
-        var resp = await fetchWithTimeout(relayEndpoint("/mcp/config/open"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: mcpConfigRequestBody({})
-        }, 5000);
-        var result = await resp.json().catch(function () { return {}; });
-        if (!resp.ok || result.ok === false) throw new Error(result.error || "HTTP " + resp.status);
-        appendLog("已打开 " + clientLabel + " 配置位置：" + (result.opened || result.path || ""));
-      } catch (error) {
-        appendLog("打开 " + clientLabel + " 配置失败：" + (error.message || error), true);
-      } finally {
-        setMcpConfigControlsBusy(false);
-        refreshMcpConfigStatus();
-      }
-    }
-
-    async function deleteMcpConfig() {
-      var clientLabel = selectedMcpClientLabel();
-      if (!confirm("只删除 " + clientLabel + " 配置中的 figmaMcpRelay 条目，保留其它 MCP 服务器。继续？")) return;
-      syncRelayUrlInput();
-      setMcpConfigControlsBusy(true);
-      try {
-        var resp = await fetchWithTimeout(relayEndpoint("/mcp/config/delete"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: mcpConfigRequestBody({})
-        }, 6000);
-        var result = await resp.json().catch(function () { return {}; });
-        if (!resp.ok || result.ok === false) throw new Error(result.error || "HTTP " + resp.status);
-        applyMcpConfigStatus(result, {});
-        appendLog("已删除 " + clientLabel + " MCP 配置条目 figmaMcpRelay。");
-        if (result.backupPath) appendLog("已备份 " + clientLabel + " 配置：" + result.backupPath);
-      } catch (error) {
-        if (mcpConfigStatusEl) mcpConfigStatusEl.textContent = "删除 " + clientLabel + " MCP 配置失败：" + (error.message || error);
-        appendLog("删除 " + clientLabel + " MCP 配置失败：" + (error.message || error), true);
-      } finally {
-        setMcpConfigControlsBusy(false);
-        refreshMcpConfigStatus();
-      }
     }
 
     const PSD_ASSET_FETCH_CONCURRENCY = 2;
@@ -5100,7 +4655,7 @@
     }
 
     async function executeJob(payload) {
-      if (!payload || !payload.job) throw new Error("MCP Relay job 缺少 job 字段");
+      if (!payload || !payload.job) throw new Error("Relay job 缺少 job 字段");
       const job = payload.job;
       const assets = await fetchAssets(job.assets || []);
       const msgType = job.type || (job.task === "figma-to-prefab-export" ? "FIGMA_TO_PREFAB_EXPORT" : "") || "IMPORT_PSD_JOB";
@@ -5129,6 +4684,7 @@
 
     function closeRelaySocket() {
       relaySocketRegistered = false;
+      if (activeAiCleanupRun) activeAiCleanupRun.subscriptionId = null;
       rejectRelaySocketRequests(new Error("Relay WebSocket was closed."));
       if (relaySocketReconnectTimer) {
         clearTimeout(relaySocketReconnectTimer);
@@ -5150,12 +4706,14 @@
     }
 
     function rejectRelaySocketRequests(error) {
+      var transportError = error instanceof Error ? error : new Error(String(error || "Relay WebSocket was closed."));
+      transportError.relayTransportFailure = true;
       Object.keys(relaySocketRequests).forEach(function (requestId) {
         var request = relaySocketRequests[requestId];
         if (!request) return;
         clearTimeout(request.timeout);
         delete relaySocketRequests[requestId];
-        request.reject(error);
+        request.reject(transportError);
       });
     }
 
@@ -5169,19 +4727,25 @@
         request.resolve(message.result);
         return;
       }
-      request.reject(new Error(String(message.error || "Relay WebSocket request failed")));
+      var error = new Error(String(message.error || "Relay WebSocket request failed"));
+      error.relayTransportFailure = false;
+      request.reject(error);
     }
 
-    function sendRelaySocketRequest(action, payload, capabilityToken, timeoutMs) {
+    function sendRelaySocketRequest(action, payload, capabilityToken, timeoutMs, explicitRequestId) {
       if (!relaySocketRegistered || !relaySocket || relaySocket.readyState !== WebSocket.OPEN) {
-        return Promise.reject(new Error("Relay WebSocket is not registered."));
+        var unavailableError = new Error("Relay WebSocket is not registered.");
+        unavailableError.relayTransportFailure = true;
+        return Promise.reject(unavailableError);
       }
-      var requestId = "relay-control-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      var requestId = explicitRequestId || "relay-control-" + Date.now() + "-" + Math.random().toString(16).slice(2);
       return new Promise(function (resolve, reject) {
         var timeout = setTimeout(function () {
           if (!relaySocketRequests[requestId]) return;
           delete relaySocketRequests[requestId];
-          reject(new Error("Relay WebSocket request timed out: " + action));
+          var timeoutError = new Error("Relay WebSocket request timed out: " + action);
+          timeoutError.relayTransportFailure = true;
+          reject(timeoutError);
         }, Math.max(1000, Number(timeoutMs) || 8000));
         relaySocketRequests[requestId] = { resolve: resolve, reject: reject, timeout: timeout, action: action };
         try {
@@ -5195,7 +4759,9 @@
         } catch (error) {
           clearTimeout(timeout);
           delete relaySocketRequests[requestId];
-          reject(error);
+          var sendError = error instanceof Error ? error : new Error(String(error));
+          sendError.relayTransportFailure = true;
+          reject(sendError);
         }
       });
     }
@@ -5205,8 +4771,73 @@
       relaySocket.send(JSON.stringify({
         type: "plugin.register",
         sessionId: relaySessionId,
+        capabilities: ["job.result", "job.reconcile", "job.cancel"],
         figma: currentFigmaSessionInfo()
       }));
+    }
+
+    function rememberRelaySocketTask(message) {
+      var requestId = message && (message.requestId || message.id || "");
+      if (!requestId || message.resultTransport !== "websocket") return null;
+      var existing = relaySocketResultRequests[requestId];
+      if (existing) {
+        if (message.resultToken && !existing.resultToken) existing.resultToken = message.resultToken;
+        return existing;
+      }
+      var record = {
+        operationId: message.operationId || requestId,
+        resultToken: message.resultToken || "",
+        state: "queued",
+        result: undefined,
+        updatedAt: Date.now()
+      };
+      relaySocketResultRequests[requestId] = record;
+      return record;
+    }
+
+    async function cancelRelaySocketTask(message) {
+      var requestId = message && (message.requestId || message.id || "");
+      var record = relaySocketResultRequests[requestId];
+      if (!record) {
+        return sendRelaySocketRequest("job.cancel-status", { requestId: requestId, resultToken: message && message.resultToken || "", state: "unknown" }, "", 8000);
+      }
+      var queuedIndex = relaySocketJobQueue.findIndex(function (item) { return (item.requestId || item.id) === requestId; });
+      if (record.state === "queued" && queuedIndex >= 0) {
+        relaySocketJobQueue.splice(queuedIndex, 1);
+        record.state = "completed";
+        record.result = { status: "cancelled", requestId: requestId };
+        record.updatedAt = Date.now();
+        return postResult(requestId, record.result);
+      }
+      if (record.state === "completed" && record.result) return postResult(requestId, record.result);
+      return sendRelaySocketRequest("job.cancel-status", { requestId: requestId, resultToken: record.resultToken, state: record.state === "running" ? "running" : "unknown" }, "", 8000);
+    }
+
+    async function reconcileRelayTasks() {
+      var entries = Object.keys(relaySocketResultRequests);
+      for (var i = 0; i < entries.length; i += 1) {
+        var requestId = entries[i];
+        var record = relaySocketResultRequests[requestId];
+        if (!record || !record.resultToken) continue;
+        if (record.state === "completed" && record.acknowledged && Date.now() - record.updatedAt >= 600000) {
+          delete record.result;
+          record.expired = true;
+        }
+        if (record.expired) continue;
+        var operation = uiLogger.startOperation("ui.reconcile", "Reconciling plugin task", {
+          operationId: record.operationId, data: { requestId: requestId, state: record.state }
+        });
+        try {
+          var response = await sendRelaySocketRequest("job.reconcile", { requestId: requestId, resultToken: record.resultToken, state: record.resultUnknown ? "unknown" : record.state }, "", 8000);
+          if (!response || response.accepted !== true) throw new Error("Relay task reconciliation was not accepted");
+          if (response && response.cancelRequested) await cancelRelaySocketTask({ requestId: requestId, resultToken: record.resultToken });
+          else if (record.state === "completed" && record.result) await postResult(requestId, record.result);
+          operation.succeed("Plugin task reconciled");
+        } catch (error) {
+          operation.fail(error, "Task reconciliation failed; retained for reconnect");
+          appendLog("任务重连核对失败，保留结果缓存：" + requestId, true);
+        }
+      }
     }
 
     function sendRelaySocketHeartbeat() {
@@ -5294,27 +4925,48 @@
         if (relayLogFlushTimer) clearInterval(relayLogFlushTimer);
         relayLogFlushTimer = setInterval(flushRelayLogEvents, 250);
         flushRelayLogEvents();
-        appendLog("WebSocket 已连接本地 MCP Companion。");
+        appendLog("WebSocket 已连接本地 Relay。");
       };
       socket.onmessage = function (event) {
         if (relaySocket !== socket) return;
         var message = {};
         try { message = JSON.parse(event.data || "{}"); } catch (_) { return; }
+        if (message && message.type === "relay.event") {
+          if (message.taskId) { handlePsdImportEvent(message); handlePrefabImportEvent(message); handleFigmaPrefabImportEvent(message); return; }
+          handleAiRunEvent(message);
+          return;
+        }
         if (message && message.type === "relay.response") {
           settleRelaySocketRequest(message);
           return;
         }
         if (message && message.type === "plugin.registered" && message.sessionId === relaySessionId) {
           relaySocketRegistered = true;
-          appendLog("WebSocket 会话已在本地 MCP Companion 完成注册：" + relaySessionId);
-          scheduleNextPoll(relayFallbackPollDelayMs());
+          refreshUnityProjects();
+          appendLog("WebSocket 会话已在本地 Relay 完成注册：" + relaySessionId);
           refreshCleanupProviders();
+          refreshAiRunner();
+          scheduleAiCleanupPoll();
+          reconcileRelayTasks();
+          if (prefabImportBusy && prefabImportTaskId) subscribePrefabImportTask();
+          if (figmaPrefabImportBusy && figmaPrefabImportTaskId) subscribeFigmaPrefabImportTask();
+          if (psdImportBusy && psdImportTaskId) pollPsdImportTaskStatus();
+          return;
+        }
+        if (message && message.type === "command.cancel") {
+          cancelRelaySocketTask(message).catch(function (error) { appendLog("任务取消请求失败：" + (error.message || error), true); });
           return;
         }
         if (!message || message.type !== "command.request") return;
         var receivedId = message.requestId || message.id || "";
+        var knownTask = relaySocketResultRequests[receivedId];
+        rememberRelaySocketTask(message);
         if (receivedId && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "command.received", id: receivedId, requestId: receivedId, operationId: message.operationId || receivedId }));
+        }
+        if (knownTask) {
+          if (knownTask.state === "completed" && knownTask.result && !knownTask.expired) postResult(receivedId, knownTask.result).catch(function () {});
+          return;
         }
         relaySocketJobQueue.push(message);
         processRelaySocketQueue();
@@ -5322,6 +4974,7 @@
       socket.onclose = function () {
         if (relaySocket !== socket) return;
         relaySocketRegistered = false;
+        if (activeAiCleanupRun) activeAiCleanupRun.subscriptionId = null;
         if (relaySocketHeartbeat) {
           clearInterval(relaySocketHeartbeat);
           relaySocketHeartbeat = null;
@@ -5332,7 +4985,6 @@
         }
         rejectRelaySocketRequests(new Error("Relay WebSocket closed."));
         relaySocket = null;
-        scheduleNextPoll(relayFallbackPollDelayMs(1));
         scheduleRelaySocketReconnect("socket-closed");
       };
       socket.onerror = function () {};
@@ -5342,6 +4994,16 @@
       if (isExecuting || !relaySocketJobQueue.length) return;
       var message = relaySocketJobQueue.shift();
       var payload = { requestId: message.requestId || message.id || "", operationId: message.operationId || message.requestId || message.id || "", job: message.job || {} };
+      var taskRecord = rememberRelaySocketTask(message);
+      if (!taskRecord || !taskRecord.resultToken) {
+        var upgradeError = new Error("Relay task requires WebSocket result identity; upgrade Relay and plugin together.");
+        uiLogger.startOperation("ui.command", "Reject legacy Relay command", { data: { requestId: payload.requestId } }).fail(upgradeError);
+        if (relaySocket && relaySocket.readyState === WebSocket.OPEN) relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, error: upgradeError.message }));
+        appendLog(upgradeError.message, true);
+        processRelaySocketQueue();
+        return;
+      }
+      if (taskRecord) { taskRecord.state = "running"; taskRecord.updatedAt = Date.now(); }
       var operation = uiLogger.startOperation("ui.command", "UI 开始处理 Relay 任务", {
         operationId: payload.operationId,
         data: { requestId: payload.requestId, jobType: payload.job.type || "IMPORT_PSD_JOB" }
@@ -5370,7 +5032,6 @@
           if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
             relaySocket.send(JSON.stringify({ type: "command.response", id: payload.requestId, requestId: payload.requestId, operationId: payload.operationId, error: error.message || String(error) }));
           }
-          scheduleNextPoll(500);
           setTimeout(processRelaySocketQueue, 0);
         });
     }
@@ -5400,6 +5061,21 @@
       executingJobType = jobType || "IMPORT_PSD_JOB";
       executionWatchdogTimer = setTimeout(function () {
         if (!isExecuting || executingRequestId !== requestId) return;
+        var socketTask = relaySocketResultRequests[requestId];
+        if (socketTask) {
+          // A watchdog cannot establish whether Figma applied a mutation.
+          socketTask.resultUnknown = true;
+          var timeoutOperation = uiLogger.startOperation("ui.execution-timeout", "Plugin result is unknown; awaiting actual completion", {
+            operationId: socketTask.operationId, data: { requestId: requestId, state: "unknown" }
+          });
+          sendRelaySocketRequest("job.reconcile", { requestId: requestId, resultToken: socketTask.resultToken, state: "unknown" }, "", 8000)
+            .then(function (response) {
+              if (!response || response.accepted !== true) throw new Error("Relay did not accept unknown task status");
+              timeoutOperation.succeed("Relay recorded unknown execution result");
+            })
+            .catch(function (error) { timeoutOperation.fail(error, "Unknown task status could not be delivered; awaiting reconnect"); });
+          return;
+        }
         var result = {
           status: "error",
           allPass: false,
@@ -5425,89 +5101,52 @@
             appendLog("任务超时且结果回传失败：" + (e.message || e), true);
           })
           .finally(function () {
-            scheduleNextPoll(500);
             processRelaySocketQueue();
           });
       }, jobType === "PREFAB_TO_FIGMA_WRITE" ? 60000 : 240000);
     }
 
     async function postResult(requestId, result) {
-      const resp = await fetchWithTimeout(relayEndpoint("/figma/result"), {
-        method: "POST", headers: relayRuntimeHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ requestId: requestId, result: result })
-      }, 8000);
-      if (!resp.ok) throw new Error("结果回传失败 HTTP " + resp.status);
-      lastResultPayload = null;
-    }
-
-    async function retryLastResult() {
-      if (!lastResultPayload) return;
-      try {
-        await postResult(lastResultPayload.requestId, lastResultPayload.result);
-        appendLog("已补交上一次执行结果。");
-      } catch (e) { appendLog("补交结果仍失败：" + (e.message || e)); }
-    }
-
-    function relayFallbackPollDelayMs(failures) {
-      if (relaySocketRegistered && relaySocket && relaySocket.readyState === WebSocket.OPEN) return 60000;
-      var count = Math.max(0, Number(failures) || 0);
-      return Math.min(10000, 1500 * Math.pow(2, Math.min(3, count)));
-    }
-
-    async function pollOnce() {
-      if (isExecuting) { scheduleNextPoll(relayFallbackPollDelayMs()); return; }
-      try {
-        await retryLastResult();
-        var pendingQuery = new URLSearchParams();
-        pendingQuery.set("sessionId", relaySessionId);
-        var sessionInfo = currentFigmaSessionInfo();
-        if (sessionInfo.fileKey) pendingQuery.set("fileKey", sessionInfo.fileKey);
-        const resp = await fetchWithTimeout(relayEndpoint("/figma/pending?" + pendingQuery.toString()), { method: "GET", headers: relayRuntimeHeaders() }, 5000);
-        consecutiveFailures = 0;
-        setAiBadge(true);
-        setAiStatus("已连接：等待 AI 任务...");
-        if (resp.status === 204) { scheduleNextPoll(relayFallbackPollDelayMs()); return; }
-        if (!resp.ok) throw new Error("轮询失败 HTTP " + resp.status);
-        isExecuting = true;
-        const payload = await resp.json();
-        payload.operationId = payload.operationId || payload.requestId || "";
-        relayOperations[payload.requestId || ""] = uiLogger.startOperation("ui.command", "UI 开始处理轮询任务", {
-          operationId: payload.operationId,
-          data: { requestId: payload.requestId || "", jobType: (payload.job && payload.job.type) || "IMPORT_PSD_JOB" }
+      var socketResultRequest = relaySocketResultRequests[requestId];
+      if (socketResultRequest) {
+        if (socketResultRequest.expired) return;
+        var operation = uiLogger.startOperation("ui.result", "Sending plugin result over WebSocket", {
+          operationId: socketResultRequest.operationId,
+          data: { requestId: requestId, transport: "websocket" }
         });
-        relayOperations[payload.requestId || ""].step("received", "UI 已接收轮询任务");
-        appendLog("收到任务 " + (payload.requestId || "") + " (" + ((payload.job && payload.job.type) || "IMPORT_PSD_JOB") + ")");
-        setAiStatus("执行中：" + (payload.requestId || ""));
-        startExecutionWatchdog(payload.requestId || "", (payload.job && payload.job.type) || "IMPORT_PSD_JOB");
-        await executeJob(payload);
-        clearExecutionWatchdog();
-        isExecuting = false;
-        scheduleNextPoll(relayFallbackPollDelayMs());
-      } catch (error) {
-        consecutiveFailures += 1;
-        clearExecutionWatchdog();
-        isExecuting = false;
-        setAiBadge(false);
-        const delay = relayFallbackPollDelayMs(consecutiveFailures);
-        setAiStatus("连接异常：" + (error.message || error) + "\n" + delay + "ms 后重试。");
-        scheduleNextPoll(delay);
+        try {
+          operation.step("awaiting-ack", "Waiting for Relay result acknowledgement");
+          if (socketResultRequest.result === undefined) socketResultRequest.result = result;
+          socketResultRequest.state = "completed";
+          socketResultRequest.resultUnknown = false;
+          if (!socketResultRequest.completedAt) socketResultRequest.completedAt = Date.now();
+          socketResultRequest.updatedAt = socketResultRequest.completedAt;
+          var acknowledgement = await sendRelaySocketRequest("job.result", { requestId: requestId, result: socketResultRequest.result, resultToken: socketResultRequest.resultToken }, "", 8000);
+          if (!acknowledgement || acknowledgement.accepted !== true) {
+            throw new Error("Relay plugin result was not accepted: " + requestId);
+          }
+          socketResultRequest.acknowledged = true;
+          // Keep the transport marker for late or duplicate results in this panel session.
+          if (lastResultPayload && lastResultPayload.requestId === requestId) lastResultPayload = null;
+          operation.succeed("Relay acknowledged plugin result");
+        } catch (error) {
+          operation.fail(error, "WebSocket result delivery failed; result retained for retry");
+          throw error;
+        }
+        return;
       }
-    }
-
-    function scheduleNextPoll(delayMs) {
-      clearTimeout(pollTimer);
-      pollTimer = setTimeout(pollOnce, delayMs);
+      var error = new Error("Unknown WebSocket task; reload matching Relay and plugin versions.");
+      uiLogger.startOperation("ui.result", "Reject result without WebSocket task identity", { data: { requestId: requestId } }).fail(error);
+      throw error;
     }
 
     function reconnect() {
       syncRelayUrlInput();
       consecutiveFailures = 0;
       isExecuting = false;
-      appendLog("切换本地 MCP Companion 地址：" + relayUrl);
+      appendLog("切换本地 Relay 地址：" + relayUrl);
       closeRelaySocket();
       connectRelaySocket();
-      refreshMcpConfigStatus();
-      scheduleNextPoll(0);
     }
 
     // ─── Unity 网关连接 ───
@@ -5523,56 +5162,15 @@
       return normalizeBaseUrl(baseUrl) + path;
     }
 
-    function buildUnityProbeUrls(preferredUrl) {
-      var preferred = normalizeBaseUrl(preferredUrl || "http://localhost:32129");
-      var result = [];
-      function add(url) {
-        url = normalizeBaseUrl(url);
-        if (url && result.indexOf(url) < 0) {
-          result.push(url);
-        }
-      }
-
-      add(preferred);
-      try {
-        var parsed = new URL(preferred);
-        var host = parsed.hostname || "localhost";
-        if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
-          var localHosts = ["localhost", "127.0.0.1"];
-          if (host === "::1") {
-            localHosts.push("[::1]");
-          }
-          for (var port = unityPortMin; port <= unityPortMax; port += 1) {
-            for (var hostIndex = 0; hostIndex < localHosts.length; hostIndex += 1) {
-              add(parsed.protocol + "//" + localHosts[hostIndex] + ":" + port);
-            }
-          }
-        }
-      } catch (error) {
-        for (var fallbackPort = unityPortMin; fallbackPort <= unityPortMax; fallbackPort += 1) {
-          add("http://localhost:" + fallbackPort);
-        }
-      }
-      return result;
-    }
-
     async function readSelectedUnityGatewayConfig() {
       if (!selectedUnityProject || !selectedUnityProject.id) return "";
-      var resp = await fetchWithTimeout(
-        relayEndpoint("/unity-projects/" + encodeURIComponent(selectedUnityProject.id) + "/gateway"),
-        { method: "GET" },
-        1800
-      );
-      if (!resp.ok) throw new Error("读取项目网关配置失败 HTTP " + resp.status);
-      var payload = await resp.json();
+      var payload = await sendRelaySocketRequest("unity.gateway.get", { id: selectedUnityProject.id }, "", 5000);
       return payload && payload.found && payload.gatewayUrl ? normalizeBaseUrl(payload.gatewayUrl) : "";
     }
 
     async function probeUnityUrl(url) {
       var normalizedUrl = normalizeBaseUrl(url);
-      var resp = await fetchWithTimeout(buildEndpoint(normalizedUrl, "/health"), { method: "GET" }, 1800);
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      var data = await resp.json();
+      var data = await requestUnityCommand("unity.health");
       if (selectedUnityProject) {
         var expectedProjectPath = normalizeUnityProjectPath(selectedUnityProject.path);
         var actualProjectPath = normalizeUnityProjectPath(data.projectPath);
@@ -5588,45 +5186,17 @@
       return { url: normalizedUrl, data: data };
     }
 
-    async function scanUnityGateways(preferredUrl) {
-      var urls = buildUnityProbeUrls(preferredUrl);
-      var lastError = null;
-      for (var i = 0; i < urls.length; i += 1) {
-        try {
-          return await probeUnityUrl(urls[i]);
-        } catch (error) {
-          if (error && error.bridgeVersionMismatch) throw error;
-          lastError = error;
-        }
-      }
-      throw lastError || new Error("未找到 Unity 网关");
-    }
-
     async function connectUnity() {
-      var requestedUnityUrl = "http://localhost:32129";
+      var connectingProjectId = selectedUnityProject && selectedUnityProject.id;
       unityBridgeVersionMismatch = null;
       setBridgeVersionBadge("", "disconnected");
       unityConnectBtn.disabled = true;
       appendLog("正在读取 Unity 网关配置" + (selectedUnityProject ? "：" + selectedUnityProject.name : ""));
       try {
-        var probe = null;
-        var configuredUrl = "";
-        var configurationError = null;
-        try {
-          configuredUrl = await readSelectedUnityGatewayConfig();
-          if (configuredUrl) {
-            probe = await probeUnityUrl(configuredUrl);
-            appendLog("已从项目配置连接 Unity 网关：" + configuredUrl);
-          }
-        } catch (error) {
-          if (error && error.bridgeVersionMismatch) throw error;
-          configurationError = error;
-        }
-        if (!probe) {
-          appendLog("项目配置不可用，开始兜底扫描：localhost:" + unityPortMin + "-" + unityPortMax
-            + (configurationError ? "（" + (configurationError.message || configurationError) + "）" : ""));
-          probe = await scanUnityGateways(requestedUnityUrl);
-        }
+        var configuredUrl = await readSelectedUnityGatewayConfig();
+        if (!selectedUnityProject || selectedUnityProject.id !== connectingProjectId) throw new Error("Unity 工程已切换，请重新连接");
+        if (!configuredUrl) throw new Error("所选工程未提供 Unity Bridge 发现记录");
+        var probe = await probeUnityUrl(configuredUrl);
         const data = probe.data || {};
         unityUrl = probe.url;
         unityUrlInput.value = unityUrl;
@@ -5636,6 +5206,7 @@
         setBridgeVersionBadge(data.version, "connected");
         setUnityBadge(true);
         setSelectedFolder(data.selectedFolder || "", false, data.imageTargetDisplay || "");
+        setSelectedImageTargetInfo(data);
         setSelectedTextTarget(data.selectedTextTargetName || "", data.selectedTextTargetType || "", false);
         setUnityPrefabPath(data.currentPrefabPath || "", data.currentPrefabPaths || data.selectedPrefabPaths || data.prefabPaths || "");
         setUnityStatus("已连接 Unity\nPrefab：" + (data.currentPrefabPath || data.currentPrefabName || "-") + "\n项目：" + (data.projectName || "-"));
@@ -5671,12 +5242,17 @@
     }
 
     function refreshUnityControls() {
+      var directImportProjectReady = !!(selectedUnityProject && selectedUnityProject.valid
+        && selectedUnityProject.bridgeInstalled && selectedUnityProject.settingsConfigured
+        && !unityBridgeVersionMismatch);
       unityConnectBtn.disabled = unityConnected;
       unityDisconnectBtn.disabled = !unityConnected;
       unityUrlInput.disabled = unityConnected;
       exportImagesBtn.disabled = exportingImages || !unityConnected;
-      previewHierarchyBtn.disabled = exportingHierarchy || !unityConnected || !selectedUnityPrefabPath;
-      exportHierarchyBtn.disabled = exportingHierarchy || !unityConnected || !selectedUnityPrefabPath;
+      previewHierarchyBtn.disabled = true;
+      exportHierarchyBtn.disabled = exportingHierarchy || figmaPrefabImportBusy || !unityConnected
+        || !directImportProjectReady || !selectedUnityFolder || selectedUnityFolder === "Assets"
+        || !selectedUnityObjectIsFolder || !selectedUnityFolderIsEmpty;
       syncTextStyleBtn.disabled = syncingTextStyle || !unityConnected;
       refreshUnityBridgeVersionState();
       refreshPrefabImportControls();
@@ -5685,39 +5261,119 @@
 
     // ─── 导出 Figma 层级到 Unity Prefab ───
     async function exportHierarchyToUnity(dryRun) {
-      if (exportingHierarchy) return;
+      if (dryRun) return;
+      if (figmaPrefabImportBusy || isExecuting) {
+        setHierarchyExportStatus("已有 Figma/Unity 导入任务正在执行，请等待当前任务结束。");
+        return;
+      }
       if (!unityConnected) {
+        setHierarchyExportStatus("请先连接 Unity 网关。");
         appendLog("请先连接 Unity 网关。", true);
         return;
       }
-      exportingHierarchy = true;
-      pendingHierarchyDryRun = !!dryRun;
-      refreshUnityControls();
       try {
-        var prefabPath = await resolveHierarchyTargetPrefabPath();
-        if (!prefabPath || !prefabPath.endsWith(".prefab")) {
-          throw new Error("请先在 Unity Project 中选择一个 Prefab 资源。");
+        if (!selectedUnityProject || !selectedUnityProject.id) {
+          throw new Error("请先选择已注册的 Unity 工程。");
         }
-        setHierarchyExportStatus("正在读取 Figma 当前选区...");
-        appendLog("正在采集 Figma 层级，模式=" + (pendingHierarchyDryRun ? "预览" : "应用") + "，目标 Prefab：" + prefabPath);
-        hierarchyTargetPrefabPath = prefabPath;
-        var syncImages = true;
-        if (syncImages && !pendingHierarchyDryRun && !selectedUnityFolder) {
-          throw new Error("同步图片资源需要先在 Unity Project 中选择一个 Assets 下的图片目标目录或资源。");
+        var selection = lastSelectionData || {};
+        var nodes = Array.isArray(selection.nodes) ? selection.nodes : [];
+        if (nodes.length !== 1) {
+          throw new Error("请在 Figma 中只选择一个要导入的根节点。");
         }
-        startHierarchyExportTimeout();
-        parent.postMessage({
-          pluginMessage: {
-            type: "EXPORT_HIERARCHY_TO_UNITY",
-            requestId: "hierarchy-export-" + Date.now(),
-            syncImages: true
-          }
-        }, "*");
+        var folder = await fetchSelectedUnityFolder();
+        if (!folder || folder === "Assets" || selectedUnityImageTargetMode === "replaceImage" || !selectedUnityObjectIsFolder || !selectedUnityFolderIsEmpty) {
+          throw new Error("请在 Unity Project 中选择一个空的 Assets 子文件夹作为导入目标。");
+        }
+        var node = nodes[0] || {};
+        figmaPrefabImportBusy = true;
+        refreshUnityControls();
+        figmaPrefabImportTaskId = "figma-prefab-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        var data = await sendRelaySocketRequest("figma.prefab.start", {
+            clientRequestId: figmaPrefabImportTaskId,
+            projectId: selectedUnityProject.id,
+            gatewayProjectPath: unityGatewayProjectPath || selectedUnityProject.path,
+            targetFolder: folder,
+            sessionId: relaySessionId,
+            fileKey: selection.fileKey || "",
+            nodeId: node.id || node.urlNodeId || "",
+            nodeName: node.name || "",
+            nodeWidth: Number(node.width) || 0,
+            nodeHeight: Number(node.height) || 0
+        }, "", 8000);
+        if (!data || !data.ok || !data.task || !data.task.taskId) {
+          throw new Error((data && data.error) || "直接导入任务启动失败");
+        }
+        figmaPrefabImportTaskId = data.task.taskId;
+        figmaPrefabImportBusy = true;
+        refreshUnityControls();
+        setHierarchyExportStatus("已锁定导入目标：" + folder + "。正在执行确定性导入...");
+        appendLog("Figma 直接导入 Prefab 已启动：任务=" + figmaPrefabImportTaskId + "，目标=" + folder);
+        subscribeFigmaPrefabImportTask();
       } catch (error) {
-        finishHierarchyExport();
+        figmaPrefabImportBusy = !!figmaPrefabImportTaskId;
+        if (figmaPrefabImportTaskId && relaySocketRegistered) subscribeFigmaPrefabImportTask();
+        refreshUnityControls();
         setHierarchyExportStatus(error.message || String(error));
-        appendLog("Figma导入Prefab失败：" + (error.message || error), true);
+        appendLog("Figma 直接导入请求未完成：" + (error.message || error) + "；taskId=" + figmaPrefabImportTaskId + "；不要重复提交。", true);
       }
+    }
+
+    async function subscribeFigmaPrefabImportTask() {
+      if (!figmaPrefabImportTaskId) return;
+      var subscriptionId = "figma-prefab-view-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      figmaPrefabSubscriptionId = subscriptionId;
+      figmaPrefabEventSequence = 0;
+      try {
+        await sendRelaySocketRequest("figma.prefab.subscribe", { taskId: figmaPrefabImportTaskId }, "", 8000, subscriptionId);
+      } catch (error) {
+        if (figmaPrefabSubscriptionId !== subscriptionId) return;
+        setHierarchyExportStatus("状态待核对：" + figmaPrefabImportTaskId + "；" + (error.message || error));
+        appendLog("导入订阅失败，保留原任务 ID，不重放写入：" + figmaPrefabImportTaskId, true);
+      }
+    }
+
+    function handleFigmaPrefabImportEvent(message) {
+      if (!figmaPrefabImportTaskId || message.taskId !== figmaPrefabImportTaskId || message.subscriptionId !== figmaPrefabSubscriptionId) return;
+      if (message.sequence && message.sequence <= figmaPrefabEventSequence) return;
+      figmaPrefabEventSequence = message.sequence || figmaPrefabEventSequence;
+      try {
+        var data = message.result || {};
+        if (message.error || !data.task) {
+          setHierarchyExportStatus("状态待核对：" + figmaPrefabImportTaskId + "；" + (message.error || "导入任务结果无效"));
+          appendLog("保留原任务 ID，不重放写入：" + figmaPrefabImportTaskId, true);
+          return;
+        }
+        var task = data.task;
+        if (task.status === "queued" || task.status === "running") {
+          setHierarchyExportStatus("确定性导入进行中：" + (task.stage || "running") + "（" + Number(task.percent || 0) + "%）");
+          return;
+        }
+        if (task.status !== "completed" || !task.summary || task.summary.verifyAllPass !== true) {
+          var failureTail = Array.isArray(task.logs) ? task.logs.slice(-5).join(" | ") : "";
+          throw new Error((task.error || "Unity 验证未通过") + "。未生成可交付结果。" + (failureTail ? " 日志：" + failureTail : ""));
+        }
+        var summary = task.summary;
+        var resultLines = [
+          "直接导入完成（无 AI）",
+          "Prefab：" + (summary.prefab || "未报告"),
+          "Texture：" + (summary.targetImageDir || "未报告"),
+          "UiAtlas：" + (summary.atlasDir || "未报告"),
+          "审计：" + (summary.auditReport || "未报告"),
+          "图片报告：" + (summary.imageReport || "未报告"),
+          "验证：" + (summary.verifyReport || "未报告") + "（verifyAllPass=true）"
+        ];
+        setHierarchyExportStatus(resultLines.join("\n"));
+        appendLog(resultLines.join("\n"));
+        if (selectedUnityProject && selectedUnityProject.id === task.projectId) selectedUnityFolderIsEmpty = false;
+      } catch (error) {
+        setHierarchyExportStatus("直接导入失败：" + (error.message || String(error)));
+        appendLog("Figma 直接导入 Prefab 失败：" + (error.message || error), true);
+      }
+      figmaPrefabImportBusy = false;
+      figmaPrefabImportTaskId = "";
+      figmaPrefabSubscriptionId = "";
+      sendRelaySocketRequest("figma.prefab.unsubscribe", {}, "", 3000).catch(function (error) { appendLog("导入退订失败：" + (error.message || error), true); });
+      refreshUnityControls();
     }
 
     async function handleHierarchyExportResult(message) {
@@ -5736,22 +5392,17 @@
           setUnityPrefabPath(resultPrefabPath, [resultPrefabPath]);
         }
         var rootCheck = await assertHierarchyRootNamesMatch(result, hierarchyTargetPrefabPath || selectedUnityPrefabPath || "");
-        appendLog("根节点校验通过：Figma=" + rootCheck.figmaRootName + "，Unity=" + rootCheck.unityRootName);
+        appendLog("根节点校验通过：Figma=" + rootCheck.figmaRootName + "；Unity=" + rootCheck.unityRootName);
         setHierarchyExportStatus(pendingHierarchyDryRun ? "正在预览 Unity Prefab 变更..." : "正在同步 Unity Prefab...");
-        var resp = await fetchWithTimeout(unityEndpoint("/sync-prefab-hierarchy"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        var data = await requestUnityCommand("unity.sync-prefab-hierarchy", {
             prefabPath: hierarchyTargetPrefabPath || selectedUnityPrefabPath || "",
             hierarchy: result,
             syncImages: true,
             imageTargetFolder: selectedUnityFolder || "",
             createBackup: !!(createHierarchyBackupCheck && createHierarchyBackupCheck.checked),
             dryRun: pendingHierarchyDryRun
-          })
         }, 60000);
-        var data = await parseJsonResponseWithFallback(resp);
-        renderHierarchySyncResult(data, resp.ok);
+        renderHierarchySyncResult(data, true);
       } catch (error) {
         var errorMessage = error.message || String(error);
         setHierarchyExportStatus("同步失败：" + errorMessage);
@@ -6212,18 +5863,13 @@
       var syncOptions = pendingTextStyleSyncOptions || readTextStyleSyncOptions();
       setTextStyleStatus("已读取：" + (style.nodeName || style.nodeId || "") + "\n正在写入 Unity 选中对象...");
       try {
-        var resp = await fetchWithTimeout(unityEndpoint("/sync-selected-text-style"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        var data = await requestUnityCommand("unity.sync-selected-text-style", {
             style: style,
             syncColor: syncOptions.syncColor,
             syncFontSize: syncOptions.syncFontSize
-          })
         }, 15000);
-        var data = await parseJsonResponseWithFallback(resp);
-        if (!resp.ok || data.ok === false) {
-          throw new Error(data.error || ("HTTP " + resp.status));
+        if (data.ok === false) {
+          throw new Error(data.error || "Unity 字体同步失败");
         }
         renderTextStyleSyncResult(style, data);
       } catch (error) {
@@ -6405,11 +6051,7 @@
 
     // 从 Unity Gateway 读取当前 Project 文件夹和字体同步目标。
     async function fetchUnitySelectionStatus() {
-      const resp = await fetchWithTimeout(unityEndpoint("/health"), { method: "GET" }, 3000);
-      const data = await resp.json().catch(function () { return {}; });
-      if (!resp.ok) {
-        throw new Error(data.error || ("HTTP " + resp.status));
-      }
+      const data = await requestUnityCommand("unity.health");
       setSelectedFolder(data.selectedFolder || "", false, data.imageTargetDisplay || "");
       setSelectedImageTargetInfo(data);
       setSelectedTextTarget(data.selectedTextTargetName || "", data.selectedTextTargetType || "", false);
@@ -6417,6 +6059,7 @@
       if (prefabPaths.length > 0) {
         setUnityPrefabPath(prefabPaths[0], prefabPaths);
       }
+      refreshUnityControls();
       return data;
     }
 
@@ -6450,10 +6093,9 @@
 
     // 从 Unity Gateway 读取当前选中的 Prefab 路径，兼容单选和未来多选字段。
     async function fetchUnitySelectedPrefabPaths() {
-      const resp = await fetchWithTimeout(unityEndpoint("/health"), { method: "GET" }, 3000);
-      const data = await resp.json().catch(function () { return {}; });
-      if (!resp.ok || data.connected !== true) {
-        throw new Error(data.error || ("HTTP " + resp.status));
+      const data = await requestUnityCommand("unity.health");
+      if (data.connected !== true) {
+        throw new Error(data.error || "Unity 网关未连接");
       }
       var prefabPaths = normalizeUnityPrefabPaths(data.currentPrefabPaths || data.selectedPrefabPaths || data.prefabPaths || data.currentPrefabPath || "");
       if (prefabPaths.length === 0) {
@@ -6466,17 +6108,10 @@
     // 导入 Prefab 前读取一次 Unity 实际导入尺寸；health 阶段不读取，避免 Unity 焦点异常。
     async function fetchPrefabImportCanvasByPath(prefabPaths) {
       var paths = normalizeUnityPrefabPaths(prefabPaths || []);
-      var requestOptions = paths.length > 0
-        ? {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prefabPaths: paths })
-          }
-        : { method: "GET" };
-      const resp = await fetchWithTimeout(unityEndpoint("/prefab-import-canvas"), requestOptions, 3000);
-      const data = await resp.json().catch(function () { return {}; });
-      if (!resp.ok || data.ok === false) {
-        throw new Error(data.error || ("HTTP " + resp.status));
+      if (paths.length === 0) paths = await fetchUnitySelectedPrefabPaths();
+      const data = await requestUnityCommand("unity.prefab-import-canvas", { prefabPaths: paths });
+      if (data.ok === false) {
+        throw new Error(data.error || "Unity Canvas 查询失败");
       }
       var map = {};
       (data.items || []).forEach(function (item) {
@@ -6581,10 +6216,9 @@
         startPrefabImportProgressAnimation(2);
         setPrefabImportStatus("正在创建导入任务...");
         refreshPrefabImportControls();
-        var resp = await fetchWithTimeout(relayEndpoint("/prefab-to-figma/import"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        prefabImportTaskId = "prefab-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        var data = await sendRelaySocketRequest("prefab.import.start", {
+            clientRequestId: prefabImportTaskId,
             prefabPaths: prefabPaths,
             unityProjectPath: selectedUnityProject.path,
             canvas: "auto",
@@ -6593,29 +6227,46 @@
             nestedPrefabComponentMode: prefabImportNestedComponentModeSelect.value || "all",
             figmaUrl: buildPrefabImportFigmaUrl(),
             fileKey: figmaKey
-          })
-        }, 10000);
-        var data = await parseJsonResponseWithFallback(resp);
-        if (!resp.ok || data.ok === false) {
-          throw new Error(data.error || ("HTTP " + resp.status));
+        }, "", 10000);
+        if (data.ok === false) {
+          throw new Error(data.error || "Prefab import rejected");
         }
         prefabImportTaskId = data.taskId || "";
         appendLog("Prefab 导入任务已创建：" + prefabImportTaskId + "，Prefab 数=" + (data.prefabCount || prefabPaths.length));
-        pollPrefabImportTask();
+        subscribePrefabImportTask();
       } catch (error) {
+        if (prefabImportTaskId && error.relayTransportFailure) {
+          setPrefabImportStatus("提交结果待核对，请勿重复导入。任务：" + prefabImportTaskId);
+          appendLog("Prefab 提交连接中断，保留任务标识并等待重连核对：" + prefabImportTaskId, true);
+          if (relaySocketRegistered) subscribePrefabImportTask();
+          return;
+        }
         finishPrefabImport(false);
         setPrefabImportStatus("导入启动失败：" + (error.message || error));
         appendLog("Prefab 导入启动失败：" + (error.message || error), true);
       }
     }
 
-    async function pollPrefabImportTask() {
-      clearTimeout(prefabImportPollTimer);
+    async function subscribePrefabImportTask() {
       if (!prefabImportTaskId) return;
+      var subscriptionId = "prefab-sub-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      prefabImportSubscriptionId = subscriptionId;
       try {
-        var resp = await fetchWithTimeout(relayEndpoint("/prefab-to-figma/import/" + encodeURIComponent(prefabImportTaskId) + "/status"), { method: "GET" }, 5000);
-        var data = await parseJsonResponseWithFallback(resp);
-        if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+        await sendRelaySocketRequest("prefab.import.subscribe", { taskId: prefabImportTaskId }, "", 10000, subscriptionId);
+      } catch (error) {
+        if (prefabImportSubscriptionId !== subscriptionId) return;
+        setPrefabImportStatus("导入订阅失败，任务可能仍在运行；重连后核对：" + (error.message || error));
+      }
+    }
+
+    function handlePrefabImportEvent(message) {
+      if (message.subscriptionId !== prefabImportSubscriptionId || message.taskId !== prefabImportTaskId) return;
+      if (message.error) {
+        setPrefabImportStatus("导入状态无法核对，请勿重复提交：" + message.error);
+        return;
+      }
+      var data = message.result;
+      if (data && typeof data === "object") {
         renderPrefabImportTaskStatus(data);
         if (data.status === "completed") {
           finishPrefabImport(true);
@@ -6631,10 +6282,6 @@
           finishPrefabImport(false);
           return;
         }
-        prefabImportPollTimer = setTimeout(pollPrefabImportTask, 500);
-      } catch (error) {
-        setPrefabImportStatus("导入状态读取失败：" + (error.message || error));
-        prefabImportPollTimer = setTimeout(pollPrefabImportTask, 1500);
       }
     }
 
@@ -6719,7 +6366,12 @@
     }
 
     function finishPrefabImport(success) {
-      clearTimeout(prefabImportPollTimer);
+      if (prefabImportSubscriptionId) {
+        prefabImportSubscriptionId = "";
+        sendRelaySocketRequest("prefab.import.unsubscribe", {}, "", 3000).catch(function (error) {
+          appendLog("Prefab 订阅释放失败：" + (error.message || error), true);
+        });
+      }
       prefabImportBusy = false;
       if (success) setPrefabImportProgress(100);
       stopPrefabImportProgressAnimation(true);
@@ -6728,10 +6380,9 @@
 
     // 从 Unity Gateway 读取 Project 窗口当前选中的图片导入目标。
     async function fetchSelectedUnityFolder() {
-      const resp = await fetchWithTimeout(unityEndpoint("/selected-folder"), { method: "GET" }, 3000);
-      const data = await resp.json().catch(function () { return {}; });
-      if (!resp.ok || data.ok === false) {
-        throw new Error(data.error || ("HTTP " + resp.status));
+      const data = await requestUnityCommand("unity.selected-folder");
+      if (data.ok === false) {
+        throw new Error(data.error || "Unity 选择查询失败");
       }
       var folder = data.selectedFolder || "";
       if (!folder) {
@@ -6790,7 +6441,7 @@
         return;
       }
 
-      // 分流：九宫图 → MCP Relay Python cutter (PIL 切图)，普通图 → Unity Gateway
+      // 分流：九宫图 → Relay Python cutter (PIL 切图)，普通图 → Unity Gateway
       var nineSliceList = [];
       var regularList = [];
       for (var ui = 0; ui < rawImages.length; ui++) {
@@ -6815,7 +6466,7 @@
         }
       }
 
-      // 九宫图 → MCP Relay Python cutter (PIL 精确裁切 + 写 .meta)
+      // 九宫图 → Relay Python cutter (PIL 精确裁切 + 写 .meta)
       if (nineSliceList.length > 0) {
         var targetDir = "";
         try {
@@ -6840,23 +6491,15 @@
               + ",top:" + img.borderTop
               + "} sliceKind=" + (img.sliceKind || "<empty>");
           })).join("\n"));
-          appendLog("发送 " + nineSliceList.length + " 张九宫图到 MCP Relay 切图：" + (selectedUnityReplaceAssetPath || targetDir));
-          var cropResp = await fetchWithTimeout(relayEndpoint("/crop-jiugong"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+          appendLog("发送 " + nineSliceList.length + " 张九宫图到 Relay 切图：" + (selectedUnityReplaceAssetPath || targetDir));
+          var cropData = await sendRelaySocketRequest("image.crop", {
               unityProjectPath: unityProjectPath,
               targetDir: targetDir,
               targetMode: selectedUnityImageTargetMode,
               replaceAssetPath: selectedUnityReplaceAssetPath,
               images: nineSliceList
-            })
-          }, 60000);
-          var cropData = await parseJsonResponseWithFallback(cropResp);
-          if (!cropResp.ok) {
-            appendLog("九宫切图 HTTP 失败：status=" + cropResp.status + "\n" + JSON.stringify(cropData), true);
-          }
-          appendRelayDiagnostics("九宫 MCP Relay 诊断", cropData && cropData.diagnostics);
+          }, "", 120000);
+          appendRelayDiagnostics("九宫 Relay 诊断", cropData && cropData.diagnostics);
           renderUnityImportResult(cropData);
         } catch (error) {
           appendLog("九宫切图失败：" + (error.message || error), true);
@@ -6867,15 +6510,7 @@
       if (regularList.length > 0) {
         appendLog("发送 " + regularList.length + " 张普通图到 Unity...");
         try {
-          var resp = await fetchWithTimeout(unityEndpoint("/import-selected-images"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ overwrite: true, images: regularList })
-          }, 30000);
-          var data = await parseJsonResponseWithFallback(resp);
-          if (!resp.ok) {
-            appendLog("Unity 导入 HTTP 失败：status=" + resp.status + "\n" + JSON.stringify(data), true);
-          }
+          var data = await requestUnityCommand("unity.import-selected-images", { overwrite: true, images: regularList }, 30000);
           renderUnityImportResult(data);
         } catch (error) {
           appendLog("发送到 Unity 失败：" + (error.message || error), true);
@@ -7019,12 +6654,11 @@
         (async function () {
           try {
             await postResult(message.requestId, hierarchyRelayResult);
-            appendLog("MCP Figma导入Prefab采集完成：" + (hierarchyRelayResult.status || "unknown"));
+            appendLog("Figma导入Prefab采集完成：" + (hierarchyRelayResult.status || "unknown"));
             setAiStatus("任务完成：" + (hierarchyRelayResult.status || "unknown"));
           } catch (e) {
-            appendLog("MCP Figma导入Prefab采集完成但结果回传失败：" + (e.message || e), true);
+            appendLog("Figma导入Prefab采集完成但结果回传失败：" + (e.message || e), true);
           }
-          scheduleNextPoll(500);
           processRelaySocketQueue();
         })();
         return;
@@ -7061,7 +6695,7 @@
         return;
       }
 
-      // 本地 MCP Companion 的 _RESULT 回传
+      // 本地 Relay 的 _RESULT 回传
       if (message.type && message.type.endsWith("_RESULT") && message.type !== "EXPORT_IMAGES_TO_UNITY_RESULT") {
         if (!executingRequestId || message.requestId !== executingRequestId) {
           appendLog("收到晚到或非当前任务结果，已回传 Relay 但忽略晚到状态覆盖：" + (message.requestId || "-"), true);
@@ -7087,7 +6721,6 @@
           } catch (e) {
             appendLog("任务完成但结果回传失败：" + (e.message || e));
           }
-          scheduleNextPoll(500);
           processRelaySocketQueue();
         })();
         return;
@@ -7109,7 +6742,9 @@
 
       lastSelectionData = {
         docName: result.docName || "",
+        fileName: result.fileName || result.docName || "",
         fileKey: result.fileKey || "",
+        pageId: result.pageId || "",
         pageName: result.pageName || "",
         nodes: Array.isArray(result.nodes) ? result.nodes : []
       };
@@ -7245,10 +6880,13 @@
     function refreshHierarchyImageTargetDisplay() {
       if (!hierarchyImageTargetBox) return;
       if (selectedUnityFolder) {
-        hierarchyImageTargetBox.textContent = "Unity 图片目标：" + selectedUnityFolder;
-        hierarchyImageTargetBox.className = "folder-box";
+        var folderState = !selectedUnityObjectIsFolder
+          ? "（请选择文件夹）"
+          : (selectedUnityFolderIsEmpty ? "（空文件夹）" : "（文件夹非空）");
+        hierarchyImageTargetBox.textContent = "Unity 导入目标：" + selectedUnityFolder + folderState;
+        hierarchyImageTargetBox.className = "folder-box" + (selectedUnityObjectIsFolder && selectedUnityFolderIsEmpty ? "" : " missing");
       } else {
-        hierarchyImageTargetBox.textContent = "Unity 图片目标：未选择（同步图片时需要 Assets 下的目标目录）";
+        hierarchyImageTargetBox.textContent = "Unity 导入目标：未选择（请选择 Assets 下的空文件夹）";
         hierarchyImageTargetBox.className = "folder-box missing";
       }
     }
@@ -7261,11 +6899,6 @@
     });
     connectBtn.addEventListener("click", reconnect);
     openServerBtn.addEventListener("click", openServerOrFolder);
-    if (mcpConfigToggleBtn) mcpConfigToggleBtn.addEventListener("click", toggleMcpConfigPanel);
-    writeMcpConfigBtn.addEventListener("click", writeMcpConfig);
-    openMcpConfigBtn.addEventListener("click", openMcpConfig);
-    deleteMcpConfigBtn.addEventListener("click", deleteMcpConfig);
-    if (mcpClientSelect) mcpClientSelect.addEventListener("change", refreshMcpConfigStatus);
     unityConnectBtn.addEventListener("click", connectUnity);
     unityDisconnectBtn.addEventListener("click", disconnectUnity);
     unityProjectSelect.addEventListener("change", function () { selectUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
@@ -7287,6 +6920,7 @@
     syncTextStyleBtn.addEventListener("click", syncSelectedTextStyleToUnity);
     readFigmaKeyBtn.addEventListener("click", readCurrentFigmaKey);
     copyFigmaLinkBtn.addEventListener("click", copyCurrentFigmaLink);
+    copyFigmaAiContextBtn.addEventListener("click", copyFigmaAiContext);
     aiPromptFigmaKeyInput.addEventListener("input", refreshAiPromptControls);
     generateAiPromptBtn.addEventListener("click", generateAiPromptFromSelection);
     copyAiPromptBtn.addEventListener("click", copyAiPrompt);
@@ -7356,7 +6990,6 @@
     refreshAiPromptControls();
     refreshHierarchyImageTargetDisplay();
     refreshPrefabImportDisplay();
-    refreshMcpConfigStatus();
     refreshSettingsConnectionAlert();
     reconnect();
   </script>

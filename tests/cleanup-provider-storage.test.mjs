@@ -30,7 +30,7 @@ test("provider preference uses Figma clientStorage and an allowlist", () => {
 
 test("cleanup provider selector shows availability and never silently falls back", () => {
   assert.match(ui, /id="cleanupProviderSelect"/);
-  assert.match(ui, /\/ai-runner\/providers/);
+  assert.match(ui, /"ai\.providers"/);
   assert.match(ui, /GET_CLEANUP_PROVIDER_PREFERENCE/);
   assert.match(ui, /SET_CLEANUP_PROVIDER_PREFERENCE/);
   assert.match(ui, /provider\.available/);
@@ -47,11 +47,14 @@ test("one AI selector keeps the generic runner compatible behind the scenes", ()
   assert.match(ui, /syncAiRunnerToCleanupProvider\(\)/);
 });
 
-test("provider discovery retries after the Relay WebSocket reconnects", () => {
+test("provider discovery waits for registration after the Relay WebSocket reconnects", () => {
   const onOpenStart = ui.indexOf("socket.onopen = function");
   const onOpenEnd = ui.indexOf("socket.onmessage = function", onOpenStart);
   assert.ok(onOpenStart >= 0 && onOpenEnd > onOpenStart);
-  assert.match(ui.slice(onOpenStart, onOpenEnd), /refreshCleanupProviders\(\)/);
+  assert.doesNotMatch(ui.slice(onOpenStart, onOpenEnd), /refreshCleanupProviders\(\)/);
+  const registeredStart = ui.indexOf('message.type === "plugin.registered"', onOpenEnd);
+  assert.ok(registeredStart > onOpenEnd);
+  assert.match(ui.slice(registeredStart, registeredStart + 650), /refreshCleanupProviders\(\)/);
 });
 
 test("cleanup provider sync pins the per-request runner without a global config write", async () => {

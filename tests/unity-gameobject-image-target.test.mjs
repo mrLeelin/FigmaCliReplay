@@ -27,3 +27,22 @@ test("Hierarchy GameObject target rejects missing and non-asset-backed sprites",
   assert.match(resolver, /AssetDatabase\.GetAssetPath\(image\.sprite\)/);
   assert.match(resolver, /IsImageAssetSelection\(image\.sprite,/);
 });
+
+test("Unity bridge reports whether the selected Assets folder is empty", () => {
+  const handlerStart = bridge.indexOf("private static void HandleSelectedFolder");
+  const handlerEnd = bridge.indexOf("private static void HandleExportSelected", handlerStart);
+  const handler = bridge.slice(handlerStart, handlerEnd);
+
+  assert.match(handler, /selectedObjectIsFolder/);
+  assert.match(handler, /selectedFolderIsEmpty/);
+  assert.match(bridge, /using System\.Linq;/);
+  assert.match(bridge, /private static bool IsAssetFolderEmpty\(/);
+});
+
+test("Unity bridge exposes the deterministic Figma Prefab import endpoint", () => {
+  assert.ok(bridge.includes('case "/figma-to-prefab-import"'));
+  assert.match(bridge, /HandleFigmaToPrefabImport\(/);
+  assert.match(bridge, /ConfigureFigmaImportSprites\(/);
+  assert.match(bridge, /MagicWarrior\.Editor\.FigmaBridge\.PrefabImport\.FigmaPrefabGenerator/);
+  assert.match(bridge, /GetMethod\(/);
+});

@@ -36,10 +36,10 @@ REQUIRED_ZERO_GATES = [
 def find_relay_root() -> Path:
     script_path = Path(__file__).resolve()
     for parent in script_path.parents:
-        if (parent / "client" / "figma_mcp_client.py").is_file():
+        if (parent / "client" / "figma_relay_cli.py").is_file():
             return parent
     raise RuntimeError(
-        f"Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py from {script_path}."
+        f"Unable to locate the Figma Relay root containing client/figma_relay_cli.py from {script_path}."
     )
 
 
@@ -281,9 +281,9 @@ def decide(phases: dict[str, dict[str, Any]], manifest: dict[str, Any]) -> tuple
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read PSD -> Figma phase evidence without side effects.")
-    parser.add_argument("--artifact-dir", default="", help="Directory containing manifest_summary.json / figma_mcp_result.json / timeline.json")
+    parser.add_argument("--artifact-dir", default="", help="Directory containing manifest_summary.json / figma_relay_result.json / timeline.json")
     parser.add_argument("--manifest-summary", default="", help="Path to manifest_summary.json")
-    parser.add_argument("--result", default="", help="Path to figma_mcp_result.json")
+    parser.add_argument("--result", default="", help="Path to figma_relay_result.json")
     parser.add_argument("--timeline", default="", help="Path to timeline.json")
     parser.add_argument("--output", default="", help="Optional JSON output path")
     parser.add_argument("--max-samples", type=int, default=5)
@@ -294,7 +294,7 @@ def main() -> int:
         *( [base / "manifest_summary.json"] if base else [] ),
     ])
     result_path = resolve_path(args.result, base) if args.result else first_existing([
-        *( [base / "figma_mcp_result.json", base / "figma_result.json"] if base else [] ),
+        *( [base / "figma_relay_result.json", base / "figma_result.json"] if base else [] ),
     ])
     timeline_path = resolve_path(args.timeline, base) if args.timeline else first_existing([
         *( [base / "timeline.json"] if base else [] ),

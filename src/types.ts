@@ -7,6 +7,12 @@ export interface RelayJob {
   assetPaths: Map<string, string>;
   targetSessionId?: string;
   targetFileKey?: string;
+  requiredTransport?: "websocket";
+  cancelRequestedAt?: number;
+  cancelOutcome?: "running" | "unknown";
+  deliveryState?: "waiting_reconnect" | "result_unknown";
+  reconnectDeadline?: number;
+  resultToken?: string;
   result?: JsonObject;
   delivered: boolean;
   inFlight: boolean;
@@ -54,6 +60,7 @@ export interface PluginSessionTarget {
 export interface PluginSessionStatus {
   connected: boolean;
   authenticated: boolean;
+  capabilities: string[];
   sessionId?: string;
   fileKey?: string;
   fileName?: string;
@@ -72,7 +79,7 @@ export interface PluginGatewayStatus {
   sessionCount: number;
 }
 
-export interface LegacyRelayStatus {
+export interface AlgorithmStatus {
   enabled: boolean;
   available: boolean;
   url: string;

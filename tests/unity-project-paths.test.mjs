@@ -8,7 +8,7 @@ import test from "node:test";
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname.slice(1));
 const scriptsDir = path.join(repoRoot, "ai", "skills", "figma-to-prefab", "scripts");
 const prefabScriptsDir = path.join(repoRoot, "ai", "skills", "prefab-to-figma", "scripts");
-const analyzeReader = path.join(repoRoot, "ai", "skills", "figma-hierarchy-cleanup-mcp", "scripts", "figma_analyze_reader.py");
+const analyzeReader = path.join(repoRoot, "ai", "skills", "figma-hierarchy-cleanup", "scripts", "figma_analyze_reader.py");
 
 function runProbe(lines, env = {}) {
   return spawnSync("python", ["-c", lines.join("; ")], {
@@ -79,7 +79,7 @@ test("golden tests reject an invalid configured Unity project", () => {
 
 test("analyze reader has standalone Relay help without nested install paths", () => {
   const source = fs.readFileSync(analyzeReader, "utf8");
-  assert.doesNotMatch(source, /\.figma[\\/]plugins[\\/]figma-mcp-relay/);
+  assert.doesNotMatch(source, /\.figma[\\/]plugins[\\/]figma-relay/);
   const result = spawnSync("python", [analyzeReader, "--help"], {
     cwd: repoRoot,
     encoding: "utf8",

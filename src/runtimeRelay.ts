@@ -1,6 +1,11 @@
 import fs from "node:fs";
+import { spawn } from "node:child_process";
+import { startFigmaPrefabImportTask, getFigmaPrefabImportTask } from "./figmaPrefabImportTask.js";
+import type { UnityProjectRegistry } from "./unityProjectRegistry.js";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import type { GatewayConfig } from "./config.js";
 import { LOCAL_DIR, PLUGIN_ROOT, publicUrl } from "./config.js";
@@ -9,23 +14,17 @@ import { assertCleanupAiJobAllowed, recordCleanupAiJobResult } from "./cleanupAi
 import type { OperationScope } from "./logging/operationScope.js";
 import type { RelayLogger } from "./logging/relayLogger.js";
 import { logInfo, logWarn } from "./utils/logger.js";
-import {
-  deleteMcpConfigForClient,
-  desiredMcpUrl,
-  mcpConfigStatusForClient,
-  normalizeMcpClient,
-  openMcpConfigForClient,
-  writeMcpConfigForClient
-} from "./mcpConfig.js";
-import type { LegacyRelay } from "./pythonWorker.js";
-import type { JsonObject, LegacyRelayStatus, RelayJob } from "./types.js";
-import { isRecord, makeRequestId, sleep, validOperationId } from "./utils.js";
+import type { PythonAlgorithms } from "./pythonAlgorithms.js";
+import { startPsdImportTask, getPsdImportTask, applyPsdImportTask, adoptPsdImportBaseline, cancelPsdImportTask } from "./psdImportTask.js";
+import type { JsonObject, AlgorithmStatus, RelayJob } from "./types.js";
+import { constantTimeEqual, isRecord, makeRequestId, sleep, validOperationId } from "./utils.js";
 import type { WebSocketGateway } from "./websocketGateway.js";
 
 const DONE_JOB_TTL_MS = 10 * 60 * 1000;
 const PENDING_JOB_TTL_MS = 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 1000;
 const JOB_LEASE_MS = 5 * 60 * 1000;
+const RECONNECT_GRACE_MS = 30_000;
 
 export interface RelayStatus {
   status: "ok";
@@ -39,12 +38,11 @@ export interface RelayStatus {
   assetRoots: string[];
   adminTokenRequired: boolean;
   plugin: ReturnType<WebSocketGateway["status"]>;
-  legacyRelay: LegacyRelayStatus;
+  algorithms: AlgorithmStatus;
 }
 
 export class RuntimeRelay {
   private readonly jobs = new Map<string, RelayJob>();
-  private readonly queue: string[] = [];
   private readonly startedAt = Date.now();
   private readonly cleanupTimer: NodeJS.Timeout;
   private readonly operations = new Map<string, OperationScope>();
@@ -53,12 +51,25 @@ export class RuntimeRelay {
   constructor(
     private readonly config: GatewayConfig,
     private readonly gateway: WebSocketGateway,
-    private readonly legacyRelay: LegacyRelay,
+    private readonly algorithms: PythonAlgorithms,
     logging: LoggingRuntime = getLoggingRuntime()
   ) {
     this.operationLogger = logging.logger("runtime-relay");
     this.gateway.onReceived((requestId, operationId) => this.markWebSocketReceived(requestId, operationId));
     this.gateway.onUndelivered((requestId, reason) => this.markWebSocketUndelivered(requestId, reason));
+    this.gateway.onResult((requestId, result) => {
+      const job = this.jobs.get(requestId);
+      if (!job || job.requiredTransport !== "websocket") return false;
+      if (job.result) {
+        this.operationLogger.info("Acknowledged repeated WebSocket result without rewriting the stored result", { requestId }, {
+          operationId: job.operationId,
+          operationName: "relay.job",
+        });
+        return true;
+      }
+      return this.setResult(requestId, result);
+    });
+    this.gateway.onTaskControl((action, payload, sessionId) => this.handleTaskControl(action, payload, sessionId));
     this.cleanupTimer = setInterval(() => this.cleanupJobs(), CLEANUP_INTERVAL_MS);
   }
 
@@ -66,7 +77,7 @@ export class RuntimeRelay {
     return publicUrl(this.config);
   }
 
-  submitJob(payload: unknown): JsonObject {
+  submitJob(payload: unknown, options?: { transport: "websocket" }): JsonObject {
     if (!isRecord(payload)) {
       throw new Error("json body must be object");
     }
@@ -78,8 +89,24 @@ export class RuntimeRelay {
     }
 
     const existing = this.jobs.get(requestId);
-    if (existing && !existing.result) {
-      throw new Error(`duplicate in-flight requestId: ${requestId}`);
+    if (existing) {
+      const target = parseTarget(payload, jobPayload);
+      const candidate = rewriteAssetUrls({ ...jobPayload }, requestId, this.publicUrl);
+      if (!isDeepStrictEqual(existing.job, candidate)
+        || (target.sessionId && existing.targetSessionId !== target.sessionId) || (target.fileKey && existing.targetFileKey !== target.fileKey)
+        || !isDeepStrictEqual(existing.assetPaths, parseAssetPaths(payload.assetPaths, this.config.assetRoots))) {
+        throw new Error(`requestId conflict: job payload or target differs: ${requestId}`);
+      }
+      this.operationLogger.info("Existing task returned without redispatch", { requestId }, { operationId: existing.operationId });
+      return {
+        ok: true,
+        requestId,
+        operationId: existing.operationId,
+        status: this.getJobStatus(requestId).status,
+        replayed: true,
+        transport: "websocket",
+        target: { sessionId: existing.targetSessionId, fileKey: existing.targetFileKey },
+      };
     }
 
     const operation = this.operationLogger.startOperation("relay.job", "开始提交 Relay 任务", {
@@ -90,6 +117,16 @@ export class RuntimeRelay {
     try {
       const assetPaths = parseAssetPaths(payload.assetPaths, this.config.assetRoots);
       const target = parseTarget(payload, jobPayload);
+      const sessions = this.gateway.status().sessions.filter((session) => session.authenticated
+        && (!target.sessionId || session.sessionId === target.sessionId)
+        && (!target.fileKey || session.fileKey === target.fileKey));
+      if (sessions.length !== 1) throw new Error("Select exactly one matching online Figma plugin WebSocket session.");
+      const selected = sessions[0];
+      if (!["job.result", "job.reconcile", "job.cancel"].every((capability) => selected.capabilities.includes(capability))) {
+        throw new Error("Reload the updated Figma plugin with WebSocket task support.");
+      }
+      target.sessionId = selected.sessionId;
+      target.fileKey = selected.fileKey;
       assertCleanupAiJobAllowed(jobPayload.type, target.sessionId);
       const job: RelayJob = {
         requestId,
@@ -98,6 +135,8 @@ export class RuntimeRelay {
         assetPaths,
         targetSessionId: target.sessionId,
         targetFileKey: target.fileKey,
+        requiredTransport: "websocket",
+        resultToken: randomUUID(),
         delivered: false,
         inFlight: false,
         dispatchAttempts: 0,
@@ -106,34 +145,15 @@ export class RuntimeRelay {
       };
 
       this.jobs.set(requestId, job);
-      const pushed = this.tryPush(job);
-      if (!pushed && this.gateway.requiresExplicitTarget({
-        sessionId: job.targetSessionId,
-        fileKey: job.targetFileKey
-      })) {
-        throw new Error("Multiple online Figma plugin sessions require target.sessionId or target.fileKey.");
-      }
-      if (!pushed) {
-        this.queue.push(requestId);
-        operation.step("queued", "Relay 任务已进入轮询队列", {
-          requestId,
-          jobType: String(job.job.type || ""),
-          queueLength: this.queue.length
-        });
-      } else {
-        operation.step("websocket-dispatched", "Relay 任务已通过 WebSocket 下发", {
-          requestId,
-          jobType: String(job.job.type || ""),
-          attempts: job.dispatchAttempts
-        });
-      }
+      this.tryPush(job);
+      operation.step("websocket-dispatched", "Relay job dispatched over WebSocket", { requestId, jobType: String(job.job.type || ""), attempts: job.dispatchAttempts });
 
       return {
         ok: true,
         requestId,
         operationId,
         statusUrl: `${this.publicUrl}/jobs/${encodeURIComponent(requestId)}/result`,
-        transport: pushed ? "websocket" : "polling",
+        transport: "websocket",
         target: {
           sessionId: job.targetSessionId,
           fileKey: job.targetFileKey
@@ -148,9 +168,6 @@ export class RuntimeRelay {
   }
 
   tryPush(job: RelayJob): boolean {
-    if (this.config.transport === "polling") {
-      return false;
-    }
     const pushed = this.gateway.sendJob(job);
     if (pushed) {
       job.dispatchAttempts += 1;
@@ -161,57 +178,108 @@ export class RuntimeRelay {
       job.updatedAt = Date.now();
       return true;
     }
-    if (this.config.transport === "websocket") {
-      throw new Error("No matching online Figma plugin WebSocket session. Keep one plugin panel open, or pass target.sessionId/fileKey.");
-    }
-    return false;
+    throw new Error("No matching online Figma plugin WebSocket session. Keep one plugin panel open, or pass target.sessionId/fileKey.");
   }
 
-  getNextPollingJob(): RelayJob | undefined {
-    const target = {
-      sessionId: "",
-      fileKey: ""
-    };
-    return this.getNextPollingJobForTarget(target);
-  }
-
-  getNextPollingJobForTarget(target: { sessionId?: string; fileKey?: string }): RelayJob | undefined {
-    const scanCount = this.queue.length;
-    for (let index = 0; index < scanCount; index += 1) {
-      const requestId = this.queue.shift();
-      if (!requestId) {
-        continue;
-      }
-      const job = this.jobs.get(requestId);
-      if (job && !job.result && !job.inFlight && jobMatchesTarget(job, target)) {
-        job.delivered = true;
-        job.deliveredBy = "polling";
-        job.lastDispatchBy = "polling";
-        job.dispatchAttempts += 1;
-        job.lastDispatchedAt = Date.now();
-        job.inFlight = true;
-        job.leaseExpiresAt = Date.now() + JOB_LEASE_MS;
-        job.updatedAt = Date.now();
-        logInfo("Relay job leased by polling", {
-          requestId: job.requestId,
-          jobType: String(job.job.type || ""),
-          attempts: job.dispatchAttempts
-        });
-        this.operations.get(requestId)?.step("polling-leased", "Relay 任务已由轮询客户端领取", {
-          requestId,
-          attempts: job.dispatchAttempts
-        });
-        return job;
-      }
-      if (job && !job.result && !job.inFlight) {
-        this.queue.push(requestId);
-      }
-    }
-    return undefined;
-  }
+  // Retained only for callers awaiting the T6 HTTP route removal; never leases a job.
 
   getJob(requestId: string): RelayJob | undefined {
     return this.jobs.get(requestId);
+  }
+
+  getJobStatus(requestId: string): JsonObject {
+    const job = this.jobs.get(requestId);
+    if (!job) {
+      return { ok: false, requestId, status: "unknown" };
+    }
+    this.refreshReconnectState(job);
+    const status = job.result
+      ? isFailedJobResult(job.result)
+        ? ["cancelled", "result_unknown"].includes(String(job.result.status || "").toLowerCase())
+          ? String(job.result.status).toLowerCase()
+          : "failed"
+        : "succeeded"
+      : job.deliveryState ?? (job.cancelRequestedAt ? "cancel_requested" : job.inFlight ? "running" : "queued");
+    return {
+      ok: true,
+      requestId,
+      operationId: job.operationId,
+      status,
+      createdAt: new Date(job.createdAt).toISOString(),
+      updatedAt: new Date(job.updatedAt).toISOString(),
+      dispatchAttempts: job.dispatchAttempts,
+      result: job.result,
+      cancelRequestedAt: job.cancelRequestedAt ? new Date(job.cancelRequestedAt).toISOString() : undefined,
+      cancelOutcome: job.cancelOutcome,
+      reconnectDeadline: job.reconnectDeadline,
+      lastDeliveryError: job.lastDeliveryError,
+    };
+  }
+
+  cancelJob(requestId: string): JsonObject {
+    const job = this.jobs.get(requestId);
+    if (!job) return { ok: false, requestId, status: "unknown", error: "unknown task" };
+    if (job.result) return this.getJobStatus(requestId);
+    if (job.cancelRequestedAt) return this.getJobStatus(requestId);
+    job.cancelRequestedAt = Date.now();
+    job.updatedAt = Date.now();
+    if (job.dispatchAttempts === 0) {
+      job.result = { ok: false, status: "cancelled", requestId, reason: "cancelled before dispatch" };
+      job.updatedAt = Date.now();
+      this.operations.get(requestId)?.cancel("任务在下发前已取消", { requestId });
+      this.operations.delete(requestId);
+      return this.getJobStatus(requestId);
+    }
+    const sent = this.gateway.sendCancel(job);
+    this.operations.get(requestId)?.step("cancel-requested", "已向 Figma 插件请求取消任务", { requestId, sent });
+    return { ...this.getJobStatus(requestId), cancelSent: sent };
+  }
+
+  private handleTaskControl(action: string, payload: JsonObject, sessionId: string): JsonObject {
+    const requestId = typeof payload.requestId === "string" ? payload.requestId : "";
+    const job = this.jobs.get(requestId);
+    const operation = this.operationLogger.startOperation("relay.reconcile", "Reconcile plugin task state", {
+      operationId: job?.operationId, data: { requestId, action, sessionId },
+    });
+    try {
+      operation.step("validate", "Validate task recovery report");
+      if (!job || job.requiredTransport !== "websocket" || job.targetSessionId !== sessionId
+        || !job.resultToken || !constantTimeEqual(String(payload.resultToken || ""), job.resultToken)) {
+        throw new Error("Unknown task or invalid recovery token for this session.");
+      }
+      if (action === "job.result") {
+        if (!isRecord(payload.result)) throw new Error("Task result must be an object.");
+        if (!job.result) this.setResult(requestId, payload.result);
+      } else if (action === "job.reconcile") {
+        if (!["queued", "running", "completed", "unknown"].includes(String(payload.state))) throw new Error("Invalid task reconciliation state.");
+        if (!job.result) {
+          job.deliveryState = payload.state === "unknown" ? "result_unknown" : undefined;
+          job.reconnectDeadline = undefined;
+          job.inFlight = payload.state !== "unknown";
+          job.leaseExpiresAt = Date.now() + JOB_LEASE_MS;
+          job.updatedAt = Date.now();
+        }
+      } else if (action === "job.cancel-status") {
+        if (!["running", "unknown"].includes(String(payload.state))) throw new Error("Invalid cancellation report.");
+        if (!job.cancelRequestedAt) throw new Error("Cancellation was not requested.");
+        job.cancelOutcome = payload.state as "running" | "unknown";
+        job.updatedAt = Date.now();
+      } else {
+        throw new Error("Unsupported task control action.");
+      }
+      operation.succeed("Plugin task state reconciled", { status: this.getJobStatus(requestId).status });
+      return { accepted: true, cancelRequested: Boolean(job.cancelRequestedAt && !job.result), terminal: Boolean(job.result) };
+    } catch (error) {
+      operation.fail(error, "Plugin task reconciliation rejected");
+      throw error;
+    }
+  }
+
+  private refreshReconnectState(job: RelayJob): void {
+    if (job.result || job.deliveryState !== "waiting_reconnect" || !job.reconnectDeadline || Date.now() < job.reconnectDeadline) return;
+    job.deliveryState = "result_unknown";
+    job.reconnectDeadline = undefined;
+    this.operations.get(job.requestId)?.step("result-unknown", "Reconnect deadline expired; task will not be replayed", { requestId: job.requestId }, "warn");
   }
 
   setResult(requestId: string, result: unknown): boolean {
@@ -220,6 +288,8 @@ export class RuntimeRelay {
       return false;
     }
     job.result = this.persistResultArtifacts(requestId, result);
+    job.deliveryState = undefined;
+    job.reconnectDeadline = undefined;
     job.inFlight = false;
     job.leaseExpiresAt = undefined;
     job.updatedAt = Date.now();
@@ -289,20 +359,11 @@ export class RuntimeRelay {
       total: this.jobs.size,
       uptimeSeconds: Math.round((Date.now() - this.startedAt) / 10) / 100,
       publicUrl: this.publicUrl,
-      transport: this.config.transport,
+      transport: "websocket",
       assetRoots: this.config.assetRoots,
       adminTokenRequired: Boolean(this.config.adminToken),
       plugin: this.gateway.status(),
-      legacyRelay: this.legacyRelay.status()
-    };
-  }
-
-  mcpClientsStatus(): JsonObject {
-    return {
-      ok: true,
-      clients: [],
-      mcpEndpoint: `${this.publicUrl}${this.config.mcpPath}`,
-      mcpMounted: true
+      algorithms: this.algorithms.status()
     };
   }
 
@@ -310,35 +371,55 @@ export class RuntimeRelay {
     return typeof sessionId === "string" && this.gateway.hasLiveSessionId(sessionId);
   }
 
-  mcpConfigStatus(client: string): JsonObject {
-    return mcpConfigStatusForClient(
-      normalizeMcpClient(client),
-      desiredMcpUrl(this.publicUrl, this.config.mcpPath),
-      true
-    );
-  }
-
-  writeMcpConfig(client: unknown, url?: unknown): JsonObject {
-    const mcpUrl = typeof url === "string" && url.trim()
-      ? url.trim()
-      : desiredMcpUrl(this.publicUrl, this.config.mcpPath);
-    return writeMcpConfigForClient(normalizeMcpClient(client), mcpUrl, true);
-  }
-
-  deleteMcpConfig(client: unknown): JsonObject {
-    return deleteMcpConfigForClient(
-      normalizeMcpClient(client),
-      desiredMcpUrl(this.publicUrl, this.config.mcpPath),
-      true
-    );
-  }
-
-  openMcpConfig(client: unknown): JsonObject {
-    return openMcpConfigForClient(normalizeMcpClient(client));
-  }
-
-  async legacyJson(pathname: string, method: "GET" | "POST", payload?: unknown, timeoutMs = 10_000) {
-    return this.legacyRelay.proxyJson(pathname, method, payload, timeoutMs);
+  async algorithmControl(action: string, payload: Record<string, unknown>, unityProjects?: UnityProjectRegistry): Promise<unknown> {
+    if (action === "figma.prefab.start") {
+      if (!unityProjects || typeof payload.clientRequestId !== "string" || !payload.clientRequestId) throw new Error("Registered project and stable clientRequestId are required");
+      return { ok: true, task: startFigmaPrefabImportTask(this.config, unityProjects, payload) };
+    }
+    if (action === "figma.prefab.get") {
+      const task = getFigmaPrefabImportTask(String(payload.taskId || ""));
+      if (!task) throw new Error("Unknown import task; do not replay an uncertain write");
+      if (task.sessionId !== payload.sessionId || task.fileKey !== payload.fileKey) throw new Error("Import belongs to a different Figma session");
+      return { ok: true, task };
+    }
+    if (action.startsWith("psd.import.")) {
+      if (action === "psd.import.start") {
+        const target = isRecord(payload.target) ? payload.target : {};
+        if ((target.sessionId && target.sessionId !== payload.sessionId) || (target.fileKey && target.fileKey !== payload.fileKey)) {
+          throw new Error("PSD target conflicts with the authenticated Figma session");
+        }
+        return { ok: true, task: startPsdImportTask(this.config, { ...payload, target: { ...target, sessionId: payload.sessionId, fileKey: payload.fileKey } }) };
+      }
+      const taskId = String(payload.taskId || "");
+      const task = getPsdImportTask(taskId);
+      if (!task) throw new Error("Unknown PSD task; do not replay an uncertain write");
+      if (task.target.sessionId !== payload.sessionId || task.target.fileKey !== payload.fileKey) throw new Error("PSD task belongs to a different Figma session");
+      if (action === "psd.import.get") return { ok: true, task };
+      if (action === "psd.import.cancel") return cancelPsdImportTask(taskId);
+      if (action === "psd.import.apply") return { ok: true, task: applyPsdImportTask(this.config, taskId, payload) };
+      if (action === "psd.import.adopt-baseline") return { ok: true, task: adoptPsdImportBaseline(this.config, taskId, payload) };
+      throw new Error(`Unknown PSD action: ${action}`);
+    }
+    switch (action) {
+      case "plugin.open-folder": {
+        const operation = getLoggingRuntime().logger("relay-runtime").startOperation("plugin.open-folder", "Open plugin folder");
+        try {
+          const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+          operation.step("spawn", "Launch folder opener");
+          await new Promise<void>((resolve, reject) => {
+            const child = spawn(command, [PLUGIN_ROOT], { windowsHide: true, stdio: "ignore" });
+            child.once("error", reject);
+            child.once("spawn", () => { child.unref(); resolve(); });
+          });
+          operation.succeed("Folder opener launched");
+          return { ok: true, path: PLUGIN_ROOT };
+        } catch (error) { operation.fail(error, "Folder opener failed"); throw error; }
+      }
+      case "image.crop": return this.algorithms.crop(payload);
+      case "prefab.import.start": return this.algorithms.startImport(payload);
+      case "prefab.import.get": return this.algorithms.getImport(String(payload.taskId || ""), String(payload.sessionId || ""));
+      default: throw new Error(`Unknown algorithm control: ${action}`);
+    }
   }
 
   assetPath(requestId: string, assetId: string): string | undefined {
@@ -381,7 +462,7 @@ export class RuntimeRelay {
 
   private markWebSocketUndelivered(requestId: string, reason: string): void {
     const job = this.jobs.get(requestId);
-    if (!job || job.result || job.deliveredBy === "polling") {
+    if (!job || job.result) {
       return;
     }
     job.delivered = false;
@@ -395,29 +476,14 @@ export class RuntimeRelay {
       jobType: String(job.job.type || ""),
       reason
     });
-    if (this.config.transport === "websocket") {
-      job.result = {
-        ok: false,
-        error: reason,
-        requestId
-      };
-      this.operations.get(requestId)?.fail(new Error(reason), "Relay WebSocket 任务投递失败", { requestId });
-      this.operations.delete(requestId);
-      return;
-    }
-    this.enqueueIfNeeded(requestId);
-  }
-
-  private enqueueIfNeeded(requestId: string): void {
-    const job = this.jobs.get(requestId);
-    if (!job || job.result || job.inFlight || this.queue.includes(requestId)) {
-      return;
-    }
-    this.queue.push(requestId);
+    job.deliveryState = "waiting_reconnect";
+    job.reconnectDeadline = Date.now() + RECONNECT_GRACE_MS;
+    this.operations.get(requestId)?.step("waiting-reconnect", "Waiting for plugin reconciliation; no automatic replay", { requestId, reason, graceMs: RECONNECT_GRACE_MS }, "warn");
   }
 
   private cleanupJobs(now = Date.now()): void {
     for (const [requestId, job] of this.jobs) {
+      this.refreshReconnectState(job);
       const ttl = job.result ? DONE_JOB_TTL_MS : PENDING_JOB_TTL_MS;
       if (now - job.updatedAt > ttl) {
         logInfo("Relay job expired from memory", {
@@ -432,27 +498,7 @@ export class RuntimeRelay {
         continue;
       }
       if (!job.result && job.inFlight && job.leaseExpiresAt && now > job.leaseExpiresAt) {
-        job.inFlight = false;
-        job.delivered = false;
-        job.deliveredBy = undefined;
-        job.leaseExpiresAt = undefined;
-        job.lastDeliveryError = "job execution lease expired";
-        job.updatedAt = now;
-        logWarn("Relay job lease expired", {
-          requestId,
-          jobType: String(job.job.type || "")
-        });
-        this.operations.get(requestId)?.step("lease-expired", "Relay 任务租约超时，准备重试", {
-          requestId
-        }, "warn");
-        this.enqueueIfNeeded(requestId);
-      }
-    }
-    for (let index = this.queue.length - 1; index >= 0; index -= 1) {
-      const requestId = this.queue[index];
-      const job = this.jobs.get(requestId);
-      if (!job || job.result || job.inFlight) {
-        this.queue.splice(index, 1);
+        this.markWebSocketUndelivered(requestId, "job execution lease expired");
       }
     }
   }
@@ -737,29 +783,14 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function isFailedJobResult(result: JsonObject): boolean {
+export function isFailedJobResult(result: JsonObject): boolean {
   if (result.ok === false) {
     return true;
   }
   const status = String(result.status || "").toLowerCase();
-  return ["failed", "error", "cancelled", "blocked"].includes(status);
+  return ["failed", "error", "cancelled", "blocked", "result_unknown"].includes(status);
 }
 
-function jobMatchesTarget(job: RelayJob, target: { sessionId?: string; fileKey?: string }): boolean {
-  if (job.targetSessionId && target.sessionId && job.targetSessionId !== target.sessionId) {
-    return false;
-  }
-  if (job.targetSessionId && !target.sessionId) {
-    return false;
-  }
-  if (job.targetFileKey && target.fileKey && job.targetFileKey !== target.fileKey) {
-    return false;
-  }
-  if (job.targetFileKey && !target.fileKey) {
-    return false;
-  }
-  return true;
-}
 
 function parseAssetPaths(raw: unknown, roots: string[]): Map<string, string> {
   const result = new Map<string, string>();
@@ -783,7 +814,7 @@ function isPathAllowed(filePath: string, roots: string[]): boolean {
   if (isInsidePath(normalized, LOCAL_DIR)) {
     return false;
   }
-  const candidates = roots.length > 0 ? roots : [PLUGIN_ROOT, path.join(os.tmpdir(), "figma-mcp-relay")];
+  const candidates = roots.length > 0 ? roots : [PLUGIN_ROOT, path.join(os.tmpdir(), "figma-relay")];
   for (const root of candidates) {
     if (isInsidePath(normalized, root)) {
       return true;

@@ -9,7 +9,6 @@ import { WebSocket } from "ws";
 
 import { parseArgs } from "../dist/config.js";
 import { createLoggingRuntime } from "../dist/logging/loggingRuntime.js";
-import { RelayMcpServer } from "../dist/mcpServer.js";
 import { RuntimeRelay } from "../dist/runtimeRelay.js";
 import { WebSocketGateway } from "../dist/websocketGateway.js";
 
@@ -20,10 +19,12 @@ class FakeGateway {
 
   onReceived(callback) { this.receivedCallback = callback; }
   onUndelivered(callback) { this.undeliveredCallback = callback; }
+  onResult(callback) { this.resultCallback = callback; }
+  onTaskControl(callback) { this.taskControlCallback = callback; }
   sendJob(job) { this.sent.push(job); return true; }
   requiresExplicitTarget() { return false; }
   hasLiveSessionId() { return true; }
-  status() { return { connected: true, authenticated: true, sessions: [], sessionCount: 1 }; }
+  status() { return { connected: true, authenticated: true, sessions: [{ authenticated: true, sessionId: "test", fileKey: "file", capabilities: ["job.result", "job.reconcile", "job.cancel"] }], sessionCount: 1 }; }
   triggerReceived(requestId, operationId) { this.receivedCallback?.(requestId, operationId); }
 }
 
@@ -118,34 +119,6 @@ test("authenticated WebSocket log.events batches are ingested without becoming j
   }
 });
 
-test("MCP metadata operation id is passed into submitted relay jobs", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-relay-mcp-correlation-"));
-  const logging = createLoggingRuntime({ directory: path.join(root, "logs") });
-  let submittedPayload;
-  const relay = {
-    submitJob(payload) {
-      submittedPayload = payload;
-      return { requestId: "req-mcp", operationId: payload.operationId, transport: "polling" };
-    },
-  };
-  try {
-    const server = new RelayMcpServer(relay, logging);
-    await server.handle({
-      jsonrpc: "2.0",
-      id: 7,
-      method: "tools/call",
-      params: {
-        name: "figma_submit_job",
-        arguments: { job: { type: "TEST_JOB" } },
-        _meta: { operationId: "op-mcp" },
-      },
-    });
-    assert.equal(submittedPayload.operationId, "op-mcp");
-  } finally {
-    await logging.close();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
 
 async function waitFor(predicate, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;

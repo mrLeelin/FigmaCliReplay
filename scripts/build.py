@@ -1,4 +1,4 @@
-"""构建 Figma MCP Relay 插件产物。
+"""构建 Figma Relay 插件产物。
 
 职责：
 - 拼接 code/ 目录下的 .js 文件为 code.js（按指定顺序）。
@@ -176,6 +176,10 @@ def sync_release_version():
 
 def build():
     global BUILD_VERSION
+    # Remove retired generated entrypoints so incremental builds cannot ship MCP.
+    for stem in ("mcpServer", "mcpConfig"):
+        for suffix in (".js", ".js.map", ".d.ts", ".d.ts.map"):
+            (BASE / "dist" / (stem + suffix)).unlink(missing_ok=True)
     sync_prompt_templates()
     sync_release_version()
 
@@ -212,7 +216,7 @@ def build():
     BUILD_VERSION = version
     # 在拼接后的完整代码中替换 BUILD_NUMBER 占位符为实际版本号
     # (避免使用 JS 变量传递，因为 Figma JSVM 沙箱可能限制顶级作用域)
-    lines.insert(0, f"// Figma MCP Relay build #{version}")
+    lines.insert(0, f"// Figma Relay build #{version}")
 
     # 在拼接后的完整代码中替换 __BUILD_NUMBER__ 占位符为实际版本号
     code_text = "\n".join(lines) + "\n"
@@ -243,7 +247,7 @@ def build():
     print()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build Figma MCP Relay plugin assets.")
+    parser = argparse.ArgumentParser(description="Build Figma Relay plugin assets.")
     parser.add_argument(
         "--sync-release-version",
         action="store_true",

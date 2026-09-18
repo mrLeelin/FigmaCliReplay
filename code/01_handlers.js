@@ -320,7 +320,12 @@ async function handleCollectComponents(message) {
 /** 一次性读取当前选中根节点的紧凑层级快照；此命令严格只读。 */
 async function handleQueryCleanupSnapshot(message) {
   try {
-    const selection = figma.currentPage.selection || [];
+    const requestedRootId = typeof message.rootNodeId === "string" ? message.rootNodeId.trim() : "";
+    const requestedRoot = requestedRootId ? await figma.getNodeByIdAsync(requestedRootId) : null;
+    if (requestedRootId && !requestedRoot) {
+      throw new Error("AI 整理原始根节点已不存在，请重新开始一次整理会话。");
+    }
+    const selection = requestedRoot ? [requestedRoot] : (figma.currentPage.selection || []);
     if (selection.length !== 1) {
       throw new Error("AI 层级整理需要且只能选择 1 个根节点。");
     }

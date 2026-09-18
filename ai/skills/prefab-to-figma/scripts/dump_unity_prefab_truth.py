@@ -4,7 +4,7 @@
 """Dump Unity runtime RectTransform/layout truth for a UGUI Prefab.
 
 This script does not modify project assets. It sends a temporary C# snippet to
-the Unity Roslyn gateway, instantiates the Prefab in an unsaved Canvas, forces a
+the Unity CLI, instantiates the Prefab in an unsaved Canvas, forces a
 layout pass, and writes a JSON snapshot for deterministic comparison.
 """
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,8 @@ FIGMA_TO_PREFAB_SCRIPTS = SCRIPT_DIR.parents[1] / "figma-to-prefab" / "scripts"
 if str(FIGMA_TO_PREFAB_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(FIGMA_TO_PREFAB_SCRIPTS))
 from unity_project_paths import normalize_asset_path, resolve_unity_project  # noqa: E402
+sys.path.insert(0, str(SCRIPT_DIR.parents[3] / "server"))
+from python_logger import PythonLogger
 
 
 TRUTH_FILE_NAME = "unity_runtime_truth.json"
@@ -300,53 +303,54 @@ finally
     )
 
 
-def extract_gateway_result(payload: dict[str, Any]) -> str:
-    if payload.get("state") != "Success" and payload.get("success") is not True:
-        raise RuntimeError(json.dumps(payload, ensure_ascii=False, indent=2))
-    result = payload.get("result")
-    if isinstance(result, str):
-        return result
-    if isinstance(result, dict) and isinstance(result.get("resultText"), str):
-        return result["resultText"]
-    if isinstance(result, dict) and isinstance(result.get("resultJson"), str):
-        return json.loads(result["resultJson"])
-    if isinstance(result, dict) and isinstance(result.get("value"), str):
-        return result["value"]
-    raise RuntimeError(f"Unity gateway did not return a JSON string result: {payload!r}")
+def extract_cli_result(payload: dict[str, Any], project: Path) -> str:
+    data = payload.get("data") or {}
+    result = data.get("result") or {}
+    if payload.get("success") is not True or data.get("success") is not True or result.get("success") is not True:
+        raise RuntimeError("Unity CLI evaluation failed: " + json.dumps(payload, ensure_ascii=False)[:2000])
+    actual = (data.get("target") or {}).get("projectPath", "")
+    if not actual or os.path.normcase(os.path.realpath(actual)) != os.path.normcase(os.path.realpath(project)):
+        raise RuntimeError("Unity CLI returned a different project identity")
+    if not isinstance(result.get("result"), str):
+        raise RuntimeError("Unity CLI did not return a JSON string result")
+    return result["result"]
 
 
 def run_dump(args: argparse.Namespace) -> dict[str, Any]:
+    operation = PythonLogger("unity-runtime-truth").start_operation("unity.truth")
+    try:
+        operation.step("validate", "Validate explicit Unity project and Prefab")
+        result = _run_dump(args, operation)
+        operation.succeed("Unity runtime truth written")
+        return result
+    except Exception as error:
+        operation.fail(error, "Unity runtime truth failed; no automatic replay")
+        raise
+
+
+def _run_dump(args: argparse.Namespace, operation) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     unity_root = unity_project_root(project_root)
     asset_path = unity_asset_path(project_root, Path(args.prefab))
     canvas_width, canvas_height = parse_canvas(args.canvas)
-    gateway_client = unity_root / "Assets" / "Editor" / "RoslynGateway" / "PyScripts" / "ai_gateway_client.py"
-    if not gateway_client.exists():
-        raise FileNotFoundError(f"Unity Roslyn gateway client not found: {gateway_client}")
+    if not 1 <= args.timeout <= 3600:
+        raise ValueError("Unity CLI timeout must be between 1 and 3600 seconds")
 
     code = build_unity_code(asset_path, canvas_width, canvas_height)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = out_dir / TRUTH_FILE_NAME if out_dir.is_dir() else out_dir
 
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".cs.txt", delete=False) as handle:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".cs", delete=False) as handle:
         handle.write(code)
         code_path = Path(handle.name)
 
     try:
         command = [
-            sys.executable,
-            str(gateway_client),
-            "--http-timeout",
-            str(max(args.timeout + 5, 30)),
-            "do-code",
-            "--project-root",
-            str(unity_root),
-            "--code-file",
-            str(code_path),
-            "--timeout",
-            str(args.timeout),
+            os.environ.get("FIGMA_UNITY_CLI", "unity"), "command", "eval_file", str(code_path), str(args.timeout * 1000),
+            "--project-path", str(unity_root), "--timeout", str(args.timeout + 5), "--format", "json",
         ]
+        operation.step("execute", "Run Unity CLI against frozen project", {"projectPath": str(unity_root), "attempt": 1})
         completed = subprocess.run(
             command,
             cwd=str(project_root),
@@ -359,12 +363,15 @@ def run_dump(args: argparse.Namespace) -> dict[str, Any]:
         )
         if completed.returncode != 0:
             raise RuntimeError(
-                "Unity gateway command failed "
+                "Unity CLI command failed "
                 f"({completed.returncode}): {completed.stdout}\n{completed.stderr}"
             )
         payload = json.loads(completed.stdout)
-        truth_text = extract_gateway_result(payload)
+        truth_text = extract_cli_result(payload, unity_root)
         truth = json.loads(truth_text)
+        if not isinstance(truth, dict) or truth.get("schema") != "unity-runtime-prefab-truth.v1" or truth.get("prefabPath") != asset_path:
+            raise RuntimeError("Unity truth schema or Prefab identity mismatch")
+        operation.step("write", "Validated truth identity; write snapshot")
         truth["artifacts"] = {"truthPath": str(output_path)}
         output_path.write_text(json.dumps(truth, ensure_ascii=False, indent=2), encoding="utf-8")
         return truth

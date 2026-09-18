@@ -17,19 +17,19 @@ Unity Prefab 导入 Figma 的解析和写入计划必须由固化脚本生成：
 
 1. `prefab_to_figma.py` 输出 `prefab_export_audit_report.json`。
 2. `build_figma_write_plan.py` 输出 `figma_write_plan.json` 和 `figma_write_plan_audit_report.json`。
-3. `figmaMcpRelay`、runtime relay 和插件 UI 只能基于 `allPass`、`blockingErrors`、`warnings`、`summary`、`checks`、`artifacts` 更新任务状态；AI 只能转述结果。
+3. `figmaRelay`、runtime relay 和插件 UI 只能基于 `allPass`、`blockingErrors`、`warnings`、`summary`、`checks`、`artifacts` 更新任务状态；AI 只能转述结果。
 
 禁止行为：
 
 - ❌ 不看审核报告，直接读取 `prefab-to-figma.json` 后手工统计节点、图片、文本或九宫数量。
 - ❌ 从终端输出中复制 imageHash、坐标、颜色、文本到 Figma JS。
 - ❌ 跳过 `figma_write_plan_audit_report.json`，凭经验决定图片上传、描边、九宫或 PrefabInstance 写法。
-- ❌ 绕过 `figmaMcpRelay` / `prefab_to_figma_mcp_client.py`，让 LLM 直接手写大段官方/通用 Figma MCP `use_figma` 创建脚本作为标准写入路径。
+- ❌ 绕过 `figmaRelay` / `prefab_to_figma_cli.py`，让 LLM 直接手写大段官方/通用 Figma MCP `use_figma` 创建脚本作为标准写入路径。
 - ❌ 把 `warnings` 当作普通日志忽略。每条 warning 都必须由脚本/插件结构化分类；需要用户决策时必须产出明确 decision 项。
 
 ## 不要把视觉或几何判定外包给大模型
 
-Prefab → Figma 的目标是无大模型确定性导入。发现视觉偏移、层级错位、翻转错位、截图缺失或资源异常时，正确修复位置是 exporter、write plan、MCP Relay plugin、server status 或验证报告，而不是让 AI 肉眼判断是否“差不多”。
+Prefab → Figma 的目标是无大模型确定性导入。发现视觉偏移、层级错位、翻转错位、截图缺失或资源异常时，正确修复位置是 exporter、write plan、Relay plugin、server status 或验证报告，而不是让 AI 肉眼判断是否“差不多”。
 
 必须固化的判定包括：
 
@@ -52,23 +52,23 @@ AI 只能用这些报告定位失败阶段，并提出修改计划；不能用�
 
 > **注意**：此规则在 Figma → Unity 同步时同样适用（读取颜色时也需要区分 fontColor 和 color）。详见 `../../figma-to-prefab/references/pitfalls-figma-to-unity.md`。
 
-## 标准写入必须走 figmaMcpRelay / MCP Relay，官方 MCP 占位清理只用于 fallback
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
 
 标准 Unity Prefab → Figma 写入路径是：
 
 ```text
-AI MCP client → figmaMcpRelay → runtime relay → prefab_to_figma.py → build_figma_write_plan.py → figma-mcp-relay 插件
+AI CLI → figmaRelay → runtime relay → prefab_to_figma.py → build_figma_write_plan.py → figma-relay 插件
 ```
 
 命令行调试兼容路径是：
 
 ```text
-prefab_to_figma.py → build_figma_write_plan.py → prefab_to_figma_mcp_client.py → figmaMcpRelay → runtime relay → figma-mcp-relay 插件
+prefab_to_figma.py → build_figma_write_plan.py → prefab_to_figma_cli.py → figmaRelay → runtime relay → figma-relay 插件
 ```
 
 runtime relay 路径由插件下载 `/assets/{requestId}/{assetId}` 图片字节并调用 `figma.createImage`，不使用官方/通用 Figma MCP `upload_assets`，因此不会产生占位节点。
 
-只有 `figmaMcpRelay` / MCP Relay 环境故障且用户明确书面同意 fallback 时，才允许使用官方/通用 Figma MCP `upload_assets` / `use_figma`。此时必须记住：`upload_assets` 会在 Figma 文件中自动放置占位节点（返回 `placedOnNodeId`）。这些占位节点的 ID 是递增的，可能与后续 `use_figma` 创建的新节点 ID 冲突。
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
 
 **fallback 中严禁在 `use_figma` 创建正式节点的同一段代码中删除上传占位节点。** 正确做法：
 
@@ -511,7 +511,7 @@ AlbumView 导入后，3 个文本节点的字体为 `Inter Regular`，但目标 
 
 ### 强制规则
 
-#### MCP Relay 侧：`code.js` / `02_prefab_to_figma.js`
+#### Relay 侧：`code.js` / `02_prefab_to_figma.js`
 
 **必须在写入文本前做全文件字体检测**：
 
@@ -541,7 +541,7 @@ AlbumView 导入后，3 个文本节点的字体为 `Inter Regular`，但目标 
 AlbumView 导入时，`Common_Prefab_Down_1` 和 `Common_Prefab_TipBtn_1` 两个 Instance 都被放在了 `(0,0)`。原因是：
 1. `_parse_variant_modifications` 的 regex 中 `(.+)` 在 DOTALL 模式下贪婪匹配，把所有 modification 吞到一个条目里
 2. `_find_parent_rect_size` 未实现（始终返回 `{}`），`rect` 无法计算
-3. 即使 parser 输出了 `rectTransform` 原始字段，MCP Relay 的 `resolvePrefabInstanceRect` 也因缺少 `rectTransform` 数据而无法计算位置
+3. 即使 parser 输出了 `rectTransform` 原始字段，Relay 的 `resolvePrefabInstanceRect` 也因缺少 `rectTransform` 数据而无法计算位置
 4. Unity Y-up → Figma Y-down 转换未正确应用（`anchoredPosition.y` 被直接当成 Figma Y 坐标）
 
 ### 强制规则
@@ -555,11 +555,11 @@ AlbumView 导入时，`Common_Prefab_Down_1` 和 `Common_Prefab_TipBtn_1` 两个
 - 计算得到的 rect（已做 Figma Y-up→Y-down 转换）必须写入 `instanceOverride.rect`
 - 原始 override 字段必须写入 `instanceOverride.rectTransform`（含 `m_AnchorMin`/`m_AnchorMax`/`m_SizeDelta`/`m_AnchoredPosition`/`m_Pivot`）
 
-#### MCP Relay 侧：`code.js` / `02_prefab_to_figma.js`
+#### Relay 侧：`code.js` / `02_prefab_to_figma.js`
 - `applyPrefabInstanceGeometry` 必须检查 stretch-to-fill 情况：如果 computed rect 尺寸 ≈ 父节点尺寸（stretch anchor + sizeDelta 0），则**不要 resize Instance**，只将位置置于 `(0,0)`。Component 自身视觉尺寸由子 Prefab 内部布局决定。
 - 非 stretch 情况使用 computed rect 设置位置和尺寸
 
 #### 验证要求
-- MCP Relay 写入完成后，必须检查每个 prefabInstance 的 `x/y` 和父节点尺寸
+- Relay 写入完成后，必须检查每个 prefabInstance 的 `x/y` 和父节点尺寸
 - 检查坐标换算是否正确（特别是 Y 轴翻转）
 - 检查 stretch anchor 的 Instance 是否被错误 resize

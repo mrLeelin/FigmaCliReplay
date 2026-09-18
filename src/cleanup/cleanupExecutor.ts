@@ -46,7 +46,7 @@ export function buildCleanupApplyProcess(options: CleanupApplyProcessOptions): {
     options.pluginRoot,
     "ai",
     "skills",
-    "figma-hierarchy-cleanup-mcp",
+    "figma-hierarchy-cleanup",
     "scripts",
     "apply_cleanup_plan.py",
   );
@@ -76,7 +76,7 @@ export function buildCleanupPipelineProcess(options: CleanupPipelineProcessOptio
     options.pluginRoot,
     "ai",
     "skills",
-    "figma-hierarchy-cleanup-mcp",
+    "figma-hierarchy-cleanup",
     "scripts",
     "run_cleanup_pipeline.py",
   );

@@ -10,9 +10,9 @@
 3. After user approval for the `.tmp` output, run `scripts/prefab_to_figma.py` with project root, Prefab path, canvas size, and output directory.
 4. Review generated `prefab_export_audit_report.json`. Stop if `allPass=false` or `blockingErrors` is not empty. Warnings must be carried as structured report data instead of ignored.
 5. Run `scripts/build_figma_write_plan.py` to generate `figma_write_plan.json` and `figma_write_plan_audit_report.json`. Stop if the plan audit has blocking errors.
-6. In the default no-LLM flow, MCP Relay Server proceeds automatically when audits pass. In command-line debug mode, ask for one batch confirmation before any Figma write.
+6. In the default no-LLM flow, Relay Server proceeds automatically when audits pass. In command-line debug mode, ask for one batch confirmation before any Figma write.
 7. Read `references/figma-layer-mapping.md` before writing to Figma.
-8. Use local `figmaMcpRelay` as the AI-facing control plane. For command-line debugging only, use the MCP-backed wrapper `scripts/prefab_to_figma_mcp_client.py` to submit `PREFAB_TO_FIGMA_WRITE`; do not POST directly to the localhost relay. The Figma plugin creates the top-level Frame. If JSON `visualBounds` exceeds the root RectTransform, it creates `<rootName>__ImportBounds` as the generated wrapper and places the original Unity root inside it.
+8. Use local `figmaRelay` as the AI-facing control plane. For command-line debugging only, use the CLI + WebSocket wrapper `scripts/prefab_to_figma_cli.py` to submit `PREFAB_TO_FIGMA_WRITE`; do not POST directly to the localhost relay. The Figma plugin creates the top-level Frame. If JSON `visualBounds` exceeds the root RectTransform, it creates `<rootName>__ImportBounds` as the generated wrapper and places the original Unity root inside it.
 9. Recursively create one same-name Figma Frame for every Unity node. Names must equal JSON `name` exactly. Every node must carry JSON `rectTransform` and `constraints` converted from the Unity RectTransform anchors.
 10. Create generated child layers only with reserved names: `__image`, `__text`, `__text_underlay`, `__unsupported`, or `__slice_*`. When JSON `text.figmaTextLayerName` exists, use it for the generated text layer name.
 11. Handle nested Prefab instances when `figma_write_plan.json.operations.prefabInstanceWrites` is not empty.
@@ -34,11 +34,11 @@ Unity → Figma 默认采用“脚本/插件/服务端执行并判定，AI 只�
 3. `build_figma_write_plan.py` 输出：
    - `figma_write_plan.json`
    - `figma_write_plan_audit_report.json`
-4. `figmaMcpRelay` / `prefab_to_figma_mcp_client.py` 输出：
-   - `prefab_to_figma_mcp_result.json`
+4. `figmaRelay` / `prefab_to_figma_cli.py` 输出：
+   - `prefab_to_figma_relay_result.json`
    - `figma_write_result.json`
    - `figma_write_verify_report.json`
-5. MCP server / runtime relay 根据结构化报告中的 `allPass`、`blockingErrors`、`warnings`、`summary`、`checks`、`artifacts` 更新任务状态。
+5. Relay 根据结构化报告中的 `allPass`、`blockingErrors`、`warnings`、`summary`、`checks`、`artifacts` 更新任务状态。
 6. AI 只读取和转述任务状态，不重新判断 warning 是否阻塞，不手算坐标、旋转矩阵、九宫 CROP、图片 hash、节点数量；这些必须来自脚本报告或 Figma 读回验证。
 
 统一审核结构：
@@ -62,21 +62,22 @@ Unity → Figma 默认采用“脚本/插件/服务端执行并判定，AI 只�
 
 ## 无大模型后台导入入口
 
-AI 侧应通过本地 `figmaMcpRelay` 调用：
+AI 侧应通过本地 `figmaRelay` 调用：
 
 ```text
-figma_prefab_import_start
-figma_prefab_import_status
+node dist/cli.js control --job-type prefab.import.start
+node dist/cli.js control --job-type prefab.import.get
 ```
 
-Figma 插件 UI 的 Prefab 导入按钮仍调用 runtime relay：
+Figma 插件 UI 的 Prefab 导入按钮使用共享 WebSocket 控制：
 
 ```text
-POST /prefab-to-figma/import
-GET  /prefab-to-figma/import/{taskId}/status
+prefab.import.start
+prefab.import.get
+prefab.import.subscribe / prefab.import.unsubscribe
 ```
 
-请求由 AI MCP client 或 UI 提供 `prefabPaths`、`canvasByPrefabPath`、`figmaUrl/fileKey`、`componentMode`、`nestedPrefabComponentMode`。MCP server / runtime relay 负责串联导出、校验、写入和读回验证；UI 只展示状态、日志、错误和输出路径。AI 不参与该路径的中间判断。
+请求由 AI CLI 或 UI 提供 `prefabPaths`、`canvasByPrefabPath`、`figmaUrl/fileKey`、`componentMode`、`nestedPrefabComponentMode`。Relay 负责串联导出、校验、写入和读回验证；UI 只展示状态、日志、错误和输出路径。AI 不参与该路径的中间判断。
 
 ## 阶段一命令模板
 
@@ -128,24 +129,24 @@ Unity → Figma 导出必须保留 Unity 原始 RectTransform anchor 语义：
 
 ## 阶段二命令模板
 
-AI 标准路径使用 `figmaMcpRelay`；下面命令只用于调试或兼容旧脚本：
+AI 标准路径使用 `figmaRelay`；下面命令只用于调试或兼容旧脚本：
 
 ```powershell
-python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_cli.py" `
   --package ".tmp/prefab-to-figma/<Name>/prefab-to-figma.json" `
   --write-plan ".tmp/prefab-to-figma/<Name>/figma_write_plan.json" `
-  --result ".tmp/prefab-to-figma/<Name>/prefab_to_figma_mcp_result.json"
+  --result ".tmp/prefab-to-figma/<Name>/prefab_to_figma_relay_result.json"
 ```
 
 执行前可先检查 runtime relay：
 
 ```powershell
-python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --health
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_cli.py" --health
 ```
 
 ## TMP Material Preset 验证门槛
 
-Unity Prefab → Figma 写入完成后，必须遍历 JSON 中所有带 `text.materialTag` 的文本节点，并由 Figma MCP Relay 插件读回目标 Figma 节点生成 `figma_write_verify_report.json`。不能只凭写入代码或肉眼检查宣称完成。
+Unity Prefab → Figma 写入完成后，必须遍历 JSON 中所有带 `text.materialTag` 的文本节点，并由 Figma Relay 插件读回目标 Figma 节点生成 `figma_write_verify_report.json`。不能只凭写入代码或肉眼检查宣称完成。
 
 对每个带 `text.materialTag` 的文本节点，必须验证：
 
@@ -174,7 +175,7 @@ Unity Prefab → Figma 写入完成后，必须进入插件/服务端可复现�
 For each nested child Prefab:
 
 1. Resolve the child Prefab file path from its GUID.
-2. Search the target Figma file for an existing same-name local Component by traversing `figma.root` inside the MCP Relay plugin. Do not rely only on `search_design_system`, because it does not find local unpublished Components.
+2. Search the target Figma file for an existing same-name local Component by traversing `figma.root` inside the Relay plugin. Do not rely only on `search_design_system`, because it does not find local unpublished Components.
 3. If a matching Component exists, create an Instance from it.
 4. If no matching Component exists, parse the child Prefab and create its full hierarchy as a Component before placing it in the parent.
 5. Set child Component constraints before resizing any Instance; see `references/figma-layer-mapping.md`.
@@ -200,12 +201,12 @@ When JSON node has `image.sourceImage`:
 5. If JSON lacks `image.sourceImage`, create only the reported `__slice_*` layers and record the limitation.
 6. Users may replace the parent `fills[0]` image in Figma, then run `.figma/nine-slice-sync/` to refresh slices before syncing back to Unity.
 
-## Figma MCP Relay / Runtime Relay Notes
+## Figma Relay / Runtime Relay Notes
 
-- Use local `figmaMcpRelay` tools for the standard AI-facing write path.
-- `/jobs`, `/figma/pending`, `/figma/result`, and `/assets/{requestId}/{assetId}` are private runtime relay endpoints between the MCP server and the Figma plugin. Command-line wrappers must call `figmaMcpRelay`, not those endpoints directly.
+- Use local `figmaRelay` tools for the standard AI-facing write path.
+- 业务请求统一使用项目 CLI；`/jobs`、`/figma/pending`、`/figma/result` 已退役并返回 410，`/assets/` 只允许受控下载。
 - The Figma plugin handles frames, text, rectangles, fills, screenshots, and shared plugin data in one controlled execution context.
-- Official/generic Figma MCP `use_figma` / `upload_assets` is a fallback/debug channel only after the user explicitly approves fallback.
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
 - Figma has no native Unity-equivalent nine-slice node. Represent nine-slice images with generated `__slice_*` child layers.
 - Nine-slice layer count is dynamic from JSON `image.slices`: create exactly the reported 1 to 9 layers, never assume only 3 horizontal slices.
 - Store source metadata on generated nodes with `setSharedPluginData("prefab_to_figma", key, value)` when useful.

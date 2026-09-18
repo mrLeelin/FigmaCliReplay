@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isRecord } from "./utils.js";
-import { UnityProjectRegistry, normalizeUnityProjectPath } from "./unityProjectRegistry.js";
+import { normalizeUnityProjectPath } from "./unityProjectRegistry.js";
 
 interface DroppedPrefabFile {
   fileName: string;
@@ -87,7 +87,7 @@ function resolveUnityProjectPath(payload: unknown): string {
   if (isRecord(payload) && typeof payload.unityProjectPath === "string" && payload.unityProjectPath.trim()) {
     return normalizeUnityProjectPath(payload.unityProjectPath);
   }
-  return new UnityProjectRegistry().snapshot().path;
+  throw new Error("Explicit Unity project path is required");
 }
 
 function prefabSearchRoots(unityProjectPath: string): string[] {

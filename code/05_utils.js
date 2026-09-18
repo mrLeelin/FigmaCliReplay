@@ -5071,7 +5071,7 @@ function normalizeLayer(layer) {
   return normalized;
 }
 
-// 兼容导出端把九宫和文字数据放在嵌套对象中的 manifest，统一提升为 MCP Relay 创建节点时读取的顶层字段。
+// 兼容导出端把九宫和文字数据放在嵌套对象中的 manifest，统一提升为 Relay 创建节点时读取的顶层字段。
 function applyNestedManifestCompatibility(normalized, layer, mode, width, height) {
   if (mode === "nine-slice") {
     const nineSlice = layer.nineSlice && typeof layer.nineSlice === "object" ? layer.nineSlice : {};
@@ -5251,7 +5251,7 @@ async function createLayerNode(root, layer, context) {
   return await createImageLayer(root, layer, context);
 }
 
-// 尝试按 manifest 离线匹配结果或 MCP Relay 内组件索引创建通用组件实例。
+// 尝试按 manifest 离线匹配结果或 Relay 内组件索引创建通用组件实例。
 async function tryCreateCommonInstance(root, layer, context) {
   const match = resolveCommonMatch(layer, context);
   if (!match || !match.componentId) {
@@ -5724,7 +5724,7 @@ async function ensurePsdIndexOrder(root, orderedLayers, context) {
   }
 }
 
-// 导入后做关键门禁校验，结果会回传给 MCP Relay。
+// 导入后做关键门禁校验，结果会回传给 Relay。
 async function validateImportedRoot(root, orderedLayers, context) {
   const validation = {
     directChildCount: root.children.length,
@@ -5909,7 +5909,7 @@ function roundDelta(value) {
   return Math.round(numericOr(value, 0) * 1000) / 1000;
 }
 
-// 在 MCP Relay 内扫描通用组件库和通用图片库，避免标准流程依赖官方/通用 Figma MCP。
+// 在 Relay 内扫描通用组件库和通用图片库，避免标准流程依赖官方/通用 Figma MCP。
 async function buildComponentIndexes(job) {
   const config = Object.assign({ commonRootId: "62:115", imageRootId: "2896:32" }, job && job.componentLibrary || {});
   return {
@@ -5978,7 +5978,7 @@ async function findNodeAcrossPages(nodeId) {
   return foundNode;
 }
 
-// 解析 common 匹配：优先 manifest 离线结果，其次 MCP Relay 内组件库索引。
+// 解析 common 匹配：优先 manifest 离线结果，其次 Relay 内组件库索引。
 function resolveCommonMatch(layer, context) {
   const offline = layer.match || {};
   const offlineId = offline.matchedComponentId || layer.matchedComponentId;
@@ -6132,7 +6132,7 @@ function stripImportBoundsSuffix(value) {
   return String(value || "").replace(/__ImportBounds$/i, "");
 }
 
-// 导出根节点截图，作为 MCP Relay 标准交付证据。
+// 导出根节点截图，作为 Relay 标准交付证据。
 async function exportRootScreenshot(root, context) {
   try {
     const bytes = await promiseWithTimeout(root.exportAsync({ format: "PNG" }), 45000, "root screenshot export timeout");
@@ -6371,7 +6371,7 @@ async function suggestNineSliceFromCurrentSelection() {
   };
 }
 
-// 自动识别九宫边框：优先复用已有切片和 PSD/MCP Relay 元数据，最后才按尺寸比例兜底。
+// 自动识别九宫边框：优先复用已有切片和 PSD/Relay 元数据，最后才按尺寸比例兜底。
 function inferManualNineSliceBorderForSuggestion(source) {
   const existing = readExistingSliceBorderFromNode(source);
   if (existing) {
@@ -6478,7 +6478,7 @@ function adjustManualExistingNineSliceBorder(border, bounds, sliceKind) {
   };
 }
 
-// 读取 PSD/MCP Relay 写入的 Unity spriteBorder 元数据，格式为 left,bottom,right,top。
+// 读取 PSD/Relay 写入的 Unity spriteBorder 元数据，格式为 left,bottom,right,top。
 function readSharedSpriteBorder(node) {
   if (!node || typeof node.getSharedPluginData !== "function") {
     return null;
@@ -6742,7 +6742,7 @@ function decideManualNineSliceKind(width, height, border) {
   return "9-slice";
 }
 
-// 生成 PSD/MCP Relay 兼容的 slices 数据：source 和 target 都使用 [x,y,w,h]。
+// 生成 PSD/Relay 兼容的 slices 数据：source 和 target 都使用 [x,y,w,h]。
 function buildManualNineSlicePlan(width, height, border, sliceKind) {
   const w = Math.round(positiveOr(width, 1));
   const h = Math.round(positiveOr(height, 1));
@@ -7145,7 +7145,7 @@ function clamp01(value) {
 
 /**
  * 处理 EXPORT_IMAGES_TO_UNITY 消息。
- * 九宫：父节点 exportAsync + 读 pluginData spriteBorder → UI 发 MCP Relay Python cutter 切图
+ * 九宫：父节点 exportAsync + 读 pluginData spriteBorder → UI 发 Relay Python cutter 切图
  * 普通：直接 exportAsync → UI 发 Unity Gateway
  */
 async function handleExportImagesToUnity(message) {
@@ -7167,7 +7167,7 @@ async function handleExportImagesToUnity(message) {
 
   const images = [];
   for (const item of imageNodes) {
-    // 九宫：读取完整源图 bytes，并附带 border 元数据交给 MCP Relay Python cutter 合成最小 Sprite。
+    // 九宫：读取完整源图 bytes，并附带 border 元数据交给 Relay Python cutter 合成最小 Sprite。
     if (item.nineSlice) {
       // 九宫图必须使用完整源图，不能导出父节点渲染图后再裁剪，否则会把已裁过的切片再次裁成十字形。
       var parentHash = findFirstImageHash(item.node, true);

@@ -23,7 +23,7 @@ test("Unity bridge publishes and safely removes its actual gateway record", () =
   assert.match(discovery, /finally\s*\{\s*TryDeleteFile\(temporaryPath\)/);
   assert.match(discovery, /internal static void RemoveOwned\(string gatewayUrl\)[\s\S]*TryDeleteFile\(OwnedDiscoveryPath\)/);
   assert.doesNotMatch(discovery, /File\.Delete\(DiscoveryPath\)/);
-  assert.match(source, /FigmaBridgeGatewayDiscovery\.Publish\(CurrentGatewayUrl\)/);
+  assert.match(source, /FigmaBridgeGatewayDiscovery\.Publish\(CurrentGatewayUrl, _webSocketTransport\.Token\)/);
   const removeIndex = source.indexOf("FigmaBridgeGatewayDiscovery.RemoveOwned(CurrentGatewayUrl)");
   const clearPortIndex = source.indexOf("_currentPort = 0", source.indexOf("public static void Stop()"));
   assert.ok(removeIndex >= 0 && removeIndex < clearPortIndex, "owned discovery must be removed before clearing the active port");

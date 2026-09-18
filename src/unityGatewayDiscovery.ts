@@ -6,10 +6,10 @@ import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 const logger = getLoggingRuntime().logger("unity-gateway-discovery");
 
 export type UnityGatewayDiscoveryResult =
-  | { found: true; gatewayUrl: string; updatedAtUtc: string }
+  | { found: true; gatewayUrl: string; updatedAtUtc: string; bridgeToken?: string }
   | { found: false };
 
-export function readUnityGatewayDiscovery(projectPath: string): UnityGatewayDiscoveryResult {
+export function readUnityGatewayDiscovery(projectPath: string, includeCredentials = false): UnityGatewayDiscoveryResult {
   const operation = logger.startOperation("unity.gateway-discover", "开始发现 Unity Bridge Gateway", {
     data: { projectName: path.basename(projectPath) }
   });
@@ -30,7 +30,8 @@ export function readUnityGatewayDiscovery(projectPath: string): UnityGatewayDisc
     const result = {
       found: true,
       gatewayUrl: new URL(latest.gatewayUrl).origin,
-      updatedAtUtc: latest.updatedAtUtc
+      updatedAtUtc: latest.updatedAtUtc,
+      ...(includeCredentials ? { bridgeToken: latest.bridgeToken } : {})
     } as const;
     operation.step("connect", "已找到 Unity Bridge Gateway", { found: true });
     operation.succeed("Unity Bridge Gateway 发现完成", { found: true });
@@ -50,6 +51,7 @@ function isMissingDirectory(error: unknown): boolean {
 }
 
 interface ValidGatewayRecord {
+  bridgeToken?: string;
   gatewayUrl: string;
   updatedAtUtc: string;
 }
@@ -62,7 +64,8 @@ function readRecord(filePath: string, fileName: string, projectPath: string): Va
     if (typeof parsed.projectPath !== "string" || pathKey(parsed.projectPath) !== pathKey(projectPath)) return null;
     if (typeof parsed.gatewayUrl !== "string" || !isAllowedGatewayUrl(parsed.gatewayUrl)) return null;
     if (typeof parsed.updatedAtUtc !== "string" || !isIsoUtcTimestamp(parsed.updatedAtUtc)) return null;
-    return { gatewayUrl: parsed.gatewayUrl, updatedAtUtc: parsed.updatedAtUtc };
+    return { gatewayUrl: parsed.gatewayUrl, updatedAtUtc: parsed.updatedAtUtc,
+      bridgeToken: typeof parsed.bridgeToken === "string" ? parsed.bridgeToken : undefined };
   } catch {
     return null;
   }

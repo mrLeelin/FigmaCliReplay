@@ -12,25 +12,25 @@ Use this loop for every write or cross-phase operation. Treat each step as a hyp
 1. State the current hypothesis before acting.
 2. Check for counter-evidence before writing.
 3. Take the smallest reversible action that can advance or test the hypothesis.
-4. Immediately verify with live MCP/script evidence.
+4. Immediately verify with live CLI/script evidence.
 5. If verification contradicts the hypothesis, stop that path, preserve rollback artifacts, revise the plan, and continue from the revised hypothesis.
 6. Do not treat `status=completed` or `allPass=true` as semantic correctness; they only prove operation-level checks passed.
 7. When a failure pattern repeats, add or request a script/validator gate instead of relying on judgment alone.
 
-For PSD imports, layer names, prefixes, `common` markers, and semantic hints are reporting signals only. The manifest gates, Figma MCP Relay validation, screenshot evidence, and live Figma structure decide whether a write is correct.
+For PSD imports, layer names, prefixes, `common` markers, and semantic hints are reporting signals only. The manifest gates, Figma Relay validation, screenshot evidence, and live Figma structure decide whether a write is correct.
 
-## 当前强制执行策略：figmaMcpRelay 批量导入 + 插件组件缓存
+## 当前强制执行策略：figmaRelay 批量导入 + 插件组件缓存
 
-- PSD 导入 Figma 的标准流程必须使用 `figmaMcpRelay` 完成；`<relay-root>` 下的插件和 runtime relay 只是 MCP server 的执行后端。
-- Figma MCP Relay 插件负责目标节点解析、组件库索引、common 匹配、PNG `figma.createImage`、节点创建、Text、九宫/三切片、metadata、PSD index Z 顺序、完整验证与截图导出。
-- 每次运行本 skill 提交 Figma 导入前，必须优先通过 `figmaMcpRelay.figma_health` 检查本地 companion；如果未运行，先执行 `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp`。
-- **【强制】PSD 批量导入必须使用 `scripts/submit_psd_import_job.py` 脚本**，因为它会做 `build_payload`（将 manifest 的相对路径解析为绝对路径并构建完整 job payload），raw MCP `figma_submit_job` 的 `assetPaths.layersDir` 简写会被 MCP 框架截断导致超时或失败。`<relay-root>/client/figma_mcp_client.py` 作为脚本的后端 client 使用。`figmaMcpRelay.figma_submit_job` / `figmaMcpRelay.figma_wait_result` 只用于后处理（网格 Component 创建、层级整理等小型 job），**不得用于 PSD 批量导入**。
-- MCP 默认 endpoint 是 `http://127.0.0.1:32130/mcp`，插件 URL 默认是 `http://localhost:32130`。这些是 MCP Streamable HTTP transport / runtime relay 地址，不是旧业务 HTTP 协议；AI 不得手写 POST `/jobs`、`/figma/pending`、`/figma/result` 或 `/assets/...`。如果必须走 CLI fallback，只能调用封装脚本，并显式传 `--file-key` 或 `--session-id`。
-- 不要在正常流程使用 MCP `fullResult` 或 wrapper `--verbose-result`。完整结果只允许在有界 debug 时使用（`fullResult=true` 必须同时传 `debugFullResult=true`），并且 relay 会在返回给模型前剥离 inline base64。
-- **【组件缓存刷新】使用 `figmaMcpRelay.figma_query_components` 查询组件库，通过 `refresh_component_cache.py --from-mcp` 写入新鲜缓存。禁止使用官方/通用 Figma MCP `use_figma` 查询组件库。** Figma MCP Relay 插件的 `code.js` 内置 `COLLECT_COMPONENTS` handler，直接在 Figma 插件内遍历 `62:115` 和 `2896:32` 并返回组件列表，不需要加载 `figma-use` skill。
-- 导入后的网格 Component 创建、Variant 创建、层级整理等一次性分析操作，也应优先走 `figmaMcpRelay`/插件专用 job；只有用户明确批准 fallback 时才使用官方/通用 Figma MCP `use_figma`。
-- 标准流程禁止使用官方/通用 Figma MCP `upload_assets`、`use_figma`、`get_screenshot` 承担**批量导入**、验证或截图。fallback 仅允许在 `figmaMcpRelay`/插件环境故障且用户明确允许时用于人工排查。
-- 交付门禁以 MCP Relay result 为准：`status == "completed"`，缺图、空 fill、坏 transform、Text 裁切、Text 颜色/描边、切片结构、Z 顺序全部为 0。
+- PSD 导入 Figma 的标准流程必须使用 `figmaRelay` 完成；`<relay-root>` 下的插件和 runtime relay 通过 WebSocket 执行请求。
+- Figma Relay 插件负责目标节点解析、组件库索引、common 匹配、PNG `figma.createImage`、节点创建、Text、九宫/三切片、metadata、PSD index Z 顺序、完整验证与截图导出。
+- Relay 生命周期由外部管理。AI 不得启动、重启、停止或重配服务；插件任务以 Relay 接受为预检，独立任务使用 `node dist/cli.js sessions`。连接失败记录原始错误并停止，不探测替代端口。
+- **【强制】PSD 批量导入必须使用 `scripts/submit_psd_import_job.py` 脚本**，因为它会做 `build_payload`（将 manifest 的相对路径解析为绝对路径并构建完整 job payload），不得跳过脚本直接提交未展开的资源目录。`<relay-root>/client/figma_relay_cli.py` 作为脚本的后端 client 使用。`node dist/cli.js figma-command` / `node dist/cli.js task-wait` 只用于后处理（网格 Component 创建、层级整理等小型 job），**不得用于 PSD 批量导入**。
+- CLI 连接 `ws://127.0.0.1:32130/relay`，插件连接 `/figma` WebSocket。地址覆盖使用 CLI `--url` 或 Python `--relay-url`；HTTP 仅保留受控资源下载。
+- 不要在正常流程使用 客户端 `full_result` 或 wrapper `--verbose-result`。完整结果只允许在有界 debug 时使用（`fullResult=true` 必须同时传 `debugFullResult=true`），并且 relay 会在返回给模型前剥离 inline base64。
+- **【组件缓存刷新】使用 `node dist/cli.js figma-command --job-type COLLECT_COMPONENTS` 查询组件库，通过 `refresh_component_cache.py --from-cli` 写入新鲜缓存。禁止使用官方/通用 Figma MCP `use_figma` 查询组件库。** Figma Relay 插件的 `code.js` 内置 `COLLECT_COMPONENTS` handler，直接在 Figma 插件内遍历 `62:115` 和 `2896:32` 并返回组件列表，不需要加载 `figma-use` skill。
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
+- 交付门禁以 Relay result 为准：`status == "completed"`，缺图、空 fill、坏 transform、Text 裁切、Text 颜色/描边、切片结构、Z 顺序全部为 0。
 
 ## 边想边做执行契约
 
@@ -39,11 +39,11 @@ For PSD imports, layer names, prefixes, `common` markers, and semantic hints are
 | 检查点 | 当前假设 | 最小动作 | 证据 | 继续 / 停止条件 |
 |---|---|---|---|---|
 | 0. 目标锁定 | PSD 路径和 Figma 目标是本轮真实输入 | `figma_health`、`figma_query_selection`、确认 PSD 文件存在 | `fileKey/sessionId/page/targetNodeId`、PSD 路径和大小 | 目标 parent 不存在或会写到未知页面时停止；不要凭历史 nodeId 写入 |
-| 1. 组件缓存 | 组件库可用，common 可复用 | `figma_query_components` 或 `refresh_component_cache.py --from-mcp` | 组件库/图片库 count、缓存路径 | 组件扫描失败按 5a 降级继续，但必须记录 warning；不要放弃基础导入 |
+| 1. 组件缓存 | 组件库可用，common 可复用 | `figma_query_components` 或 `refresh_component_cache.py --from-cli` | 组件库/图片库 count、缓存路径 | 组件扫描失败按 5a 降级继续，但必须记录 warning；不要放弃基础导入 |
 | 2. PSD 导出 | PSD 可以被当前脚本完整拆层 | `export_psd_layers.py --summary --match-cache` | stdout stats、`manifest_summary.json`、`semanticHints.psdPrefix`、warning count | `layerCount == 0`、导出异常或 summary 缺失时停止；warning 只按类型判断是否阻塞 |
 | 3. 导入前确认 | 本轮将新增一个根 Frame，不改已有节点内容 | 读取 compact summary；必要时 `submit_psd_import_job.py --output` 做 payload dry-run | layer/common/text/nine-slice 数量、target、payload size | 目标、资源路径、manifest 来源不一致时停止；不要手抄坐标或颜色 |
 | 4. Figma 写入 | Relay 能按 manifest 创建视觉一致节点 | `submit_psd_import_job.py --wait` | `[SUMMARY_JSON]`：`status`、gate counts、`createdCount`、截图、timeline | `stopAfterSummary=true` 时直接交付；任一 gate 非 0 只做针对性诊断 |
-| 5. 后续结构化 | 用户确实需要 UGUI/Prefab 结构 | 先转交 `figma-hierarchy-cleanup-mcp` dry-run | repeat-cluster 置信度、唯一归属、validator | `semanticHints.psdPrefix` 只能辅助报告；不得绕过几何/validator/确认门禁 |
+| 5. 后续结构化 | 用户确实需要 UGUI/Prefab 结构 | 先转交 `figma-hierarchy-cleanup` dry-run | repeat-cluster 置信度、唯一归属、validator | `semanticHints.psdPrefix` 只能辅助报告；不得绕过几何/validator/确认门禁 |
 
 声明结论时必须只说证据已经证明的内容。例如：导入 gate 全 0 只能证明“PSD → Figma 导入链路成功”；如果 `semanticHints.psdPrefix.segmentCount == 0`，不得声称“数字前缀分段已在该 PSD 上验证通过”。
 
@@ -54,41 +54,41 @@ python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\psd_import_phase_evide
   --artifact-dir ".tmp\psd-layer-to-figma\<run-dir>"
 ```
 
-该脚本只读取 `manifest_summary.json`、`figma_mcp_result.json` 和可选 `timeline.json`，输出 `[PHASE_EVIDENCE_JSON]`。`decision=stop` 时不得继续 cleanup 或 Unity 导入；`decision=go` 只表示 PSD 导出和 Figma 写入证据通过，不代表 `semanticHints.psdPrefix` 已被几何/validator 证明。
+该脚本只读取 `manifest_summary.json`、`figma_relay_result.json` 和可选 `timeline.json`，输出 `[PHASE_EVIDENCE_JSON]`。`decision=stop` 时不得继续 cleanup 或 Unity 导入；`decision=go` 只表示 PSD 导出和 Figma 写入证据通过，不代表 `semanticHints.psdPrefix` 已被几何/validator 证明。
 
 
 ## 核心流程
 
 1. 用户调用 `$psd-layer-to-figma` 即为明确定位为 **PSD 分层导入**，不再重复确认。
 2. 如果任务发生在某个 Unity 工程内，先读取该项目要求的知识库入口和任务路由文档；项目规则仅作参考，导入流程不因项目规范中断确认。
-3. 对 Figma 写入、验证和截图默认走 `figmaMcpRelay`；不要在标准流程中调用官方/通用 Figma MCP `use_figma` / `upload_assets` / `get_screenshot` 承担批量导入。
+3. 对 Figma 写入、验证和截图默认走 `figmaRelay`；不要在标准流程中调用官方/通用 Figma MCP `use_figma` / `upload_assets` / `get_screenshot` 承担批量导入。
 4. 在执行 PSD 导出、读取 manifest 或写入 Figma 前，读取 `references/figma-layer-naming-unity-import.md`。这份规则是强制规则，不是可选建议。
-5. **【组件缓存刷新】使用 `figmaMcpRelay.figma_query_components` 查询组件库，禁止用官方/通用 Figma MCP `use_figma`。** 运行 `refresh_component_cache.py <cache_dir> --from-mcp`，由插件在 Figma 内直接遍历 `62:115` 和 `2896:32` 并返回最新组件清单，自动写入缓存。禁用过期磁盘缓存，避免组件 ID 错误导致 common 全部降级。
+5. **【组件缓存刷新】使用 `node dist/cli.js figma-command --job-type COLLECT_COMPONENTS` 查询组件库，禁止用官方/通用 Figma MCP `use_figma`。** 运行 `refresh_component_cache.py <cache_dir> --from-cli`，由插件在 Figma 内直接遍历 `62:115` 和 `2896:32` 并返回最新组件清单，自动写入缓存。禁用过期磁盘缓存，避免组件 ID 错误导致 common 全部降级。
 5a. **【组件库扫描失败容错】如果 `figma_query_components` 超时、组件库节点不存在或 Figma 连接暂时不可用，不得直接放弃 PSD 导入。** 先报告 warning，再使用离线 manifest/cache、空组件库配置或 common 降级图片继续导入；只要导入 validation、视觉截图和 Z 顺序门禁通过，组件扫描失败本身不阻塞交付。
 6. 用 `scripts/export_psd_layers.py` 导出 PSD 图层 PNG 和 `manifest.json`（带 `--summary --match-cache <fresh_cache>` 参数）。导出产物会在 `manifest.json` / `manifest_summary.json` 中写入 reporting-only 的 `semanticHints.psdPrefix`：只用于提示 PSD 数字前缀候选段，例如 `01_` 连续 TabBar、`29_` 连续 Bg、`60_` 连续 ListRoot；不得把这些 hint 当成几何聚类分数、自动分组依据或 Figma 写入授权。
 7. 在导入 Figma 前先做 PSD 图层命名预处理：从 `rawPsdLayerName` 派生 `normalizedLayerName`，识别 `semanticMode`，写入 `normalizationWarnings`。`common_ btn`、`common btn`、`common- btn` 必须识别为 common 语义；`jiugong_ panel`、`nine slice panel`、`9slice panel` 必须识别为九宫语义。
 8. 读取 `manifest.json`，在 Figma 目标页面创建一个根 Frame，尺寸等于 PSD canvas。
-8a. **【导入前验证目标 parent】写入 Figma 前必须通过 MCP Relay 只读分析目标 parent/page：确认 nodeId 存在、类型可承载新根 Frame、MCP Relay 可切换到所属 Page。** 如果目标 parent 不可访问，先停止并报告；不得在未知页面或凭历史 nodeId 盲写。
-9. 按 manifest 图层顺序创建子节点，设置名称、位置、尺寸、透明度、可见性，并写入 `rawPsdLayerName`、`normalizedLayerName`、`semanticMode` metadata。**AI 必须自动推断并设置每个导入节点的 Figma `constraints`，不得因为 PSD 没有显式约束信息而询问用户；优先使用 manifest 中的 `layer.constraints`，缺失时按本 skill 的“图层 Constraints 推断规则”用 PSD canvas 与 layer bounds 现场推断。** Figma MCP Relay 插件会自动在插件内实时建组件索引，不依赖 Python 侧缓存。
+8a. **【导入前验证目标 parent】写入 Figma 前必须通过 Relay 只读分析目标 parent/page：确认 nodeId 存在、类型可承载新根 Frame、Relay 可切换到所属 Page。** 如果目标 parent 不可访问，先停止并报告；不得在未知页面或凭历史 nodeId 盲写。
+9. 按 manifest 图层顺序创建子节点，设置名称、位置、尺寸、透明度、可见性，并写入 `rawPsdLayerName`、`normalizedLayerName`、`semanticMode` metadata。**AI 必须自动推断并设置每个导入节点的 Figma `constraints`，不得因为 PSD 没有显式约束信息而询问用户；优先使用 manifest 中的 `layer.constraints`，缺失时按本 skill 的“图层 Constraints 推断规则”用 PSD canvas 与 layer bounds 现场推断。** Figma Relay 插件会自动在插件内实时建组件索引，不依赖 Python 侧缓存。
 10. 如果 layer 的 `mode` 是 `common-component` 或规范化后等价 common 语义，必须先查通用组件；找到后创建 Instance；找不到时记录 warning，并按 `common-component > nine-slice > text > image` 降级。
 11. 对普通图片层，如果 manifest 有 `componentSearch.strategy === "auto"`，先在通用图片库 `2896:32` 按名称绑定规则查询 `Common_` 图片组件，再走通用组件库 `62:115` auto 模糊查询；只有高置信命中才创建 Instance，中低置信只记录候选 warning 并保留图片层。
 12. 如果 layer 的 `mode` 是 `nine-slice` 或规范化后等价九宫语义，按九宫父 Frame + `__slice_*` 子层创建，不要当普通单图导入；父层可以整理显示名，`__slice_*` 子层和 border metadata 不得改坏。
 13. 如果 layer 的 `mode` 是 `text`，优先创建 Figma Text，并把导出的 PNG 只作为隐藏对照引用保留。
 13a. **【强制】文字层的 fillColor 和 strokeColor 必须从 manifest 的 `text.fillColor` 和 `text.effects.stroke.color` 程序化读取，禁止手动硬编码任何颜色值。** 如果 manifest 过长无法一次读取，必须用脚本提取文字颜色数据。违反此规则会导致所有文字颜色错误。
-14. 用 `figmaMcpRelay`/插件 runtime relay 直接读取 PNG 字节，在 Figma 插件内调用 `figma.createImage` 生成 `imageHash`。
-15. 由 Figma MCP Relay 插件批量创建普通图层 image fill；九宫/三切片图层用同一 `imageHash` 为每个 `__slice_*` 设置 CROP fill。
+14. 用 `figmaRelay`/插件 runtime relay 直接读取 PNG 字节，在 Figma 插件内调用 `figma.createImage` 生成 `imageHash`。
+15. 由 Figma Relay 插件批量创建普通图层 image fill；九宫/三切片图层用同一 `imageHash` 为每个 `__slice_*` 设置 CROP fill。
 16. 完成基础导入后，只整理本次导入根 Frame / Component 的名称、metadata 和必要的节点类型标记，默认不打组、不重组业务层级；以 PSD 原始 layer index 和视觉一致性优先。只有用户明确要求 UI 语义分组、UGUI 结构化或后续 prefab 导入结构时，才允许按 `references/figma-layer-naming-unity-import.md` 做 Group 转 Frame、Layout、ScrollView / Viewport / Content 等结构化整理，并且必须先说明影响并取得确认。
-16a. 如果用户要求 PSD 导入后继续做 UI 语义分组、UGUI 结构化或后续 prefab 导入结构，禁止只整理导入根 Frame 的顶层。必须对 TaskList/list-like、RewardSlot、Milestone、Progress 等区域继续使用 `figma-hierarchy-cleanup-mcp` 的生产层级规则：列表显式 `[ListRoot]` → `[ScrollView]` → `[Viewport]` → `[Content]` → `[Item_*]`；RewardSlot/Milestone 保留自己的 marker（如 `jdtbig3`、marker、tick）；ProgressTrack 只放轨道、填充和 slice。
+16a. 如果用户要求 PSD 导入后继续做 UI 语义分组、UGUI 结构化或后续 prefab 导入结构，禁止只整理导入根 Frame 的顶层。必须对 TaskList/list-like、RewardSlot、Milestone、Progress 等区域继续使用 `figma-hierarchy-cleanup` 的生产层级规则：列表显式 `[ListRoot]` → `[ScrollView]` → `[Viewport]` → `[Content]` → `[Item_*]`；RewardSlot/Milestone 保留自己的 marker（如 `jdtbig3`、marker、tick）；ProgressTrack 只放轨道、填充和 slice。
 16b. 每次结构化 wrap/apply 后，必须重新 query 当前 Figma 真实结构，再判断下一步整理或验证；不得复用 PSD 导入初始 manifest、旧 analyze summary 或 apply 前的 children 顺序作为当前层级事实。
-16c. PSD 导入后的重复 UI 结构整理不得按名称硬编码识别 Day/List/ProgressSection。必须先按 `figma-hierarchy-cleanup-mcp` 的 repeat-cluster 规则 dry-run：只用节点 `type`、几何 bounds、visible/opacity、childCount、isNineSliceLike、主轴间距、marker/edge-slot 几何打分；`name`、`path`、`characters` 只能用于报告。`confidence >= 0.85` 且节点全部唯一归属时才允许进入整理决策，否则只报告 dry-run 或拒绝。
-16c-1. 如果导入 manifest 带有 `semanticHints.psdPrefix`，后续 cleanup 可把它作为 `figma-hierarchy-cleanup-mcp` 的 `--semantic-hints` 输入或诊断报告来源，帮助人工/Agent 发现“前缀连续但几何规划过粗”的区域。该 hint 仍必须保持 `hintOnly=true`，只能生成 dry-run 候选或报告，不得绕过 repeat-cluster、唯一归属、stale-plan preflight、validator 和用户确认门禁。
+16c. PSD 导入后的重复 UI 结构整理不得按名称硬编码识别 Day/List/ProgressSection。必须先按 `figma-hierarchy-cleanup` 的 repeat-cluster 规则 dry-run：只用节点 `type`、几何 bounds、visible/opacity、childCount、isNineSliceLike、主轴间距、marker/edge-slot 几何打分；`name`、`path`、`characters` 只能用于报告。`confidence >= 0.85` 且节点全部唯一归属时才允许进入整理决策，否则只报告 dry-run 或拒绝。
+16c-1. 如果导入 manifest 带有 `semanticHints.psdPrefix`，后续 cleanup 可把它作为 `figma-hierarchy-cleanup` 的 `--semantic-hints` 输入或诊断报告来源，帮助人工/Agent 发现“前缀连续但几何规划过粗”的区域。该 hint 仍必须保持 `hintOnly=true`，只能生成 dry-run 候选或报告，不得绕过 repeat-cluster、唯一归属、stale-plan preflight、validator 和用户确认门禁。
 16d. `horizontal-list` 即使高置信也不得直接自动写入；必须先询问用户是否需要整理横向重复项。用户确认固定横向结构后，整理为直接 item：例如 `[DayList] > [Item_Day01..07]`，不得默认套 `[ScrollView]`。只有用户明确要求横向滚动时，才允许 `[ScrollView] > [Viewport] > [Content]`。
 16e. Task/List 这类纵向重复内容项在高置信且唯一归属时必须继续整理到 `[ListRoot] > [ScrollView] > [Viewport] > [Content] > [Item_*]`。若首次 dry-run 因九宫切片、遮罩或锁定层导致拒绝，必须审查 `expectedYCount`、`maxDepth` 和可见行数后重跑；不得因为一次错误参数拒绝就跳过 Task 整理。
 17. **【强制】所有分批创建完成后，必须按 PSD 原始 layer index 对本次导入根 Frame 的直接子节点统一重排 Z 顺序。** 禁止保留“普通图片批次 > common 批次 > 九宫批次 > Text 批次”的创建顺序作为最终层级；否则九宫/大背景很容易覆盖图标、奖励、装饰图，造成“缺很多图”的假象。重排必须只移动本次导入根节点下的直接子节点，不得重建节点、不得重传图片、不得破坏 Text、common Instance 或九宫切片内部结构。
 18. **【强制】缺图验证不能只看子节点数量。** 即使 root.children 数量等于 PSD 图层数，也必须继续验证 `imageHash`、空 fill 叶子节点、visible/opacity、越界、PSD index 顺序和大面积遮挡；“节点都在但被后创建的大九宫 Frame 遮挡”视为导入失败，必须先修正 Z 顺序再交付。
-19. 由 Figma MCP Relay 插件验证：子节点数量、位置、尺寸、opacity、`imageFillCount`、Text 数量、common/auto Instance 数量、九宫结构、命名预处理 metadata、导入后整理结果、导入节点 constraints 都符合 manifest 和命名整理规则；额外要求 `missingNodeCount == 0`、`emptyImageFillCount == 0`、`badTransformCount == 0`、`textClipRiskCount == 0`、`textColorMismatchCount == 0`、`textStrokeMismatchCount == 0`、`sliceProblemCount == 0`、`indexOrderBad == 0`，且 constraints 不得缺失或与推断结果冲突，疑似大面积遮挡数量无异常。
-20. 由 Figma MCP Relay 插件 `exportAsync` 导出根 Frame 截图（插件内部验证留存，不交付用户）。
-21. **【可选-需用户确认】网格布局检测与 Component 属性推断**：导入完成后，对当前根 Frame 内的子节点做空间网格分析。如果检测到规律排列的网格布局，先向用户报告分析结果，**等待用户确认后再执行 Component 创建**。Component 创建必须通过 `figmaMcpRelay.figma_submit_job` 提交插件专用 job，不走官方/通用 MCP `use_figma`。
+19. 由 Figma Relay 插件验证：子节点数量、位置、尺寸、opacity、`imageFillCount`、Text 数量、common/auto Instance 数量、九宫结构、命名预处理 metadata、导入后整理结果、导入节点 constraints 都符合 manifest 和命名整理规则；额外要求 `missingNodeCount == 0`、`emptyImageFillCount == 0`、`badTransformCount == 0`、`textClipRiskCount == 0`、`textColorMismatchCount == 0`、`textStrokeMismatchCount == 0`、`sliceProblemCount == 0`、`indexOrderBad == 0`，且 constraints 不得缺失或与推断结果冲突，疑似大面积遮挡数量无异常。
+20. 由 Figma Relay 插件 `exportAsync` 导出根 Frame 截图（插件内部验证留存，不交付用户）。
+21. **【可选-需用户确认】网格布局检测与 Component 属性推断**：导入完成后，对当前根 Frame 内的子节点做空间网格分析。如果检测到规律排列的网格布局，先向用户报告分析结果，**等待用户确认后再执行 Component 创建**。Component 创建必须通过 `node dist/cli.js figma-command` 提交插件专用 job，不走官方/通用 MCP `use_figma`。
 
 ## 导出 PSD 图层
 
@@ -148,7 +148,7 @@ python .agents\skills\psd-layer-to-figma\scripts\export_psd_layers.py `
 
 如果美术命名写成 `common_ btn`、`common btn`、`common- btn`、`common _ btn` 这类变体，必须先规范化为 common 语义再做候选生成，不能因为空格或分隔符错误降级为普通图片。
 
-优先级固定为：`common-component` > `nine-slice` > 普通图片。也就是说，`common_jiugong_xxx` 仍应先按通用组件复用处理。搜索必须使用 `figmaMcpRelay.figma_query_components` 或插件 job 生成的组件索引，禁止用官方/通用 Figma MCP `use_figma` 或 `search_design_system`；找不到匹配 Component/ComponentSet 时，记录 warning 并降级为普通图片层。
+优先级固定为：`common-component` > `nine-slice` > 普通图片。也就是说，`common_jiugong_xxx` 仍应先按通用组件复用处理。搜索必须使用 `node dist/cli.js figma-command --job-type COLLECT_COMPONENTS` 或插件 job 生成的组件索引，禁止用官方/通用 Figma MCP `use_figma` 或 `search_design_system`；找不到匹配 Component/ComponentSet 时，记录 warning 并降级为普通图片层。
 
 ### PSD 通用图片库名称绑定规则
 
@@ -219,7 +219,7 @@ commonImageLibraryNodeId = 2896:32
 
 当 `common_` 强制层的名称匹配（精确/标准化/模糊）全部失败时，启用视觉匹配 fallback：
 
-1. **组件截图缓存**：导入开始时，通过 `figmaMcpRelay` 组件索引 / 截图专用 job 对 `62:115` 子树内所有 Component/ComponentSet 生成截图缓存，并用 Pillow 计算 pHash（感知哈希，8x8 DCT）。如果当前 relay 没有该专用 job，记录 warning 并跳过视觉 fallback；不要改用官方/通用 `get_screenshot`。
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
 2. **PSD 图层 pHash**：对名称匹配失败的 `common_` 图层，读取其导出的 PNG 计算 pHash。
 3. **对比**：计算 PSD 图层 pHash 与所有组件 pHash 的 hamming distance。
 4. **阈值**：
@@ -385,11 +385,11 @@ Figma 导入文字层时：
 - 如果目标 node 是 Page，直接在该 Page 上创建根 Frame。
 - 如果目标 node 是 Frame/Section，优先在该容器内创建；否则创建到目标 node 所在 Page。
 - 不能使用 `figma.currentPage = page`；必须 `await figma.setCurrentPageAsync(page)`。
-- 每个 `figmaMcpRelay` 插件 job 创建或修改节点时必须返回所有 created/mutated node IDs。
+- 每个 `figmaRelay` 插件 job 创建或修改节点时必须返回所有 created/mutated node IDs。
 - 写入 Figma 前必须完成命名预处理，并把 `rawPsdLayerName`、`normalizedLayerName`、`semanticMode`、`normalizationWarnings` 写入 manifest 或 Figma metadata。
 - `common-component` 层必须先在通用组件库节点 `62:115` 子树内按 `candidateNames` 精确/标准化/高置信模糊匹配 Component/ComponentSet；然后在通用图片库节点 `2896:32` 子树内按名称绑定规则匹配 `Common_` 图片组件；不要全文件乱匹配，也不要使用 `search_design_system`。
 - 普通图片层如果带 `componentSearch.strategy === "auto"`，只允许在 `2896:32` 通用图片库和 `62:115` 通用组件库索引内查询；高置信才替换为 Instance，中低置信必须保留图片并输出候选 warning。
-- 标准流程不得使用官方/通用 `upload_assets`。PNG 必须由 `figmaMcpRelay` 插件读取 asset path，在插件内 `figma.createImage` 并设置 image fill。
+- 标准流程不得使用官方/通用 `upload_assets`。PNG 必须由 `figmaRelay` 插件读取 asset path，在插件内 `figma.createImage` 并设置 image fill。
 - `text` 层必须优先创建 Figma Text；只有无法解析 `characters` 或无法加载任何候选字体时，才降级为 PNG 图片并输出 warning。
 - PSD 文件里没有 `lsct/lsdk` 分组标记时，不要伪造 group；默认按平铺图层导入，并在最终说明写明“PSD 未检测到分组标记”。
 - 九宫层必须参考 `prefab-to-figma` 规则：父节点保存隐藏源图 fill，子节点使用动态 1 到 9 个 `__slice_*`，并按 source rect 计算 CROP `imageTransform`。
@@ -460,13 +460,13 @@ Figma 导入文字层时：
 
 **强制规则**：
 
-- 最终说明必须列出 MCP Relay result 的关键门禁：`status`、`createdCount`、`directChildCount`、`missingNodeCount`、`emptyImageFillCount`、`badTransformCount`、`textClipRiskCount`、`textColorMismatchCount`、`textStrokeMismatchCount`、`sliceProblemCount`、`indexOrderBad`。
+- 最终说明必须列出 Relay result 的关键门禁：`status`、`createdCount`、`directChildCount`、`missingNodeCount`、`emptyImageFillCount`、`badTransformCount`、`textClipRiskCount`、`textColorMismatchCount`、`textStrokeMismatchCount`、`sliceProblemCount`、`indexOrderBad`。
 - 所有 warnings 都必须汇总；common 降级图片属于 warning，不属于失败，除非用户明确要求该层必须复用组件。
 - 如果后续还执行了 Figma 层级整理，最终说明必须同时包含导入 validation、整理 apply 的 `allPass` 汇总、最终结构存在性和 UTF-8 检查结果。
 
 ### Common_Texture 被当成 Common_Prefab 导致尺寸错误（2026-05-14）
 
-**错误现象**：`Common_Texture_Lock`、`Common_Texture_Toggle`、`Common_Texture_Timer` 等通用纹理复用成功创建 Instance，但节点宽高保留了模板原生尺寸，没有按 PSD 图层尺寸缩放，导致 MCP Relay validation 出现 `sizeMismatchCount`。
+**错误现象**：`Common_Texture_Lock`、`Common_Texture_Toggle`、`Common_Texture_Timer` 等通用纹理复用成功创建 Instance，但节点宽高保留了模板原生尺寸，没有按 PSD 图层尺寸缩放，导致 Relay validation 出现 `sizeMismatchCount`。
 
 **根本原因**：尺寸策略只判断 `matchStrategy.includes("image-library")`。当离线 manifest 或精确匹配返回 `exact-name`、`exact-normalized-*` 时，即使组件名是 `Common_Texture_*`，也会错误走 `Common_Prefab` 的模板尺寸分支。
 
@@ -481,7 +481,7 @@ Figma 导入文字层时：
 
 - **【强制】每个文字层的 Figma fill color 必须与 manifest `text.fillColor` 的 hex 值一致，不一致必须修正后才能交付。**
 
-- MCP Relay result `status == "completed"`，并且 `missingNodeCount`、`emptyImageFillCount`、`badTransformCount`、`textClipRiskCount`、`textColorMismatchCount`、`textStrokeMismatchCount`、`sliceProblemCount`、`indexOrderBad` 全部为 0；这些数值必须在最终交付中明示。
+- Relay result `status == "completed"`，并且 `missingNodeCount`、`emptyImageFillCount`、`badTransformCount`、`textClipRiskCount`、`textColorMismatchCount`、`textStrokeMismatchCount`、`sliceProblemCount`、`indexOrderBad` 全部为 0；这些数值必须在最终交付中明示。
 - `manifest.json` 或 Figma metadata 包含 `rawPsdLayerName`、`normalizedLayerName`、`semanticMode`、`normalizationWarnings`。
 - 原始名称中疑似 common 的图层都已匹配通用组件，或有明确降级 warning。
 - 原始名称中疑似九宫的图层都已创建九宫父层和 `__slice_*`，或有明确降级 warning。
@@ -550,38 +550,38 @@ imageTransform: [[195/23, 0, 0], [0, 88/23, 0]]
 
 | 步骤 | 操作 | 耗时 | 工具 |
 |------|------|------|------|
-| 1 | 插件查询 62:115 + 2896:32 组件库 | ~2s | `figmaMcpRelay.figma_query_components` |
+| 1 | 插件查询 62:115 + 2896:32 组件库 | ~2s | `node dist/cli.js figma-command --job-type COLLECT_COMPONENTS` |
 | 2 | PSD 图层导出 + 摘要生成 | **3s** | export_psd_layers.py |
-| 3 | MCP Relay 批量导入 100 层（含文字/九宫/验证/截图） | **~48s** | MCP Relay 批量通道 |
-| 4 | 网格 Component 创建（7 slot） | ~8s | figmaMcpRelay 专用 job |
-| 5 | 任务行 Component（5 行） | ~8s | figmaMcpRelay 专用 job |
+| 3 | Relay 批量导入 100 层（含文字/九宫/验证/截图） | **~48s** | Relay 批量通道 |
+| 4 | 网格 Component 创建（7 slot） | ~8s | figmaRelay 专用 job |
+| 5 | 任务行 Component（5 行） | ~8s | figmaRelay 专用 job |
 | **总计** | | **~69s（有效操作）** | |
 
-MCP Relay 导入 100 层约 48s（含字体加载、九宫切片、common 匹配、验证和截图），是硬等待时间。全流程有效操作约 80s，加上排查/阅读参考文档约 120s。
+Relay 导入 100 层约 48s（含字体加载、九宫切片、common 匹配、验证和截图），是硬等待时间。全流程有效操作约 80s，加上排查/阅读参考文档约 120s。
 
 ### 组件匹配（2026-05-12，2026-05-13 更新）
 
-**必须使用 `figmaMcpRelay.figma_query_components` 查询组件库，禁止使用官方/通用 Figma MCP `use_figma`。**
+**必须使用 `node dist/cli.js figma-command --job-type COLLECT_COMPONENTS` 查询组件库，禁止使用官方/通用 Figma MCP `use_figma`。**
 
-- 每次 PSD 导入前，运行 `refresh_component_cache.py <cache_dir> --from-mcp`，由 Figma MCP Relay 插件在 Figma 内直接遍历 `62:115` 和 `2896:32` 并返回最新组件清单，自动写入缓存。
-- 缓存供 `export_psd_layers.py --match-cache` 做离线匹配，但 Figma MCP Relay 插件的 `buildComponentIndexes` 会再次在插件内实时建索引，所以最终匹配以 MCP Relay 的组件索引为准。
-- `figmaMcpRelay.figma_query_components` + `code.js` 的 `COLLECT_COMPONENTS` handler 负责查询，无需加载 `figma-use` skill。
-- 已知问题：Figma 中的组件名可能含 `_Prefab_`、`_Texture_` 等中间前缀（如 `Common_Texture_Lock`），而 PSD 层名是 `Common_Lock`。Figma MCP Relay 插件的 `findBestComponentMatch` 使用名称相似度评分匹配，阈值 0.88，名称不匹配时可能降级。这种情况下需要在 manifest 中设置 `match.matched = true, match.matchedComponentId = "实际ID"` 强制匹配。
+- 每次 PSD 导入前，运行 `refresh_component_cache.py <cache_dir> --from-cli`，由 Figma Relay 插件在 Figma 内直接遍历 `62:115` 和 `2896:32` 并返回最新组件清单，自动写入缓存。
+- 缓存供 `export_psd_layers.py --match-cache` 做离线匹配，但 Figma Relay 插件的 `buildComponentIndexes` 会再次在插件内实时建索引，所以最终匹配以 Relay 的组件索引为准。
+- `node dist/cli.js figma-command --job-type COLLECT_COMPONENTS` + `code.js` 的 `COLLECT_COMPONENTS` handler 负责查询，无需加载 `figma-use` skill。
+- 已知问题：Figma 中的组件名可能含 `_Prefab_`、`_Texture_` 等中间前缀（如 `Common_Texture_Lock`），而 PSD 层名是 `Common_Lock`。Figma Relay 插件的 `findBestComponentMatch` 使用名称相似度评分匹配，阈值 0.88，名称不匹配时可能降级。这种情况下需要在 manifest 中设置 `match.matched = true, match.matchedComponentId = "实际ID"` 强制匹配。
 
 ### 打组件原则（2026-05-12）
 
-**figmaMcpRelay 负责批量导入，也负责后处理专用 job。**
+**figmaRelay 负责批量导入，也负责后处理专用 job。**
 
 | 操作 | 工具 | 原因 |
 |------|------|------|
-| PSD 批量导入（图片/text/九宫/common） | figmaMcpRelay → 插件 job | 批量高效，无 50k 限制 |
-| 网格 Component、行列分组、层级整理 | figmaMcpRelay 专用 job | 保持同一插件执行和验证通道 |
+| PSD 批量导入（图片/text/九宫/common） | figmaRelay → 插件 job | 批量高效，无 50k 限制 |
+| 网格 Component、行列分组、层级整理 | figmaRelay 专用 job | 保持同一插件执行和验证通道 |
 
 后处理的标准方法：
 1. 用 Python 从 manifest 中分析图层空间分布（坐标、尺寸、名称模式）。
-2. 用 `figmaMcpRelay` 查询根帧子节点获取真实节点 ID。
+2. 用 `figmaRelay` 查询根帧子节点获取真实节点 ID。
 3. Python 生成结构化 plan/job，不生成官方/通用 `use_figma` 脚本。
-4. 提交 `figmaMcpRelay.figma_submit_job` 执行，并读取插件返回的验证报告。
+4. 提交 `node dist/cli.js figma-command` 执行，并读取插件返回的验证报告。
 
 注意：
 - JS 变量名不能含 `/`、`+` 等特殊字符（`n_102_1999/2000` 非法）
@@ -605,34 +605,34 @@ MCP Relay 导入 100 层约 48s（含字体加载、九宫切片、common 匹配
 
 ### manifest_summary.json 扁平格式无需额外验证（2026-05-12）
 
-**经验**：`export_psd_layers.py --summary` 导出的 `manifest_summary.json` 使用扁平格式（`chars`、`fillColor`、`border`、`slices` 直接挂在 layer 顶层），Figma MCP Relay 插件的 `normalizeManifest` 同时兼容扁平格式和嵌套格式（`text.characters`、`nineSlice.slices`）。
+**经验**：`export_psd_layers.py --summary` 导出的 `manifest_summary.json` 使用扁平格式（`chars`、`fillColor`、`border`、`slices` 直接挂在 layer 顶层），Figma Relay 插件的 `normalizeManifest` 同时兼容扁平格式和嵌套格式（`text.characters`、`nineSlice.slices`）。
 
 **强制规则**：
-- 直接提交 `manifest_summary.json` 给 MCP Relay，**不需要**读 `manifest.json` 全量确认九宫/文字格式
+- 直接提交 `manifest_summary.json` 给 Relay，**不需要**读 `manifest.json` 全量确认九宫/文字格式
 - 如需确认文字颜色、九宫切片等细节，直接从 summary 中读取，不要多花时间验证格式兼容性
 - 节省约 30s 的 manifest 结构分析时间
 
 ## 性能优化工作流
 
-### Figma MCP Relay 插件快速路径（推荐）
+### Figma Relay 插件快速路径（推荐）
 
-当 Figma Desktop 可运行开发插件时，优先使用 `figmaMcpRelay` 驱动本地插件，替代官方/通用 Figma MCP 的大量往返：
+当 Figma Desktop 可运行开发插件时，优先使用 `figmaRelay` 驱动本地插件，替代官方/通用 Figma MCP 的大量往返：
 
 - 插件目录：`<relay-root>/`
-- AI-facing MCP gateway：`<relay-root>/dist/index.js`，由 `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp` 启动
-- MCP CLI wrapper：`<relay-root>/client/figma_mcp_client.py`
-- MCP endpoint：默认 `http://127.0.0.1:32130/mcp`（AI 连接 MCP tool；如果当前 MCP 配置使用其它端口，以配置为准）
-- runtime relay：同一 Node gateway 内的 `/figma` WebSocket、polling fallback 和 asset/result endpoint（MCP server 与插件之间的内部通道）
+- Relay 生命周期由外部管理。AI 不得启动、重启、停止或重配服务；插件任务以 Relay 接受为预检，独立任务使用 `node dist/cli.js sessions`。连接失败记录原始错误并停止，不探测替代端口。
+- Python CLI wrapper：`<relay-root>/client/figma_relay_cli.py`
+- CLI 连接 `ws://127.0.0.1:32130/relay`，插件连接 `/figma` WebSocket。地址覆盖使用 CLI `--url` 或 Python `--relay-url`；HTTP 仅保留受控资源下载。
+- 插件命令与结果只走 `/figma` WebSocket；CLI 通过 `/relay` 查询和订阅原任务，不回退 HTTP，不重放结果未知的写入。
 - 详细流程：`references/figma-http-plugin-workflow.md`
 
 工作流：
 
 1. 用 `export_psd_layers.py --summary` 导出 `manifest_summary.json` 和 PNG。
 2. 在 Figma Desktop 运行 `<relay-root>/manifest.json` 对应插件，并保持 UI 面板打开。
-3. **【强制】PSD 批量导入必须使用 `submit_psd_import_job.py` 脚本**（脚本内部调用 `figma_mcp_client.py` 与 MCP Relay 通信，但会做 `build_payload` 解析相对路径为绝对路径）。`figmaMcpRelay.figma_submit_job` 只用于后处理（网格 Component、层级整理等小型 job），**不得用于批量导入**。
-4. 插件优先通过 WebSocket `/figma` 接收任务，polling `/figma/pending` 仅作 fallback；插件直接 `fetch` PNG 字节并用 `figma.createImage` 生成 imageHash。
+3. **【强制】PSD 批量导入必须使用 `submit_psd_import_job.py` 脚本**（脚本内部调用 `figma_relay_cli.py` 与 Relay 通信，但会做 `build_payload` 解析相对路径为绝对路径）。`node dist/cli.js figma-command` 只用于后处理（网格 Component、层级整理等小型 job），**不得用于批量导入**。
+- 插件命令与结果只走 `/figma` WebSocket；CLI 通过 `/relay` 查询和订阅原任务，不回退 HTTP，不重放结果未知的写入。
 5. 插件在 Figma 内创建根 Frame、普通图片层、Text、common Instance、九宫/三切片和 metadata。
-6. 插件把验证结果交回 runtime relay，提交脚本默认把完整结果写入 `figma_mcp_result.json`，并把截图 base64 另存为 PNG；stdout 只打印轻量摘要。只有需要排查具体 warning/error 时才读完整结果文件或使用 `--verbose-result`。
+6. 插件把验证结果交回 runtime relay，提交脚本默认把完整结果写入 `figma_relay_result.json`，并把截图 base64 另存为 PNG；stdout 只打印轻量摘要。只有需要排查具体 warning/error 时才读完整结果文件或使用 `--verbose-result`。
 
 该路径用于替代：
 
@@ -640,17 +640,17 @@ MCP Relay 导入 100 层约 48s（含字体加载、九宫切片、common 匹配
 - 大段 `use_figma` JS 注入；
 - 因 `use_figma` 50000 字符限制导致的分批执行。
 
-若插件不可用、目标 Figma 文件未打开、common 组件 nodeId 不可访问，先修复 `figmaMcpRelay`/插件环境。只有用户明确批准 fallback 时，才允许使用官方/通用 Figma MCP，并且必须说明额外耗时和风险。
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
 
 ### 组件库索引缓存
 
 避免每次导入都遍历 Figma 组件库。标准刷新入口是：
 
 ```powershell
-python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\refresh_component_cache.py" .tmp\psd-layer-to-figma\figma_cache --from-mcp
+python "<relay-root>\ai\skills\psd-layer-to-figma\scripts\refresh_component_cache.py" .tmp\psd-layer-to-figma\figma_cache --from-cli
 ```
 
-脚本内部调用 `figmaMcpRelay.figma_query_components`；后续导入直接读取 `component_library_cache.json` 和 `image_library_cache.json`。
+脚本内部调用 `node dist/cli.js figma-command --job-type COLLECT_COMPONENTS`；后续导入直接读取 `component_library_cache.json` 和 `image_library_cache.json`。
 
 ### 预计算 constraints
 
@@ -689,13 +689,13 @@ manifest.json 可能超过 2000 行，分多次读取浪费时间。导出阶段
 }
 ```
 
-Agent 只需一次读取 `manifest_summary.json` 即可获得全部导入数据，禁止分多次读取完整 manifest。导入后也不要把 `figma_mcp_result.json` 整体读入 LLM；先看 `submit_psd_import_job.py --wait` 的 `[SUMMARY_JSON]`，再按需针对 warning/error 样例或验证字段做小范围读取。
+Agent 只需一次读取 `manifest_summary.json` 即可获得全部导入数据，禁止分多次读取完整 manifest。导入后也不要把 `figma_relay_result.json` 整体读入 LLM；先看 `submit_psd_import_job.py --wait` 的 `[SUMMARY_JSON]`，再按需针对 warning/error 样例或验证字段做小范围读取。
 
 `manifest_summary.json` 顶层包含 `semanticHints.psdPrefix`，`submit_psd_import_job.py --wait` 的 `[SUMMARY_JSON]` 会输出 prefix hint 的段数、覆盖率和候选段摘要。结构化整理时先用这些摘要决定是否进入 cleanup dry-run，不要为了找前缀段读取完整 manifest 或 Figma result。
 
 ### 导入结果摘要（必须使用）
 
-**【强制】PSD 批量导入必须使用 `submit_psd_import_job.py` 脚本**（`assetPaths.layersDir` 简写在 raw MCP tool 中会被截断导致超时，脚本的 `build_payload` 会正确解析为绝对路径）。标准命令：
+**【强制】PSD 批量导入必须使用 `submit_psd_import_job.py` 脚本**（`assetPaths.layersDir` 简写在 未展开为资源清单时无法正确传输，脚本的 `build_payload` 会正确解析为绝对路径）。标准命令：
 
 ```powershell
 python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
@@ -709,11 +709,11 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 
 重复导入测试快速路径：
 
-- 先用 MCP tools 完成本轮 `figma_health`、`figma_query_selection`、`figma_query_plugin_status`，确认 `fileKey`、页面和选区。
+- 先用项目 CLI 完成本轮 `figma_health`、`figma_query_selection`、`figma_query_plugin_status`，确认 `fileKey`、页面和选区。
 - **【性能防退化】先刷新组件缓存，再执行 PSD 导出；禁止先导出一次、刷新缓存后再导出一次。** 只有组件缓存刷新失败且按本 skill 规则决定降级继续时，才允许直接导出一次并带 warning。不要为了“先看摘要”做探测性导出；导出结果本身就是导入输入。
 - 提交时可加 `--fast-repeat` 跳过脚本内部重复 preflight；必须同时传 `--file-key` 或 `--session-id`。
-- `--fast-repeat` 只跳过重复 target preflight，不跳过 MCP result gate、截图保存、截图 PNG 校验和 timeline 输出。
-- 若 `status != completed`、任一门禁非 0、截图不存在或 warning/error 异常，立即退出快速路径，读取 `figma_mcp_result.json` 和 timeline 做慢速诊断；不要重新导入覆盖问题现场。
+- `--fast-repeat` 只跳过重复 target preflight，不跳过 Relay result gate、截图保存、截图 PNG 校验和 timeline 输出。
+- 若 `status != completed`、任一门禁非 0、截图不存在或 warning/error 异常，立即退出快速路径，读取 `figma_relay_result.json` 和 timeline 做慢速诊断；不要重新导入覆盖问题现场。
 - 时间复盘必须区分真实总时间、机器执行时间、agent 决策/空窗时间；不要只报插件内部 `durationMs`。
 
 重复导入命令示例：
@@ -732,7 +732,7 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 - stdout 只展示 `rootNodeId`、`createdCount`、耗时、统计、验证 gate、warning/error 数量和少量样例。
 - `[SUMMARY_JSON]` 中的 `timeline.machineTimeMs` 和 `timeline.events[]` 是标准时间证据；回答耗时问题时优先引用这些字段，不要再额外打开 `timeline.json`，除非摘要缺失或字段异常。
 - `[SUMMARY_JSON].stopAfterSummary == true` 表示标准交付证据已经足够：`status=completed`、关键 gate 为 0、无 warning/error、截图存在。此时禁止再做全量 `figma_query_node_children`、全量 result 解析、截图路径反复探测或其它重验证；直接用摘要交付。只有用户明确要求结构/children 明细、某个 gate 失败、warning/error 非 0、截图不存在、或摘要字段缺失时，才进入慢速诊断。
-- 完整插件结果写入 manifest 同目录 `figma_mcp_result.json`。
+- 完整插件结果写入 manifest 同目录 `figma_relay_result.json`。
 - 截图 base64 必须另存为 PNG，并从 JSON 中移除，避免结果文件和 LLM 上下文暴涨。
 - 只有定位具体失败时才打开完整结果；正常交付依据轻量摘要中的 validation gate 和文件路径。
 
@@ -748,7 +748,7 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 
 **强制规则**：
 
-- 标准顺序固定为：`figma_health/query_selection/plugin_status` → `refresh_component_cache.py --from-mcp` → `export_psd_layers.py --summary --match-cache` → `submit_psd_import_job.py --wait` → 读取 `[SUMMARY_JSON]` 交付。
+- 标准顺序固定为：`figma_health/query_selection/plugin_status` → `refresh_component_cache.py --from-cli` → `export_psd_layers.py --summary --match-cache` → `submit_psd_import_job.py --wait` → 读取 `[SUMMARY_JSON]` 交付。
 - 每个 PSD 源默认只导出一次。禁止为了看 manifest 摘要先导出一遍；需要摘要就使用最终导出的 `manifest_summary.json`。
 - 正常完成后以 `[SUMMARY_JSON]` 为准交付；如果 `stopAfterSummary=true`，不得再 query 根节点 children 或打开完整 result 做二次证明。
 - 如果用户问“为什么慢/每步时间”，优先引用 `[SUMMARY_JSON].timeline.events[]` 的北京时间和 `machineTimeMs`；明确区分机器执行时间与 Agent 决策/空窗时间。
@@ -756,7 +756,7 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 
 ### 单次插件 job 创建全部节点（强制）
 
-禁止按图层类型分多次官方/通用 `use_figma` 创建节点。必须在一次 `figmaMcpRelay` 插件 job 中完成：
+禁止按图层类型分多次官方/通用 `use_figma` 创建节点。必须在一次 `figmaRelay` 插件 job 中完成：
 
 1. 创建根 Frame
 2. 创建所有图片层（设置 image fill）
@@ -765,7 +765,7 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 5. 创建所有文字层（加载字体、设置颜色/描边）
 6. 设置所有 constraints
 
-这要求在调用前把所有数据（assetPaths、组件匹配结果、文字颜色、constraints）全部准备好，一次性传入 MCP job。
+这要求在调用前把所有数据（assetPaths、组件匹配结果、文字颜色、constraints）全部准备好，一次性传入 Relay job。
 
 ### 组件匹配离线化（强制）
 
@@ -783,7 +783,7 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 | 步骤 | 目标耗时 |
 |------|----------|
 | 读取 manifest_summary.json | <5s（一次读取） |
-| figmaMcpRelay 提交 assetPaths | <5s |
+| figmaRelay 提交 assetPaths | <5s |
 | 插件 fetch PNG + createImage | ~10s |
 | 单次插件 job 创建全部节点 | ~30s |
 | 验证 + 截图 | ~20s |
@@ -799,7 +799,7 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 
 **强制规则**：
 
-- 创建节点时，禁止手动将坐标从 manifest 转录到任何 Figma 写入代码中。必须由 `figmaMcpRelay` 插件 job 直接消费 manifest 数据，或使用 Python 脚本生成完整的 job 数据数组。
+- 创建节点时，禁止手动将坐标从 manifest 转录到任何 Figma 写入代码中。必须由 `figmaRelay` 插件 job 直接消费 manifest 数据，或使用 Python 脚本生成完整的 job 数据数组。
 - 如果必须硬编码数据数组，必须用脚本自动生成该数组（如 `python -c "..."` 输出 JSON），禁止人工逐行抄写。
 - 验证阶段必须对比每个节点的 Figma 绝对坐标与 manifest 中的 x/y 值，不一致时必须修正。
 
@@ -812,8 +812,8 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 **当前规则**：
 
 - 标准流程不再生成官方/通用 `use_figma` 创建脚本，也不再按 50k 限制拆批。
-- 必须将 manifest、assetPaths、组件匹配和验证要求通过 `submit_psd_import_job.py` 脚本提交给 `figmaMcpRelay`，由插件专用 handler 一次性消费结构化数据。
-- 如果用户书面同意 fallback 到官方/通用 Figma MCP，才允许参考此历史限制，并且必须在最终报告中标记 fallback 风险。
+- 必须将 manifest、assetPaths、组件匹配和验证要求通过 `submit_psd_import_job.py` 脚本提交给 `figmaRelay`，由插件专用 handler 一次性消费结构化数据。
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
 
 **错误现象**：`jiugong_di_002` 在 Figma 中位置偏左。manifest_summary 中坐标正确（x=604），但 Agent 在构建 Figma 写入代码时手动抄坐标，把另一个九宫层 `jiugong_di`（x=453）的坐标错误地写到了 `jiugong_di_002` 上。
 
@@ -821,7 +821,7 @@ python .claude\skills\psd-layer-to-figma\scripts\submit_psd_import_job.py `
 
 **强制规则**：
 
-- 创建节点时，禁止手动将坐标从 manifest 转录到 Figma 写入代码中。必须由 `figmaMcpRelay` 插件 job 直接消费 manifest 数据，或使用 Python 脚本生成完整的 job 数据数组。
+- 创建节点时，禁止手动将坐标从 manifest 转录到 Figma 写入代码中。必须由 `figmaRelay` 插件 job 直接消费 manifest 数据，或使用 Python 脚本生成完整的 job 数据数组。
 - 如果必须硬编码数据数组，必须用脚本自动生成该数组（如 `python -c "..."` 输出 JSON），禁止人工逐行抄写。
 - 验证阶段必须对比每个节点的 Figma 绝对坐标与 manifest 中的 x/y 值，不一致时必须修正。
 
@@ -870,7 +870,7 @@ jiugong_ 前缀图层
 
 ### 禁止使用 MCP use_figma 直接写入 Figma（2026-05-12）
 
-**错误现象**：MCP Relay 完成批量导入后，Agent 直接使用 MCP `use_figma` 对已导入的节点进行修改（修复九宫切片、补充文字描边），绕过了 MCP Relay 的统一写入通道。
+**错误现象**：Relay 完成批量导入后，Agent 直接使用 MCP `use_figma` 对已导入的节点进行修改（修复九宫切片、补充文字描边），绕过了 Relay 的统一写入通道。
 
 **根本原因**：认为"修改已存在节点"不属于导入流程，没有触发 skill 规则检查。未先向用户说明情况并获取 fallback 许可。
 
@@ -878,10 +878,10 @@ jiugong_ 前缀图层
 
 - 任何时候禁止使用 MCP `use_figma` / `upload_assets` / `get_screenshot` 对 Figma 文件做任何写入操作，包括创建/修改/删除节点、设置属性、替换 Instance、修复导入后问题。
 - 修复导入后的问题应通过以下方式之一：
-  1. Figma MCP Relay 插件的增量 job/manifest
-  2. Figma MCP Relay 插件新增专用消息处理器（如 `FIX_SLICES`）
-  3. **用户明确要求且书面同意**使用 MCP fallback
-- 唯一例外：MCP Relay 环境故障且用户明确书面同意 fallback 时，才允许使用 MCP 排查，并在完成后回退到 MCP Relay。
+  1. Figma Relay 插件的增量 job/manifest
+  2. Figma Relay 插件新增专用消息处理器（如 `FIX_SLICES`）
+  3. 修复并重新验证 Relay + WebSocket 入口
+- Relay 环境故障时停止写入并报告阻塞；没有 MCP 回退入口。
 
 **相关错误报告**：`Doc/ReportError/PSD导入_禁止MCP直接写入Figma.md`
 
@@ -1128,12 +1128,12 @@ for (const slot of slots) {
 
 正确做法：
 
-- **【强制】替换字体前，先通过 `figmaMcpRelay` 只读文本/字体检查 job 或本次 MCP Relay 导出的 text metadata 检查 Figma 中已有同类文字的 `fontName.family` 和 `fontName.style`，确保替换字体与现有 UI 保持一致。禁止为此调用官方/通用 `use_figma`。**
+- **【强制】替换字体前，先通过 `figmaRelay` 只读文本/字体检查 job 或本次 Relay 导出的 text metadata 检查 Figma 中已有同类文字的 `fontName.family` 和 `fontName.style`，确保替换字体与现有 UI 保持一致。禁止为此调用官方/通用 `use_figma`。**
 - 可编辑 Text 默认使用：
   - `textAutoResize = "WIDTH_AND_HEIGHT"`（NOT 仅 `HEIGHT`，宽度也可能不够）
   - `lineHeight = { unit: "AUTO" }`（NOT `{ unit: "PIXELS", value: 0 }`）
   - 设置字符、字体、字号、描边后，按原中心点回摆，避免整体跑位。
-- `WIDTH_AND_HEIGHT` 必须在同一个 `figmaMcpRelay` 插件 job 中设置（需要先 `loadFontAsync`）。
+- `WIDTH_AND_HEIGHT` 必须在同一个 `figmaRelay` 插件 job 中设置（需要先 `loadFontAsync`）。
 - 只有明确需要固定文本框排版时，才允许 `textAutoResize=NONE`，并且必须证明框高足以容纳字体和描边。
 
 强制验证：

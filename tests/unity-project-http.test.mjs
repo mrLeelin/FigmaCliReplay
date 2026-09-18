@@ -3,131 +3,66 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-
 import { parseArgs } from "../dist/config.js";
 import { createRelayHttpServer } from "../dist/httpServer.js";
+import { createRelayControlHandler } from "../dist/relayControl.js";
 import { UnityProjectRegistry } from "../dist/unityProjectRegistry.js";
 
-function createUnityProject(root, name) {
-  const projectPath = path.join(root, name);
-  fs.mkdirSync(path.join(projectPath, "Assets"), { recursive: true });
-  fs.mkdirSync(path.join(projectPath, "ProjectSettings"), { recursive: true });
-  return projectPath;
-}
-
-test("HTTP API manages the standalone Unity project registry", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-relay-http-"));
-  const projectPath = createUnityProject(root, "ProjectA");
+test("Unity project HTTP routes only report upgrade and cannot mutate the registry", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-project-http-"));
   const registry = new UnityProjectRegistry(path.join(root, "projects.json"));
-  const config = parseArgs(["--port", "32198", "--admin-token", "test-token"]);
-  const relay = { status: () => ({ status: "ok" }) };
-  const server = createRelayHttpServer(config, relay, registry);
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  const baseUrl = `http://127.0.0.1:${address.port}`;
-
-  try {
-    const initial = await fetch(`${baseUrl}/unity-projects`);
-    assert.equal(initial.status, 200);
-    assert.deepEqual((await initial.json()).projects, []);
-
-    const added = await fetch(`${baseUrl}/unity-projects/add`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer test-token" },
-      body: JSON.stringify({ path: projectPath })
-    });
-    assert.equal(added.status, 200);
-    const addedBody = await added.json();
-    assert.equal(addedBody.project.path, path.resolve(projectPath));
-
-    const listed = await fetch(`${baseUrl}/unity-projects`);
-    const listedBody = await listed.json();
-    assert.equal(listedBody.projects.length, 1);
-    assert.equal(listedBody.lastSelectedProjectId, addedBody.project.id);
-
-    const discoveryDirectory = path.join(projectPath, "Library", "FigmaBridge", "gateways");
-    const olderDiscoveryPath = path.join(discoveryDirectory, "11111.json");
-    const discoveryPath = path.join(discoveryDirectory, "12345.json");
-    fs.mkdirSync(discoveryDirectory, { recursive: true });
-    fs.writeFileSync(olderDiscoveryPath, JSON.stringify({
-      version: 1,
-      projectPath: path.resolve(projectPath),
-      gatewayUrl: "http://localhost:32131",
-      processId: 11111,
-      updatedAtUtc: "2026-07-15T09:19:00.000Z"
-    }), "utf8");
-    fs.writeFileSync(discoveryPath, JSON.stringify({
-      version: 1,
-      projectPath: path.resolve(projectPath),
-      gatewayUrl: "http://localhost:32132",
-      processId: 12345,
-      updatedAtUtc: "2026-07-15T09:20:00.000Z"
-    }), "utf8");
-
-    const gatewayEndpoint = `${baseUrl}/unity-projects/${encodeURIComponent(addedBody.project.id)}/gateway`;
-    const discovered = await fetch(gatewayEndpoint);
-    assert.equal(discovered.status, 200);
-    assert.deepEqual(await discovered.json(), {
-      found: true,
-      gatewayUrl: "http://localhost:32132",
-      updatedAtUtc: "2026-07-15T09:20:00.000Z"
-    });
-
-    fs.unlinkSync(discoveryPath);
-    const olderFallback = await fetch(gatewayEndpoint);
-    assert.deepEqual(await olderFallback.json(), {
-      found: true,
-      gatewayUrl: "http://localhost:32131",
-      updatedAtUtc: "2026-07-15T09:19:00.000Z"
-    });
-
-    fs.writeFileSync(discoveryPath, JSON.stringify({
-      version: 1,
-      projectPath: path.join(root, "AnotherProject"),
-      gatewayUrl: "http://localhost:32132",
-      processId: 12345,
-      updatedAtUtc: "2026-07-15T09:20:00.000Z"
-    }), "utf8");
-    const mismatched = await fetch(gatewayEndpoint);
-    const mismatchedBody = await mismatched.json();
-    assert.equal(mismatched.status, 200);
-    assert.equal(mismatchedBody.gatewayUrl, "http://localhost:32131");
-    assert.doesNotMatch(JSON.stringify(mismatchedBody), /AnotherProject/);
-
-    fs.writeFileSync(path.join(discoveryDirectory, "99999.json"), JSON.stringify({
-      version: 1,
-      projectPath: path.resolve(projectPath),
-      gatewayUrl: "https://example.com:32132",
-      processId: 99999,
-      updatedAtUtc: "not-an-iso-timestamp"
-    }), "utf8");
-    fs.unlinkSync(olderDiscoveryPath);
-    const invalidOnly = await fetch(gatewayEndpoint);
-    assert.deepEqual(await invalidOnly.json(), { found: false });
-
-    fs.unlinkSync(discoveryPath);
-    const missing = await fetch(gatewayEndpoint);
-    assert.equal(missing.status, 200);
-    assert.deepEqual(await missing.json(), { found: false });
-
-    fs.writeFileSync(path.join(discoveryDirectory, "77777.json"), JSON.stringify({
-      version: 1,
-      projectPath: path.resolve(projectPath),
-      gatewayUrl: "http://localhost:32133",
-      processId: 77777,
-      updatedAtUtc: "2026-07-15T09:21:00.000Z"
-    }), "utf8");
-    fs.rmSync(path.join(projectPath, "Assets"), { recursive: true });
-    const unavailableProject = await fetch(gatewayEndpoint);
-    const unavailableBody = await unavailableProject.json();
-    assert.equal(unavailableProject.status, 200);
-    assert.deepEqual(unavailableBody, { found: false });
-    assert.doesNotMatch(JSON.stringify(unavailableBody), new RegExp(projectPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-
-    const unknownProject = await fetch(`${baseUrl}/unity-projects/not-registered/gateway`);
-    assert.equal(unknownProject.status, 404);
-    assert.deepEqual(await unknownProject.json(), { error: "unknown Unity project" });
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
+  const server = createRelayHttpServer(parseArgs([]), {}, registry);
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); fs.rmSync(root, {recursive: true, force: true}); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  for (const suffix of ["", "/missing/gateway"]) {
+    assert.equal((await fetch(base + "/unity-projects" + suffix)).status, 410);
   }
+  for (const suffix of ["add", "select", "remove", "install-bridge"]) {
+    const response = await fetch(base + "/unity-projects/" + suffix, {method: "POST", headers: {"content-type": "application/json"}, body: "{}"});
+    assert.equal(response.status, 410);
+  }
+  assert.deepEqual(registry.list().projects, []);
+});
+
+test("shared Unity controls retain registry and project-scoped discovery validation", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-project-control-"));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const projectPath = path.join(root, "ProjectA");
+  fs.mkdirSync(path.join(projectPath, "Assets"), {recursive: true});
+  fs.mkdirSync(path.join(projectPath, "ProjectSettings"));
+  const registry = new UnityProjectRegistry(path.join(root, "projects.json"));
+  const control = createRelayControlHandler({}, {}, undefined, registry);
+  assert.deepEqual((await control("unity.projects.list", {})).projects, []);
+  const added = await control("unity.projects.add", {path: projectPath});
+  const id = added.project.id;
+  assert.equal(added.project.path, projectPath);
+  assert.equal((await control("unity.projects.add", {path: projectPath})).projects.length, 1);
+  await assert.rejects(control("unity.bridge.install", {}), /explicit Unity project id/);
+  await assert.rejects(control("unity.gateway.get", {id: "missing"}), /Unknown Unity project/);
+  assert.equal((await control("unity.projects.select", {id})).lastSelectedProjectId, id);
+  const installed = await control("unity.bridge.install", {id});
+  assert.equal(installed.project.bridgeInstalled, true);
+  const discovery = path.join(projectPath, "Library", "FigmaBridge", "gateways");
+  fs.mkdirSync(discovery, {recursive: true});
+  function record(pid, url, updatedAtUtc, project = projectPath) {
+    fs.writeFileSync(path.join(discovery, `${pid}.json`), JSON.stringify({version: 1,
+      projectPath: project, gatewayUrl: url, processId: pid, updatedAtUtc}));
+  }
+  const gateway = () => control("unity.gateway.get", {id});
+  record(11111, "http://localhost:32131", "2026-07-15T09:19:00.000Z");
+  record(12345, "http://localhost:32132", "2026-07-15T09:20:00.000Z");
+  assert.equal((await gateway()).gatewayUrl, "http://localhost:32132");
+  fs.unlinkSync(path.join(discovery, "12345.json"));
+  assert.equal((await gateway()).gatewayUrl, "http://localhost:32131");
+  record(12345, "http://localhost:32132", "2026-07-15T09:20:00.000Z", path.join(root, "WrongProject"));
+  assert.equal((await gateway()).gatewayUrl, "http://localhost:32131");
+  record(99999, "https://example.com:32132", "not-a-date");
+  fs.unlinkSync(path.join(discovery, "11111.json"));
+  assert.deepEqual(await gateway(), {found: false});
+  record(77777, "http://localhost:32133", "2026-07-15T09:21:00.000Z");
+  fs.rmSync(path.join(projectPath, "Assets"), {recursive: true});
+  assert.deepEqual(await gateway(), {found: false});
+  assert.deepEqual((await control("unity.projects.remove", {id})).projects, []);
+  assert.equal(fs.existsSync(path.join(projectPath, "ProjectSettings")), true);
 });

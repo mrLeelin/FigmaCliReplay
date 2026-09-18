@@ -6,7 +6,7 @@
 
 ## 错误现象
 
-Figma MCP Relay 插件执行 `figma.root.findAll()` 时抛出异常：
+Figma Relay 插件执行 `figma.root.findAll()` 时抛出异常：
 
 ```
 in findAll: Cannot call with documentAccess: dynamic-page without calling figma.loadAllPagesAsync() first.
@@ -33,5 +33,5 @@ try { await figma.loadAllPagesAsync(); } catch (e) { /* 非 dynamic-page 模式�
 
 ## 预防
 
-1. 所有新的 MCP Relay 操作（PREFAB_TO_FIGMA_WRITE、PREFAB_CHECK 等）在需要搜索全文件组件时，必须先 `loadAllPagesAsync()`
+1. 所有新的 Relay 操作（PREFAB_TO_FIGMA_WRITE、PREFAB_CHECK 等）在需要搜索全文件组件时，必须先 `loadAllPagesAsync()`
 2. 插件 manifest 保持 `documentAccess: "dynamic-page"`（不对文件做全量加载，只在需要时主动加载）

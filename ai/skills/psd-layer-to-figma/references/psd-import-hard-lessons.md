@@ -163,11 +163,11 @@ Text 裁切风险：textAutoResize/lineHeight，通过/失败
 
 1. 插件 handler 通过 `message.type === "IMPORT_PSD_JOB"` **精确字符串匹配**分派任务。不认识任何变体，也不报错——不匹配就静默跳过。
 2. `manifest` 字段必须是**完整嵌入的 JSON 数据**，不能传文件路径。插件无法从文件系统读取路径指向的 JSON。
-3. 提交 payload 必须带稳定 target。`figmaMcpRelay.figma_submit_job` 成功路径会显式携带 `fileKey` / `target.fileKey`；CLI fallback 如果漏传 target，可能在多插件会话或 polling fallback 下写到错误文件或无法取到任务。
+- 插件命令与结果只走 `/figma` WebSocket；CLI 通过 `/relay` 查询和订阅原任务，不回退 HTTP，不重放结果未知的写入。
 
 ### 正确格式
 
-提交 job 的有效格式如下。Agent 标准入口是 MCP tool `figmaMcpRelay.figma_submit_job`；`scripts/submit_psd_import_job.py` 只是无 MCP tool 暴露时的 CLI fallback，脚本内部才会使用本地 `/jobs`：
+- 业务请求统一使用项目 CLI；`/jobs`、`/figma/pending`、`/figma/result` 已退役并返回 410，`/assets/` 只允许受控下载。
 
 ```json
 {
@@ -214,8 +214,7 @@ Text 裁切风险：textAutoResize/lineHeight，通过/失败
 
 | 场景 | 推荐通道 | 原因 |
 |------|---------|------|
-| MCP tool 可用 | `figmaMcpRelay.figma_submit_job` + 显式 `fileKey`/`target` | 最稳定，和 AI-facing MCP 控制面一致 |
-| MCP tool 未暴露或需要命令行复现 | `scripts/submit_psd_import_job.py --file-key ... --wait` | 封装 target、preflight、轮询和摘要输出 |
+| 标准批量导入 | `scripts/submit_psd_import_job.py --file-key ... --wait` | 固定目标、构造完整资源清单、WS 等待和摘要输出 |
 | 手写 HTTP POST `/jobs` | 禁止 | 容易漏 target、漏轮询容错、把大 JSON 打进 LLM |
 
 两种通道最终都走到插件 `handleImportPsdJob`，格式要求完全相同。
@@ -227,7 +226,7 @@ Text 裁切风险：textAutoResize/lineHeight，通过/失败
 - 检查 `job.assets` 数组中每个 `path` 存在。
 - 提交必须携带 `fileKey` / `target.fileKey` 或 `sessionId` / `target.sessionId`。
 - 脚本轮询必须容错 204、空 body 和非 JSON body；这些状态只能视为 pending/重试，不能让 JSON decode 直接崩溃。
-- 导入后先看 `[SUMMARY_JSON]`，不要把完整 `figma_mcp_result.json` 直接读入 LLM。
+- 导入后先看 `[SUMMARY_JSON]`，不要把完整 `figma_relay_result.json` 直接读入 LLM。
 
 ### 辅助脚本
 

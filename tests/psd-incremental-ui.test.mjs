@@ -15,13 +15,13 @@ test("incremental apply is gated by an explicit modal confirmation", () => {
   assert.match(ui, /确认增量更新/);
   assert.match(ui, /function showPsdIncrementalPreview/);
   assert.match(ui, /function confirmPsdIncrementalUpdate/);
-  assert.match(ui, /\/apply/);
+  assert.match(ui, /psd\.import\.apply/);
   assert.match(ui, /取消/);
   assert.match(ui, /source-file-renamed/);
   assert.match(ui, /Layer ID 重合/);
 });
 
-test("polling stops for every preview terminal state", () => {
+test("subscriptions stop for every preview terminal state", () => {
   assert.match(ui, /PSD_PREVIEW_TERMINAL_STATUSES/);
   for (const status of [
     "preview-ready", "preview-blocked", "preview-no-changes", "preview-baseline-required",
@@ -40,7 +40,7 @@ test("confirmation is enabled only for preview-ready", () => {
 test("baseline adoption uses a distinct button and endpoint", () => {
   assert.match(ui, /id="adoptPsdBaselineBtn"/);
   assert.match(ui, /function adoptPsdIncrementalBaseline/);
-  assert.match(ui, /\/adopt-baseline/);
+  assert.match(ui, /psd\.import\.adopt-baseline/);
 });
 
 test("preview renders category totals and before-after field rows", () => {

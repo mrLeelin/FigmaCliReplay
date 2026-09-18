@@ -33,10 +33,10 @@ SKILL_DIR = SCRIPT_DIR.parent
 def find_relay_root() -> Path:
     script_path = Path(__file__).resolve()
     for parent in script_path.parents:
-        if (parent / "client" / "figma_mcp_client.py").is_file():
+        if (parent / "client" / "figma_relay_cli.py").is_file():
             return parent
     raise RuntimeError(
-        f"Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py from {script_path}."
+        f"Unable to locate the Figma Relay root containing client/figma_relay_cli.py from {script_path}."
     )
 
 
@@ -420,7 +420,7 @@ def run_iteration(
     if mode == "check-only":
         cmd.append("--check-only")
     if mode == "reuse-manifest" and iteration > 1:
-        cmd.append("--skip-mcp-export")
+        cmd.append("--skip-relay-export")
 
     started_at = now_iso()
     started = time.perf_counter()
@@ -460,7 +460,7 @@ def run_iteration(
         UNITY_TMP / "verify_prefab_result.json",
         UNITY_TMP / "roslyn_import_plan.txt",
         UNITY_TMP / "componentset_report.json",
-        manifest_dir / "figma_to_prefab_mcp_result.json",
+        manifest_dir / "figma_to_prefab_relay_result.json",
         manifest_dir / "figma_node_manifest.json",
         manifest_dir / "image_export_manifest.json",
         manifest_dir / "manifest_summary.json",
@@ -470,7 +470,7 @@ def run_iteration(
         copied = copy_if_exists(source, iter_dir / "artifacts")
         if copied:
             artifacts["copied"].append(copied)
-    screenshot_dir = copy_if_exists(manifest_dir / "mcp_screenshots", iter_dir / "artifacts")
+    screenshot_dir = copy_if_exists(manifest_dir / "relay_screenshots", iter_dir / "artifacts")
     if screenshot_dir:
         artifacts["copied"].append(screenshot_dir)
 

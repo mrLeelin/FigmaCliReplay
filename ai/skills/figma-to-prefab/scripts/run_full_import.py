@@ -41,6 +41,8 @@ if hasattr(sys.stdout, "reconfigure"):
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 PLUGIN_ROOT = SCRIPT_DIR.parents[3]
+sys.path.insert(0, str(PLUGIN_ROOT / "client"))
+from figma_relay_cli import unity_command, RelayCliError
 
 
 def configure_project_paths(unity_project: str | Path) -> None:
@@ -57,12 +59,10 @@ UNITY_PROJECT = PLUGIN_ROOT
 TMP_DIR = UNITY_PROJECT / ".tmp"
 MCP_MANIFEST_DIR = PLUGIN_ROOT / ".tmp" / "figma-to-prefab"
 
-ULOOP_IMPORT_TEMPLATE = SKILL_DIR / "uloop-templates" / "import_sprites_and_generate_prefabs.cs"
-
 GEN_SPEC = SCRIPT_DIR / "gen_spec.py"
 PROCESS_IMAGES = SCRIPT_DIR / "process_images.py"
 VERIFY_PREFAB = SCRIPT_DIR / "verify_prefab.py"
-MCP_EXPORT = SCRIPT_DIR / "figma_to_prefab_mcp_client.py"
+MCP_EXPORT = SCRIPT_DIR / "figma_to_prefab_cli.py"
 MANIFEST_READER = SCRIPT_DIR / "figma_manifest_reader.py"
 VERIFY_PREFAB_REPORT = TMP_DIR / "verify_prefab_result.json"
 
@@ -131,34 +131,30 @@ def run_timed(label: str, argv: list[str], *, timeout: int, cwd: Path | None = N
     }
 
 
-def run_uloop_import(image_dir: str, spec_paths: list[str], *, timeout: int = 120) -> dict:
-    """使用 uLoop 执行无文件 I/O 的 Prefab 导入代码。"""
-    if not ULOOP_IMPORT_TEMPLATE.exists():
-        return {"success": False, "stderr": f"uLoop template missing: {ULOOP_IMPORT_TEMPLATE}"}
-    code = ULOOP_IMPORT_TEMPLATE.read_text(encoding="utf-8")
-    code = code.replace("{{IMAGE_DIR_JSON}}", json.dumps(image_dir, ensure_ascii=False))
-    code = code.replace("{{SPEC_PATHS_CSHARP}}", ", ".join(json.dumps(path, ensure_ascii=False) for path in spec_paths))
-    generated = TMP_DIR / "figma-to-prefab" / "uloop_import_sprites_and_generate_prefabs.cs"
-    generated.parent.mkdir(parents=True, exist_ok=True)
-    generated.write_text(code, encoding="utf-8")
-    uloop_command = resolve_uloop_command()
-    result = subprocess.run(
-        [uloop_command, "execute-dynamic-code", "--project-path", str(UNITY_PROJECT), "--code-file", str(generated)],
-        cwd=str(REPO_ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-    )
-    return {"success": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
-
-
-def resolve_uloop_command() -> str:
-    """Resolve uLoop independently from the gateway process PATH."""
-    configured = os.environ.get("ULOOP_COMMAND", "").strip()
-    if configured:
-        return configured
-    app_data = os.environ.get("APPDATA", "")
-    candidate = Path(app_data) / "npm" / "uloop.cmd" if app_data else Path()
-    if candidate.is_file():
-        return str(candidate)
-    return "uloop"
+def run_unity_bridge_import(
+    image_dir: str,
+    spec_paths: list[str],
+    relay_url: str,
+    atlas_dir: str = "",
+    atlas_name: str = "",
+    *,
+    timeout: int = 120,
+    project_id: str = "",
+) -> dict:
+    """Submit the import once through the project CLI and authenticated WebSocket."""
+    payload = {
+        "imageDir": str(image_dir).replace("\\", "/").rstrip("/"),
+        "specPaths": [str(path).replace("\\", "/") for path in spec_paths],
+        "atlasDir": str(atlas_dir or "").replace("\\", "/").rstrip("/"),
+        "atlasName": str(atlas_name or "").strip(),
+    }
+    try:
+        parsed = unity_command(str(UNITY_PROJECT), "unity.figma-to-prefab-import", payload,
+                               project_id=project_id, relay_url=relay_url, timeout=timeout)
+        return {"success": parsed.get("ok") is True, "stdout": json.dumps(parsed, ensure_ascii=False),
+                "stderr": str(parsed.get("error") or "")}
+    except RelayCliError as error:
+        return {"success": False, "stderr": f"Unity Bridge request failed: {error}"}
 
 
 def read_json(path: Path) -> dict:
@@ -187,7 +183,11 @@ def to_posix(path: str | Path) -> str:
 
 
 def normalize_unity_asset_path(path: str) -> str:
-    return normalize_asset_path(path).strip("/")
+    # Directory paths are canonicalized with a trailing slash before formal
+    # path validation.  Strip that separator before the strict asset parser;
+    # the directory helper adds it back for downstream writers.
+    normalized = str(path).replace("\\", "/").strip().rstrip("/")
+    return normalize_asset_path(normalized).strip("/")
 
 
 def normalize_unity_asset_dir(path: str) -> str:
@@ -200,12 +200,14 @@ def canonicalize_writer_paths(target_prefab: str, target_image_dir: str) -> tupl
     return normalize_unity_asset_path(target_prefab), normalize_unity_asset_dir(target_image_dir)
 
 
-def derive_formal_paths(base_asset_dir: str, root_name: str) -> tuple[str, str, str]:
+def derive_formal_paths(base_asset_dir: str, root_name: str, layout: str = "split") -> tuple[str, str, str, str]:
     base_dir = normalize_unity_asset_dir(base_asset_dir)
     if not base_dir.startswith("Assets/"):
         fail(f"--formal-output-dir must be a Unity Assets path: {base_asset_dir}")
     prefab_name = infer_prefab_name_from_figma_root(root_name)
-    return prefab_name, f"{base_dir}{prefab_name}.prefab", f"{base_dir}Images/"
+    if layout == "legacy":
+        return prefab_name, f"{base_dir}{prefab_name}.prefab", f"{base_dir}Images/", ""
+    return prefab_name, f"{base_dir}Prefab/{prefab_name}.prefab", f"{base_dir}Texture/", f"{base_dir}UiAtlas/"
 
 
 def validate_formal_import_paths(target_prefab: str, target_image_dir: str, prefab_name: str) -> None:
@@ -264,7 +266,7 @@ def write_wall_clock_report(status: str, exit_code: int, error: str = "", **extr
 
 def load_manifest_target_snapshot(manifest_dir: Path) -> dict:
     node_manifest = read_json(manifest_dir / "figma_node_manifest.json")
-    result_path = manifest_dir / "figma_to_prefab_mcp_result.json"
+    result_path = manifest_dir / "figma_to_prefab_relay_result.json"
     result_payload = read_json(result_path) if result_path.exists() else {}
     result = result_payload.get("result", result_payload)
 
@@ -342,7 +344,7 @@ def read_import_plan() -> tuple[str, list[str]]:
         if not separator:
             continue
         if key.strip() == "imageDir":
-            image_dir = value.strip()
+            image_dir = value.strip().replace("\\", "/").rstrip("/")
         elif key.strip() == "specPath":
             spec_paths.append(value.strip())
     if not image_dir or not spec_paths:
@@ -371,17 +373,24 @@ def main():
     parser.add_argument("--target-image-dir", required=True, help="目标图片目录，如 Assets/.../Images/")
     parser.add_argument("--infer-formal-names", action="store_true",
                         help="Infer formal Prefab/image paths from Figma root name and --formal-output-dir")
+    parser.add_argument("--formal-layout", choices=["split", "legacy"], default="split",
+                        help="Formal output layout: split into Prefab/Texture/UiAtlas (default) or legacy flat + Images")
     parser.add_argument("--formal-output-dir", default="",
                         help="Unity Assets directory for --infer-formal-names, e.g. Assets/FigmaImportBenchmark")
     parser.add_argument("--overwrite", default="create-new-only",
                         choices=["create-new-only", "overwrite"], help="覆盖策略（默认: create-new-only）")
     parser.add_argument("--prefab-name", default="", help="Prefab 根节点名称（默认从路径推断）")
-    parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="MCP Relay 产物目录")
+    parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="Relay 产物目录")
     parser.add_argument("--file-key", default="", help="Target Figma fileKey for stable MCP plugin-session routing")
     parser.add_argument("--session-id", default="", help="Target Figma plugin sessionId for stable routing")
-    parser.add_argument("--relay-url", default="http://localhost:32130", help="figmaMcpRelay companion URL")
+    parser.add_argument("--relay-url", default="http://localhost:32130", help="figmaRelay companion URL")
+    parser.add_argument(
+        "--unity-project-id",
+        default="",
+        help="Registered Unity project ID, checked against --unity-project",
+    )
     parser.add_argument("--mcp-timeout", type=int, default=300, help="MCP export timeout seconds")
-    parser.add_argument("--skip-mcp-export", action="store_true", help="Reuse existing manifest-dir instead of exporting from Figma")
+    parser.add_argument("--skip-relay-export", action="store_true", help="Reuse existing manifest-dir instead of exporting from Figma")
     parser.add_argument("--expect-root-name", default="", help="Optional target guard: expected Figma root node name")
     parser.add_argument("--expect-root-width", type=int, default=0, help="Optional target guard: expected Figma root width")
     parser.add_argument("--expect-root-height", type=int, default=0, help="Optional target guard: expected Figma root height")
@@ -413,7 +422,7 @@ def main():
     if not manifest_dir.is_absolute():
         manifest_dir = REPO_ROOT / manifest_dir
     request_path = manifest_dir / "figma_to_prefab_request.json"
-    result_path = manifest_dir / "figma_to_prefab_mcp_result.json"
+    result_path = manifest_dir / "figma_to_prefab_relay_result.json"
     node_manifest_path = manifest_dir / "figma_node_manifest.json"
     image_manifest_path = manifest_dir / "image_export_manifest.json"
     image_health_summary: dict = {}
@@ -423,6 +432,13 @@ def main():
             "status": status,
             "prefab": args.target_prefab,
             "targetImageDir": args.target_image_dir,
+            "atlasDir": getattr(args, "atlas_dir", ""),
+            "atlasPath": (
+                f"{str(getattr(args, 'atlas_dir', '')).rstrip('/')}/"
+                f"{args.prefab_name}.spriteatlasv2"
+                if getattr(args, "atlas_dir", "") and getattr(args, "prefab_name", "")
+                else ""
+            ),
             "manifestDir": str(manifest_dir).replace("\\", "/"),
             "requestPath": str(request_path).replace("\\", "/"),
             "nodeManifestPath": str(node_manifest_path).replace("\\", "/"),
@@ -458,14 +474,14 @@ def main():
         "targetPrefabResolved": str(target_prefab_path),
         "targetImageDirResolved": str(target_image_path),
         "manifestDir": str(manifest_dir),
-        "manifestMode": "reuse-existing-manifest" if args.skip_mcp_export else "fresh-mcp-export",
+        "manifestMode": "reuse-existing-manifest" if args.skip_relay_export else "fresh-relay-export",
         "reportPath": str(wall_clock_report),
         "timings": timings,
     })
     write_export_request(request_path, args.figma_url, file_key, node_id, args)
 
     step("1/6 MCP export - Figma node manifest")
-    if args.skip_mcp_export:
+    if args.skip_relay_export:
         print("  [skip] Reusing existing manifest-dir.")
     else:
         export_argv = [
@@ -506,9 +522,10 @@ def main():
         fail("Figma manifest target guard failed:\n    - " + "\n    - ".join(target_errors))
     if args.infer_formal_names:
         base_output_dir = args.formal_output_dir or args.target_image_dir
-        args.prefab_name, args.target_prefab, args.target_image_dir = derive_formal_paths(
+        args.prefab_name, args.target_prefab, args.target_image_dir, args.atlas_dir = derive_formal_paths(
             base_output_dir,
             str(snapshot.get("rootName") or ""),
+            args.formal_layout,
         )
     elif not args.prefab_name:
         args.prefab_name = Path(args.target_prefab).stem
@@ -647,6 +664,9 @@ def main():
     # ─── 步骤 3: process_images.py ───
     step("4/6 process_images - write PNG")
 
+    if getattr(args, "atlas_dir", ""):
+        resolve_repo_path(UNITY_PROJECT / args.atlas_dir).mkdir(parents=True, exist_ok=True)
+
     image_report = TMP_DIR / "image_process_report.json"
 
     pi_result, timing = run_timed("processImages", [
@@ -667,13 +687,21 @@ def main():
     print(f"  allPass: {img_report['allPass']}")
     print(f"  summary: {json.dumps(img_report.get('summary', {}), ensure_ascii=False)}")
 
-    # ─── 步骤 4: uLoop — 导入 Sprite 并生成 Prefab ───
-    step("5/6 uLoop - Sprite import + Prefab generation")
+    # ─── 步骤 4: Unity Bridge — 导入 Sprite 并生成 Prefab ───
+    step("5/6 Unity Bridge - Sprite import + Prefab generation")
     image_dir, spec_paths = read_import_plan()
-    print("  → uLoop import_sprites_and_generate_prefabs...")
-    gen_result = run_uloop_import(image_dir, spec_paths, timeout=120)
+    print("  -> Unity Bridge import_sprites_and_generate_prefabs...")
+    gen_result = run_unity_bridge_import(
+        image_dir,
+        spec_paths,
+        args.relay_url,
+        getattr(args, "atlas_dir", ""),
+        getattr(args, "prefab_name", ""),
+        timeout=120,
+        project_id=args.unity_project_id,
+    )
     if not gen_result.get("success"):
-        fail(f"uLoop 导入失败: {json.dumps(gen_result, ensure_ascii=False)[:500]}")
+        fail(f"Unity Bridge import failed: {json.dumps(gen_result, ensure_ascii=False)[:500]}")
     print(f"  结果: {gen_result.get('stdout', '').strip()}")
 
     # ─── 步骤 5: 验证 ───

@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# Figma MCP Relay - 错误日志查看器
+# Figma Relay - 错误日志查看器
 # 用于查看和分析日志文件中的错误信息
 
 param(
@@ -184,7 +184,7 @@ function Export-LogReport {
     )
 
     $report = @"
-# Figma MCP Relay 错误日志报告
+# Figma Relay 错误日志报告
 生成时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 
 ## 统计信息

@@ -9,9 +9,8 @@ test("default asset roots stay inside the standalone plugin and system temp", ()
   const config = configModule.parseArgs([]);
   const expected = [
     path.resolve(configModule.PLUGIN_ROOT, ".tmp"),
-    path.resolve(os.tmpdir(), "figma-mcp-relay")
+    path.resolve(os.tmpdir(), "figma-relay")
   ];
   assert.deepEqual(config.assetRoots, expected);
   assert.equal("REPO_ROOT" in configModule, false);
 });
-

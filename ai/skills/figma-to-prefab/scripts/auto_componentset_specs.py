@@ -243,7 +243,7 @@ def infer_group_name_from_instance(name: str) -> str:
 
 
 def infer_group_name_from_component(node: dict) -> tuple[str, str]:
-    """优先使用 MCP Relay 组件元数据推断 ComponentSet 名称，缺失时回退到命名规则。"""
+    """优先使用 Relay 组件元数据推断 ComponentSet 名称，缺失时回退到命名规则。"""
     component = node.get("component") if isinstance(node.get("component"), dict) else {}
     raw_name = str(node.get("name") or "")
 
@@ -964,7 +964,7 @@ def main() -> int:
     """命令行入口。"""
     parser = argparse.ArgumentParser(description="自动识别 ComponentSet 并生成旁边 Prefab specs")
     parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
-    parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="MCP Relay manifest 目录")
+    parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="Relay manifest 目录")
     parser.add_argument("--main-spec", default="", help="主 spec 路径")
     parser.add_argument("--download-plan", default="", help="图片计划路径")
     parser.add_argument("--component-spec-dir", default="", help="ComponentSet spec 输出目录")

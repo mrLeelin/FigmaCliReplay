@@ -1,10 +1,11 @@
 import type { LoggingRuntime } from "./loggingRuntime.js";
 import type { UnityProjectRegistry, UnityProjectStatus } from "../unityProjectRegistry.js";
 import { readUnityGatewayDiscovery, type UnityGatewayDiscoveryResult } from "../unityGatewayDiscovery.js";
+import { callUnityBridge } from "../unityBridgeClient.js";
 
 interface UnityLogCollectorOptions {
   discover?: (projectPath: string) => UnityGatewayDiscoveryResult;
-  fetcher?: (input: string, init?: RequestInit) => Promise<Response>;
+  command?: typeof callUnityBridge;
   timeoutMs?: number;
   maxSeenEvents?: number;
 }
@@ -16,7 +17,7 @@ interface UnityLogPayload {
 export class UnityLogCollector {
   private readonly logger;
   private readonly discover;
-  private readonly fetcher;
+  private readonly command;
   private readonly timeoutMs;
   private readonly maxSeenEvents;
   private readonly seen = new Set<string>();
@@ -28,7 +29,7 @@ export class UnityLogCollector {
   ) {
     this.logger = logging.logger("unity-log-collector");
     this.discover = options.discover ?? readUnityGatewayDiscovery;
-    this.fetcher = options.fetcher ?? fetch;
+    this.command = options.command ?? callUnityBridge;
     this.timeoutMs = options.timeoutMs ?? 1_500;
     this.maxSeenEvents = options.maxSeenEvents ?? 10_000;
   }
@@ -66,15 +67,9 @@ export class UnityLogCollector {
     const discovery = this.discover(project.path);
     if (!discovery.found) return { found: false, accepted: 0 };
     try {
-      const response = await this.fetcher(`${discovery.gatewayUrl}/logs?limit=1000`, {
-        method: "GET",
-        headers: { "X-Operation-Id": parentOperationId },
-        signal: AbortSignal.timeout(this.timeoutMs),
+      const payload: UnityLogPayload = await this.command(project.path, "unity.logs", {}, {
+        operationId: parentOperationId, timeoutMs: this.timeoutMs, query: "limit=1000",
       });
-      if (!response.ok) {
-        throw new Error(`Unity log endpoint returned HTTP ${response.status}`);
-      }
-      const payload = await response.json() as UnityLogPayload;
       const events = Array.isArray(payload.events)
         ? payload.events.filter(isUnityEvent).filter((event) => !this.seen.has(eventKey(event)))
         : [];

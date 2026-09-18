@@ -12,7 +12,7 @@ SCRIPT_DIR = (
     Path(__file__).resolve().parents[1]
     / "ai"
     / "skills"
-    / "figma-hierarchy-cleanup-mcp"
+    / "figma-hierarchy-cleanup"
     / "scripts"
 )
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -84,7 +84,7 @@ class ApplyCleanupPlanTests(unittest.TestCase):
                 startup_timeout=0.1,
                 apply_confirmed=True,
             )
-            with patch("run_cleanup_pipeline.ensure_mcp_companion", return_value={"ok": True}), \
+            with patch("run_cleanup_pipeline.ensure_relay", return_value={"ok": True}), \
                  patch("run_cleanup_pipeline.execute_auto_component_sets", return_value={"appliedCount": 1, "planCount": 1, "steps": []}) as execute_sets, \
                  patch("run_cleanup_pipeline.plan_root", side_effect=AssertionError("hierarchy plan must not run")):
                 exit_code, report = run_pipeline(args)

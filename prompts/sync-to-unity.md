@@ -6,7 +6,7 @@ Figma 节点（美术修改后的版本）：
 已锁定输入：
 - 上面的 Figma 文件、页面、选中节点数量、nodePath 和 node id 是本提示词生成瞬间的同步目标快照；后续执行以这个快照为准。
 - 不要让我重新点击或重新选择 Figma。只有当上面缺少 fileKey/nodeId，或者用户明确说“换目标”，才可以要求重新选择。
-- 可以用 `figmaMcpRelay.figma_query_selection` 做只读回显诊断；如果实时选区为空或和快照不同，不要覆盖本提示词里的目标，也不要因此停止要求我重选。应改用快照里的 Figma URL/fileKey/nodeId 提交 MCP Relay analyze/export。
+- 可以用 `figma-relay selection` 做只读回显诊断；如果实时选区为空或和快照不同，不要覆盖本提示词里的目标，也不要因此停止要求我重选。应改用快照里的 Figma URL/fileKey/nodeId 通过项目 CLI 提交 WebSocket analyze/export 任务。
 - 如果必须确认目标一致，只报告“实时选区和提示词快照不一致”的风险，并询问是否切换目标；默认继续使用提示词快照。
 
 Unity 目标 Prefab：
@@ -19,7 +19,7 @@ Unity 目标 Prefab：
 - 只有图片变更时才需要写入新 PNG。
 
 核心流程（自动判断轻量/完整链路）：
-1. MCP Relay analyze 当前 Figma 节点 → 拿到最新 manifest + 图片 hash
+1. 通过项目 CLI + WebSocket analyze 当前 Figma 节点 → 拿到最新 manifest + 图片 hash
 2. 运行 compare_figma_to_unity.py 对比 Unity Prefab 当前值 → 生成差异报告 + 路径判决
 3. 展示判决结果（轻量 / 轻量+图片 / 完整）→ 等我确认
 4. 确认后自动走对应路径：

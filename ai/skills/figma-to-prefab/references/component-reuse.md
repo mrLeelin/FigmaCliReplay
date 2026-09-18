@@ -26,10 +26,10 @@ Figma → Unity 导入时默认检测目标节点内部的同源业务 Component
 
 常见信号：
 
-- MCP Relay manifest 中 `component.componentSetId` / `component.mainComponentSetId` 相同。
+- Relay manifest 中 `component.componentSetId` / `component.mainComponentSetId` 相同。
 - 同一功能区内有命名前缀一致的多个 `INSTANCE`，例如 `Day1_Normal` / `Day2_Selected` 或 `Milestone_1_100` / `Milestone_2_250`。
 - 多个实例共享结构，只是文本、图标、锁定态、进度态或奖励数量不同。
-- MCP Relay 组件元数据缺失时，才用保守命名规则兜底。
+- Relay 组件元数据缺失时，才用保守命名规则兜底。
 
 排除信号：
 

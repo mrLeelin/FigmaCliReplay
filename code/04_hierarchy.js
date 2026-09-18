@@ -10,7 +10,7 @@ if (!key) {
   }
   const asset = context.assetBytes.get(key);
   if (!asset || !asset.bytes || asset.bytes.length === 0) {
-    addPrefabBlockingError(context, "missingImageAssetBytes", "MCP Relay did not receive image bytes, cannot write Figma image.", {
+    addPrefabBlockingError(context, "missingImageAssetBytes", "Relay did not receive image bytes, cannot write Figma image.", {
       assetId: key,
       nodePath: sourceNode.path || sourceNode.name || ""
     });
@@ -163,7 +163,7 @@ function positionPrefabFixedText(textNode, underlay) {
  *   3. 褰撳墠椤甸潰鍑虹幇娆℃暟鏈€澶氱殑瀛椾綋
  *   4. 鍏ㄦ枃浠跺嚭鐜版鏁版渶澶氱殑瀛椾綋
  */
-/** Update imported text node fonts through MCP Relay. */
+/** Update imported text node fonts through Relay. */
 async function handleChangeTextFonts(message) {
   try {
     const job = message.job || {};
@@ -874,10 +874,10 @@ function prefabRectObject(value) {
   };
 }
 
-/** Export top-level imported node screenshot as MCP Relay verification evidence. */
+/** Export top-level imported node screenshot as Relay verification evidence. */
 async function exportPrefabWriteScreenshot(root, context) {
   if (!context || !context.screenshotPolicy || context.screenshotPolicy.export !== true) {
-    context.warnings.push("Prefab 写入阶段已跳过 MCP Relay 截图导出，避免大节点导出阻塞；请使用 Figma 截图工具做最终视觉验收。");
+    context.warnings.push("Prefab 写入阶段已跳过 Relay 截图导出，避免大节点导出阻塞；请使用 Figma 截图工具做最终视觉验收。");
     return null;
   }
   try {
@@ -1956,7 +1956,7 @@ async function postPrefabWriteResultDirectly(message, result) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Figma-Mcp-Relay-Internal": "plugin-runtime"
+        "X-Figma-Relay-Internal": "plugin-runtime"
       },
       body: JSON.stringify({ requestId, result })
     }), 5000, "Prefab result direct post timeout");
@@ -2482,7 +2482,7 @@ async function exportFigmaToPrefabJob(job) {
   const screenshot = includeScreenshot ? await exportNodePngScreenshot(root) : null;
   const figmaNodeManifest = {
     schemaVersion: 1,
-    source: "figma-mcp-relay",
+    source: "figma-relay",
     fileKey: figma.fileKey || "",
     documentName: figma.root && figma.root.name ? figma.root.name : "",
     pageName: figma.currentPage.name,
@@ -3070,7 +3070,7 @@ function readFigmaStrokeWeight(node) {
   return roundNumber(node.strokeWeight);
 }
 
-/** 构建层级整理错误结果，保持 MCP Relay 返回结构稳定。 */
+/** 构建层级整理错误结果，保持 Relay 返回结构稳定。 */
 function buildHierarchyCleanupErrorResult(error, stage) {
   const message = error instanceof Error ? error.message : String(error);
   return {

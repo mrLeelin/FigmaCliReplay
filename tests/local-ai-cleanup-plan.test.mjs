@@ -65,7 +65,7 @@ test("Relay records successful cleanup writes only after the Figma result succee
   assert.match(setResult, /job\.targetSessionId/);
 });
 
-test("cleanup conversation treats the Relay as an externally owned MCP client endpoint", () => {
+test("cleanup conversation treats the Relay as an externally owned CLI client endpoint", () => {
   const source = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
 
   assert.match(source, /http:\/\/127\.0\.0\.1:32130/);
@@ -78,7 +78,7 @@ test("cleanup conversation treats the Relay as an externally owned MCP client en
 });
 
 test("the complete cleanup skill keeps hierarchy approval separate from variant satisfaction", () => {
-  const skill = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md", import.meta.url), "utf8");
+  const skill = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup/SKILL.md", import.meta.url), "utf8");
 
   assert.match(skill, /本次确认只授权层级整理，不授权 ComponentSet\/变体/);
   assert.match(skill, /只有用户明确满意后才允许进入 `AutoComponentSet`/);
@@ -89,7 +89,7 @@ test("the complete cleanup skill keeps hierarchy approval separate from variant 
 
 test("cleanup prompt keeps the AI read-only and delegates validated execution to Relay", () => {
   const prompt = fs.readFileSync(new URL("../prompts/cleanup.md", import.meta.url), "utf8");
-  const skill = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md", import.meta.url), "utf8");
+  const skill = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup/SKILL.md", import.meta.url), "utf8");
   const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
 
   for (const source of [skill]) {
@@ -106,57 +106,25 @@ test("cleanup prompt keeps the AI read-only and delegates validated execution to
   assert.match(runner, /The first turn remains read-only/);
   assert.match(runner, /Relay dispatches the validated safe hierarchy transaction automatically/);
   assert.match(runner, /Only an explicit satisfied response/);
-  assert.match(prompt, /\$figma-hierarchy-cleanup-mcp/);
+  assert.match(prompt, /\$figma-hierarchy-cleanup/);
 });
 
-test("legacy cleanup HTTP entrypoint forwards into the single V2 controller", () => {
-  const source = fs.readFileSync(new URL("../src/httpServer.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /runLocalAiCleanup/);
-  assert.match(source, /startLegacyCleanup\(cleanupRuntime, payload\)/);
-  assert.match(source, /cleanupRuntime\.controller\.start\(/);
-  const genericActions = source.slice(
-    source.indexOf('if (pathname === "/ai-runner/config"'),
-    source.indexOf('if (pathname === "/open-plugin-folder"'),
-  );
-  assert.doesNotMatch(genericActions, /cleanupRuntime\.controller\.(approve|cancel)/);
-});
-
-test("AI runner start requires the exact live plugin session even for Figma-origin requests", () => {
-  const source = fs.readFileSync(new URL("../src/httpServer.ts", import.meta.url), "utf8");
-  const start = source.indexOf('if (pathname === "/ai-runner/config"');
-  const end = source.indexOf('if (pathname === "/open-plugin-folder"', start);
-  const route = source.slice(start, end);
-  assert.match(route, /!relay\.hasLivePluginSession\(payload\.sessionId\)/);
-  assert.doesNotMatch(route, /!isFigmaPluginRequest\(request\) && !relay\.hasLivePluginSession/);
-});
-
-test("interactive terminal launch stays inside the guarded local AI route", () => {
-  const source = fs.readFileSync(new URL("../src/httpServer.ts", import.meta.url), "utf8");
-  const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
-  const start = source.indexOf('if (pathname === "/ai-runner/config"');
-  const end = source.indexOf('if (pathname === "/open-plugin-folder"', start);
-  const route = source.slice(start, end);
-
-  assert.match(route, /pathname === "\/ai-runner\/open-terminal"/);
-  assert.match(route, /openLocalAiTerminal\(payload\)/);
-  assert.match(route, /!relay\.hasLivePluginSession\(payload\.sessionId\)/);
-  assert.match(runner, /export async function openLocalAiTerminal\(payload: unknown\)/);
-  assert.match(runner, /aiLogger\.startOperation\("ai\.terminal"/);
-  assert.ok(runner.indexOf('aiLogger.startOperation("ai.terminal"') < runner.indexOf('if (!sessionId) throw new Error("missing sessionId")'));
-  assert.match(runner, /"-NoExit", "-EncodedCommand"/);
-  assert.match(runner, /windowsHide: false/);
-  assert.match(runner, /terminal-task\.md/);
-  assert.match(runner, /Buffer\.from\(script, "utf16le"\)\.toString\("base64"\)/);
+test("AI controls require a uniquely matched live session over WebSocket", () => {
+ const source = fs.readFileSync(new URL("../src/relayControl.ts", import.meta.url), "utf8");
+ assert.match(source, /sessions.length !== 1/);
+ assert.match(source, /session.authenticated/);
+ assert.ok(source.includes("openLocalAiTerminal(payload)"));
+ assert.match(source, /cleanup.controller.start/);
 });
 
 test("interactive terminal launch waits for a real PowerShell hosted by Windows Terminal", () => {
-  const source = fs.readFileSync(new URL("../src/httpServer.ts", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../src/relayControl.ts", import.meta.url), "utf8");
   const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
   const start = runner.indexOf("export async function openLocalAiTerminal(");
   const end = runner.indexOf("function buildInteractiveTerminalTask", start);
   const terminal = runner.slice(start, end);
 
-  assert.match(source, /await openLocalAiTerminal\(payload\)/);
+  assert.match(source, /await ai.openLocalAiTerminal\(payload\)/);
   assert.match(terminal, /terminal\.pid/);
   assert.match(terminal, /await launchInteractivePowerShell\(/);
   assert.match(runner, /spawn\("wt\.exe", \["-w", "new", "nt"/);
@@ -231,7 +199,7 @@ test("cleanup UI opens a resumable conversation instead of auto-applying a trans
   const requestEnd = source.indexOf("function requestCleanupSnapshot", requestStart);
   const requestAiRun = source.slice(requestStart, requestEnd);
 
-  assert.match(startAiRun, /endpoint\s*=\s*"\/ai-runner\/run-prompt"/);
+  assert.match(startAiRun, /postIdempotentAiStartWithRetry\(payload, startOperation\)/);
   assert.match(startAiRun, /cleanupSnapshot:\s*template === "cleanup" \? selection : undefined/);
   assert.match(startAiRun, /clientRequestId:\s*clientRequestId/);
   assert.doesNotMatch(startAiRun, /autoApprove:\s*true/);

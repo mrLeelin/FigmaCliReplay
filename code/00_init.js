@@ -1,11 +1,11 @@
-// Figma MCP Relay build #__BUILD_NUMBER__
+// Figma Relay build #__BUILD_NUMBER__
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
 // DIAG: 插件启动标记 (__BUILD_NUMBER__ 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build __BUILD_NUMBER__)", { timeout: 1000 });
+figma.notify("Figma Relay 插件已加载 (build __BUILD_NUMBER__)", { timeout: 1000 });
 pluginLogger.info("插件初始化完成", { build: "__BUILD_NUMBER__" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";

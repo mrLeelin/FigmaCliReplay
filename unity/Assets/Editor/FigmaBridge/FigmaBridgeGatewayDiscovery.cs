@@ -19,13 +19,14 @@ namespace MagicWarrior.Editor.FigmaBridge
             public string gatewayUrl;
             public int processId;
             public string updatedAtUtc;
+            public string bridgeToken;
         }
 
         private static string ProjectPath => NormalizePath(Path.Combine(Application.dataPath, ".."));
         private static string DiscoveryDirectory => Path.Combine(ProjectPath, "Library", "FigmaBridge", "gateways");
         private static string OwnedDiscoveryPath => Path.Combine(DiscoveryDirectory, Process.GetCurrentProcess().Id + ".json");
 
-        internal static void Publish(string gatewayUrl)
+        internal static void Publish(string gatewayUrl, string bridgeToken = "")
         {
             string temporaryPath = string.Empty;
             try
@@ -38,6 +39,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                     version = SchemaVersion,
                     projectPath = ProjectPath,
                     gatewayUrl = gatewayUrl ?? string.Empty,
+                    bridgeToken = bridgeToken,
                     processId = Process.GetCurrentProcess().Id,
                     updatedAtUtc = DateTime.UtcNow.ToString("O")
                 };

@@ -12,25 +12,35 @@ Use this loop for every write or cross-phase operation. Treat each step as a hyp
 1. State the current hypothesis before acting.
 2. Check for counter-evidence before writing.
 3. Take the smallest reversible action that can advance or test the hypothesis.
-4. Immediately verify with live MCP/script/Unity evidence.
+4. Immediately verify with live CLI/script/Unity evidence.
 5. If verification contradicts the hypothesis, stop that path, preserve rollback artifacts, revise the plan, and continue from the revised hypothesis.
 6. Do not treat `status=completed` or `allPass=true` as semantic correctness; they only prove operation-level checks passed.
 7. When a failure pattern repeats, add or request a script/validator gate instead of relying on judgment alone.
 
 For Figma-to-Prefab imports, every phase must prove it still targets the same locked Figma root and the same Unity output location. Figma export success does not prove image processing, Prefab generation, Unity import, or visual verification success.
 
-## Fast MCP Execution Contract
+## CLI Execution Contract
 
-- 【强制】Figma 侧读取/导出必须使用 `scripts/figma_to_prefab_mcp_client.py` 脚本（脚本内部调用 MCP Relay）。脚本会做 `build_payload` 组装完整请求数据，避免 MCP tool 的 `assetPaths` 简写被截断导致超时。
-- `figmaMcpRelay.figma_health` 等轻量查询仍可直接用 MCP tools。脚本统一使用 `--file-key` 指定目标文件。
-- Figma plugin/runtime traffic may still use local HTTP/WebSocket internally. That is companion-to-plugin transport, not the agent-facing API. Do not hand-write `/jobs`, `/figma/pending`, `/figma/result`, or `/assets/...` calls.
-- Export commands write full evidence to `figma_to_prefab_mcp_result.json`, `figma_node_manifest.json`, `image_export_manifest.json`, and `mcp_screenshots/`. Stdout is for `[SUMMARY_JSON]` only.
+### Standalone Relay direct-import override
+
+The FigmaMcpRelay direct-import button is a deterministic, non-AI path. Its
+`run_full_import.py` pipeline writes the validated PNGs and calls the connected
+Unity Bridge `/figma-to-prefab-import` endpoint for AssetDatabase refresh,
+Sprite importer settings, and `FigmaPrefabGenerator.Generate()`. It must not
+resolve or invoke the external `uloop` CLI. The existing generator remains the
+single source of truth for hierarchy, nine-slice borders, CommonFont/material,
+font size, AutoSize, and RaycastTarget behavior.
+
+- 【强制】Figma 侧读取/导出必须使用 `scripts/figma_to_prefab_cli.py` 脚本（脚本内部调用 Relay）。脚本会做 `build_payload` 组装完整请求数据，确保资源路径展开并固定目标会话。
+- `node dist/cli.js sessions` 等轻量查询仍可使用项目 CLI。脚本统一使用 `--file-key` 指定目标文件。
+- Figma commands and results use WebSocket only. HTTP serves registered assets only. Do not hand-write `/jobs`, `/figma/pending`, `/figma/result`, or `/assets/...` calls.
+- Export commands write full evidence to `figma_to_prefab_relay_result.json`, `figma_node_manifest.json`, `image_export_manifest.json`, and `relay_screenshots/`. Stdout is for `[SUMMARY_JSON]` only.
 - Never paste or read full manifest/result JSON into LLM context for normal analysis. Read compact summary first, then use targeted reports for specific failing gates.
-- Do not use MCP `fullResult` or wrapper `--verbose-result` for normal work. Full results require explicit bounded debugging (`fullResult=true` plus `debugFullResult=true`) and still strip inline base64 before returning to the model.
+- Do not use client `full_result` or wrapper `--verbose-result` for normal work. Full results require explicit bounded debugging (`fullResult=true` plus `debugFullResult=true`) and still strip inline base64 before returning to the model.
 - If a detailed report is slow, inspect only gate counts first: `status`, `blockingErrorCount`, `warningCount`, exported/expected node counts, missing image count, text metadata missing count, slice metadata count, and result paths.
 - `run_full_import.py` must receive the real Unity project root through `--unity-project <path>` when launched from the standalone Relay. It writes real wall-clock timing for every import attempt; use `--wall-clock-report .tmp/<name>_wall_clock.json` for named runs. Timing reports stay under the Relay runtime and outside Unity `Assets/`.
 - `run_full_import.py` is an execution accelerator, not a reasoning shortcut. After it runs, read its `[SUMMARY_JSON]`, wall-clock report, `spec_audit_report.json`, `image_process_report.json`, and `verify_prefab_result.json` as separate phase evidence. Do not collapse them into one vague “import succeeded” claim.
-- `--skip-mcp-export` is allowed only when the manifest target guard passes: requested `fileKey + nodeId` must match manifest `fileKey + rootNodeId`, MCP result status must be `completed`, blocking error count must be zero, and any supplied root snapshot guards must match.
+- `--skip-relay-export` is allowed only when the manifest target guard passes: requested `fileKey + nodeId` must match manifest `fileKey + rootNodeId`, Relay result status must be `completed`, blocking error count must be zero, and any supplied root snapshot guards must match.
 - For high-risk reruns, pass root snapshot guards: `--expect-root-name`, `--expect-root-width`, `--expect-root-height`, and `--expect-direct-child-count`. These guards prevent importing a child frame when the intended target is the full root frame.
 - Evidence JSON files are not Unity assets. `verify_prefab_result.json`, wall-clock JSON, audit reports, and temporary import reports must be written under `<unity-project>/.tmp/` or a benchmark artifact folder, never directly under a Unity `Assets/...` root.
 - Formal imports must not use benchmark placeholders or run folders. Do not create `Assets/FigmaImportBenchmark/<run-id>/Prefabs/Import_001.prefab` for a user-facing import. Prefer `run_full_import.py --infer-formal-names --formal-output-dir <Unity Assets folder>` so the Prefab name is inferred from the Figma root node and images go under `<Unity Assets folder>/Images/`.
@@ -45,8 +55,8 @@ Use this skill only for **Figma node/component → Unity uGUI Prefab and require
 | 检查点 | 当前假设 | 最小动作 | 证据 | 继续 / 停止条件 |
 |---|---|---|---|---|
 | 0. 输入锁定 | 本轮 Figma 节点、Prefab 路径、图片目录、覆盖策略是明确的 | 读取插件提示词/用户输入；必要时 `figma_query_selection` 只读回显 | `fileKey/nodeId/rootName`、目标 Prefab、目标图片目录、overwrite policy | 缺少 Unity 写入目标时只做只读分析；不要用实时选区覆盖已锁定输入 |
-| 1. 层级门禁 | Figma 节点适合导入 Unity | MCP Relay/analyze 读取 direct children，包含隐藏节点 | `directChildCount`、是否超过 15、cleanup 结论 | `directChildCount > 15` 或用户说未整理时先停到 cleanup；未通过 cleanup 不生成 export/spec/图片 |
-| 2. Figma 导出 | Relay 能导出当前目标的完整结构和图片数据 | `figma_to_prefab_mcp_client.py` 导出 | `[SUMMARY_JSON]` 或 compact report、manifest/result/screenshot 路径、blockingErrors | `status != completed`、blockingErrors 非空、节点/图片/text/slice gate 失败时停止并针对性诊断 |
+| 1. 层级门禁 | Figma 节点适合导入 Unity | Relay/analyze 读取 direct children，包含隐藏节点 | `directChildCount`、是否超过 15、cleanup 结论 | `directChildCount > 15` 或用户说未整理时先停到 cleanup；未通过 cleanup 不生成 export/spec/图片 |
+| 2. Figma 导出 | Relay 能导出当前目标的完整结构和图片数据 | `figma_to_prefab_cli.py` 导出 | `[SUMMARY_JSON]` 或 compact report、manifest/result/screenshot 路径、blockingErrors | `status != completed`、blockingErrors 非空、节点/图片/text/slice gate 失败时停止并针对性诊断 |
 | 3. Spec 草案 | manifest 与目标 Unity 路径一致，且没有错目录/错 ID 空间 | `gen_spec.py --output-audit-report` | `spec_audit_report.json`、`manifestProvenance`、`image_download_plan.json`、componentset report | provenance mismatch、namespace mismatch、specMissing 或 blockingErrors 时停止；不要读错目录继续 |
 | 4. 写入计划 | 用户确认要写 Unity 资源 | 输出影响文件、PNG/.meta/Prefab 路径、复用策略、验证方式 | 一次性确认记录、目标路径列表 | 未确认前禁止 `process_images.py` 写入 Assets，禁止 Roslyn 生成 Prefab |
 | 5. 图片写入 | 图片计划与 manifest 来源一致，目标目录安全 | `process_images.py` | `image_process_report.json`、normal/reuse/nine-slice counts、blockingErrors | 写 0 图、reuse target missing、provenance/namespace 错误、九宫 oversize 未处理时停止或执行固化修复 |
@@ -63,20 +73,20 @@ python "<relay-root>\ai\skills\figma-to-prefab\scripts\figma_to_prefab_phase_evi
   --unity-tmp "<unity-project>\.tmp"
 ```
 
-该脚本只读取 `figma_to_prefab_request.json`、`figma_node_manifest.json`、`figma_to_prefab_mcp_result.json`、`spec_audit_report.json`、`image_process_report.json`、`verify_prefab_result.json` 和可选 wall-clock 报告，输出 `[PHASE_EVIDENCE_JSON]`。它会检查 request、manifest、MCP result、Spec provenance、verify Prefab 是否来自同一轮；`decision=stop` 时不得继续写图片、写 Prefab 或声称导入完成。
+该脚本只读取 `figma_to_prefab_request.json`、`figma_node_manifest.json`、`figma_to_prefab_relay_result.json`、`spec_audit_report.json`、`image_process_report.json`、`verify_prefab_result.json` 和可选 wall-clock 报告，输出 `[PHASE_EVIDENCE_JSON]`。它会检查 request、manifest、Relay result、Spec provenance、verify Prefab 是否来自同一轮；`decision=stop` 时不得继续写图片、写 Prefab 或声称导入完成。
 
 ## 最开始必须执行：Figma 层级整理前置门禁
 
-在读取、导出或生成任何 Prefab 相关产物前，必须先通过 MCP Relay/analyze 读取当前 Figma 目标根节点的直接子节点数量，并据此判断是否需要层级整理。
+在读取、导出或生成任何 Prefab 相关产物前，必须先通过 Relay/analyze 读取当前 Figma 目标根节点的直接子节点数量，并据此判断是否需要层级整理。
 
-- 判断是否整理的唯一默认门槛是目标根节点 `directChildren` 数量：`directChildCount > 15` 视为未整理，必须停止 Prefab 导出流程并找用户确认是否先运行 `$figma-hierarchy-cleanup-mcp`；`directChildCount <= 15` 默认视为已整理，不需要再次向用户确认整理状态。
+- 判断是否整理的唯一默认门槛是目标根节点 `directChildren` 数量：`directChildCount > 15` 视为未整理，必须停止 Prefab 导出流程并找用户确认是否先运行 `$figma-hierarchy-cleanup`；`directChildCount <= 15` 默认视为已整理，不需要再次向用户确认整理状态。
 - 直接子节点计数必须基于包含隐藏节点的分析结果，避免隐藏 PSD/导入残留层绕过门槛。
-- 如果用户明确指出当前节点未整理、仍是 PSD/导入原始扁平层级，或要求先整理，即使 `directChildCount <= 15`，也必须先按用户要求使用 `$figma-hierarchy-cleanup-mcp`。
-- `$figma-hierarchy-cleanup-mcp` 必须只通过 `<relay-root>` 下的本地 MCP Relay 操作 Figma，禁止使用 Figma MCP 写入。
-- 整理计划必须按 `$figma-hierarchy-cleanup-mcp` 的规则生成、展示完整最终树并获得用户确认；整理 apply 后必须 verify 通过。
-- 只有 `$figma-hierarchy-cleanup-mcp` 的最终结果满足 `allPass == true`、`blockingErrors` 为空、节点守恒 / bounds 不漂移 / UTF-8 / 最终截图等门禁通过后，才允许继续本 skill 的 Figma → Prefab 导出流程。
-- 未完成整理或整理验证失败时，禁止生成 `.tmp/figma-to-prefab/figma_to_prefab_request.json`，禁止提交 Figma → Prefab MCP Relay 导出请求，禁止生成 `figma_node_manifest.json`、`image_export_manifest.json`、`prefab_spec.json` 或写入 Unity 资源。
-- 阶段一摘要必须记录整理门禁结论：`directChildCount`、是否超过 15、是否已由用户确认运行整理，或 `$figma-hierarchy-cleanup-mcp` 的最终 `allPass` / `blockingErrors` 结果。
+- 如果用户明确指出当前节点未整理、仍是 PSD/导入原始扁平层级，或要求先整理，即使 `directChildCount <= 15`，也必须先按用户要求使用 `$figma-hierarchy-cleanup`。
+- `$figma-hierarchy-cleanup` 必须只通过 `<relay-root>` 下的本地 Relay 操作 Figma，禁止使用 Figma MCP 写入。
+- 整理计划必须按 `$figma-hierarchy-cleanup` 的规则生成、展示完整最终树并获得用户确认；整理 apply 后必须 verify 通过。
+- 只有 `$figma-hierarchy-cleanup` 的最终结果满足 `allPass == true`、`blockingErrors` 为空、节点守恒 / bounds 不漂移 / UTF-8 / 最终截图等门禁通过后，才允许继续本 skill 的 Figma → Prefab 导出流程。
+- 未完成整理或整理验证失败时，禁止生成 `.tmp/figma-to-prefab/figma_to_prefab_request.json`，禁止提交 Figma → Prefab Relay 导出请求，禁止生成 `figma_node_manifest.json`、`image_export_manifest.json`、`prefab_spec.json` 或写入 Unity 资源。
+- 阶段一摘要必须记录整理门禁结论：`directChildCount`、是否超过 15、是否已由用户确认运行整理，或 `$figma-hierarchy-cleanup` 的最终 `allPass` / `blockingErrors` 结果。
 
 ## 参考文档分层加载策略
 
@@ -95,7 +105,7 @@ AI 第一次加载时只读快速检查清单（~80 行）。后续按确定性�
 | manifest 任意节点名匹配 `__slice_` | `references/pitfalls-figma-to-unity.md#九宫规则` |
 | 九宫容器数 > 5 | `references/pitfalls-figma-to-unity.md` 全文 |
 | manifest 任意节点 type=INSTANCE | `references/pitfalls-figma-to-unity.md#INSTANCE规则` |
-| MCP Relay result.blockingErrors 非空 | `references/pitfalls-figma-to-unity.md` 全文 |
+| Relay result.blockingErrors 非空 | `references/pitfalls-figma-to-unity.md` 全文 |
 | 目标模式 = Sync(非 Create) | `references/pitfalls-figma-to-unity.md#图片同步规则` 全文 |
 | INSTANCE 数 > 0 | `references/component-reuse.md` |
 | `gen_spec.py` 报告中有 `specMissing` | `references/pitfalls-figma-to-unity.md#Spec与磁盘文件名一致性` |
@@ -115,19 +125,19 @@ AI 不再做机械计算和手写报告。AI 的职责是：
 - ❌ 不要逐节点审查 200+ 节点的 manifest
 - ❌ 不要把终端输出中的坐标、颜色、文本、图片 hash 手动复制进 Spec、JS、C# 或报告
 
-## 当前强制执行策略：全量 MCP Relay，不使用 Figma 侧远程工具主流程
+## 当前强制执行策略：全量 Relay，不使用 Figma 侧远程工具主流程
 
-- Figma → Unity Prefab 的标准流程必须使用 `figmaMcpRelay` 驱动 `<relay-root>` 下的插件完成 Figma 侧读取、图片导出、截图导出和结果回传。
-- Figma MCP Relay 插件负责目标节点解析、节点树导出、图片资源导出、文本与颜色元数据导出、九宫图候选元数据、组件复用标记、截图导出和 Figma 侧校验。
-- MCP Relay 导出九宫图时必须携带 `sliceKind` 与 `sourceVisibleSize`：`9slice` 输出 `left+right+2 × top+bottom+2`；`h3slice` 输出 `left+right+2 × sourceVisibleSize.height`；`v3slice` 输出 `sourceVisibleSize.width × top+bottom+2`。父节点有 IMAGE fill 时优先使用父节点 `imageHash`，仅父节点缺失时才 fallback 到 `__slice_*` 子节点并记录 warning。
-- 每次运行本 skill 解析 Figma 前，必须优先由 `figmaMcpRelay.figma_health` 检查本地 companion；如果未运行，先执行 `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp`。
-- 专用 `figma_to_prefab_mcp_client.py` 是标准入口，内部调用 MCP Relay 提交导出请求、等待结果、保存 `figma_to_prefab_mcp_result.json`、`figma_node_manifest.json`、`image_export_manifest.json` 和 `mcp_screenshots/*.png`。
-- MCP 默认 endpoint 是 `http://127.0.0.1:32130/mcp`，插件 URL 默认是 `http://localhost:32130`；如果当前 MCP 配置使用其它端口，以配置为准。AI 不得直接 POST `/figma/pending`、`/figma/result` 或 `/assets/...`。
-- 标准流程禁止使用任何 Figma 侧远程工具承担节点读取、图片导出、截图或验证；如果 MCP Relay 环境不可用，必须停止并说明缺少的环境，不得自动切换到其它 Figma 通道。
+- Figma → Unity Prefab 的标准流程必须使用 `figmaRelay` 驱动 `<relay-root>` 下的插件完成 Figma 侧读取、图片导出、截图导出和结果回传。
+- Figma Relay 插件负责目标节点解析、节点树导出、图片资源导出、文本与颜色元数据导出、九宫图候选元数据、组件复用标记、截图导出和 Figma 侧校验。
+- Relay 导出九宫图时必须携带 `sliceKind` 与 `sourceVisibleSize`：`9slice` 输出 `left+right+2 × top+bottom+2`；`h3slice` 输出 `left+right+2 × sourceVisibleSize.height`；`v3slice` 输出 `sourceVisibleSize.width × top+bottom+2`。父节点有 IMAGE fill 时优先使用父节点 `imageHash`，仅父节点缺失时才 fallback 到 `__slice_*` 子节点并记录 warning。
+- Relay 生命周期由外部管理。AI 不得启动、重启、停止或重配服务；插件任务以 Relay 接受为预检，独立任务使用 `node dist/cli.js sessions`。连接失败记录原始错误并停止，不探测替代端口。
+- 专用 `figma_to_prefab_cli.py` 是标准入口，内部调用 Relay 提交导出请求、等待结果、保存 `figma_to_prefab_relay_result.json`、`figma_node_manifest.json`、`image_export_manifest.json` 和 `relay_screenshots/*.png`。
+- CLI 连接 `ws://127.0.0.1:32130/relay`，插件连接 `/figma` WebSocket。地址覆盖使用 CLI `--url` 或 Python `--relay-url`；HTTP 仅保留受控资源下载。
+- 标准流程禁止使用任何 Figma 侧远程工具承担节点读取、图片导出、截图或验证；如果 Relay 环境不可用，必须停止并说明缺少的环境，不得自动切换到其它 Figma 通道。
 - Unity 侧所有操作只使用 `uloop` CLI。编辑器内 C#、Prefab 生成和资源刷新使用 `uloop execute-dynamic-code`；编译、Console、截图和层级验证使用对应 `uloop` 命令。不得调用 Roslyn Gateway、UnitySkills 或其他 Unity MCP 执行通道。
-- 交付门禁以 MCP Relay result 与 Unity 验证结果共同为准：MCP Relay `status == "completed"`，Figma 侧节点、图片、截图、九宫数据均无阻塞错误；Unity 侧 Prefab、Sprite、TMP、Raycast、编译和日志校验均通过。
+- 交付门禁以 Relay result 与 Unity 验证结果共同为准：Relay `status == "completed"`，Figma 侧节点、图片、截图、九宫数据均无阻塞错误；Unity 侧 Prefab、Sprite、TMP、Raycast、编译和日志校验均通过。
 
-## MCP Relay 协议与产物
+## Relay 协议与产物
 
 ### 导出请求：`figma_to_prefab_request.json`
 
@@ -157,7 +167,7 @@ AI 不再做机械计算和手写报告。AI 的职责是：
 
 ### 节点清单：`figma_node_manifest.json`
 
-MCP Relay 必须返回可直接转换为 Unity Prefab Spec 的节点清单，禁止 Agent 手动转录坐标。所有位置、尺寸、颜色、透明度、文本、层级、图片引用都必须来自 manifest。
+Relay 必须返回可直接转换为 Unity Prefab Spec 的节点清单，禁止 Agent 手动转录坐标。所有位置、尺寸、颜色、透明度、文本、层级、图片引用都必须来自 manifest。
 
 ```json
 {
@@ -194,7 +204,7 @@ MCP Relay 必须返回可直接转换为 Unity Prefab Spec 的节点清单，禁
 
 ### 图片导出清单：`image_export_manifest.json`
 
-MCP Relay 必须导出图片资源清单，供主控 Agent 生成 `.tmp/image_download_plan.json` 和 `.tmp/prefab_spec.json`。
+Relay 必须导出图片资源清单，供主控 Agent 生成 `.tmp/image_download_plan.json` 和 `.tmp/prefab_spec.json`。
 
 ```json
 {
@@ -217,9 +227,9 @@ MCP Relay 必须导出图片资源清单，供主控 Agent 生成 `.tmp/image_do
 }
 ```
 
-### 截图与校验结果：`figma_to_prefab_mcp_result.json`
+### 截图与校验结果：`figma_to_prefab_relay_result.json`
 
-MCP Relay result 是 Figma 侧交付门禁。至少包含：
+Relay result 是 Figma 侧交付门禁。至少包含：
 
 - `status`：必须为 `completed`。
 - `exportedNodeCount` / `expectedNodeCount`：节点导出数量必须一致。
@@ -231,33 +241,33 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
 
 ## 两阶段执行流程（性能优化）
 
-本技能采用两阶段模式，将 AI 分析决策与批量脚本执行分离，大幅减少 LLM 往返次数。Figma 侧读取全部由 MCP Relay 一次性完成，Unity 侧写入全部由 JSON Spec + `FigmaPrefabGenerator` 完成。
+本技能采用两阶段模式，将 AI 分析决策与批量脚本执行分离，大幅减少 LLM 往返次数。Figma 侧读取全部由 Relay 一次性完成，Unity 侧写入全部由 JSON Spec + `FigmaPrefabGenerator` 完成。
 
-### 阶段一：分析（MCP Relay 主导导出，主控 Agent 生成 Spec 草案）
+### 阶段一：分析（Relay 主导导出，主控 Agent 生成 Spec 草案）
 
-0. **Figma 层级整理门禁**：先通过 MCP Relay/analyze 读取当前 Figma 目标根节点直接子节点数量；`directChildCount > 15` 判定为未整理，停止并询问用户是否先运行 `$figma-hierarchy-cleanup-mcp`；`directChildCount <= 15` 默认视为已整理，记录结论后继续本流程。
+0. **Figma 层级整理门禁**：先通过 Relay/analyze 读取当前 Figma 目标根节点直接子节点数量；`directChildCount > 15` 判定为未整理，停止并询问用户是否先运行 `$figma-hierarchy-cleanup`；`directChildCount <= 15` 默认视为已整理，记录结论后继续本流程。
 1. 加载 workflow、pitfalls、conventions、json-spec-format 参考文件。
 2. 检查 Required Inputs：Figma URL 或 file key + node id、目标 Prefab 路径、目标图片目录、覆盖策略。
    - **初始确认只问一次**：Prefab 名称、图片目录、覆盖策略（这 3 项无法从 Figma 自动推断）
    - **插件提示词快照优先**：如果用户请求或插件生成的提示词已经包含 Figma fileKey/nodeId/selectionBlock、Unity Prefab 路径或图片目录，则这些值视为已锁定输入。后续 `figma_query_selection` 只能做只读回显或诊断，不能覆盖已锁定目标；实时选区为空或变化时，不要要求用户重新点击 Figma，除非缺少 fileKey/nodeId 或用户明确要求切换目标。
-3. 环境检查（并行）：MCP Relay health、Unity 在线、目录存在、脚本可用。
-4. 在用户已明确确认 Figma URL、目标 Prefab 路径、目标图片目录、覆盖策略以及允许写入 `.tmp/figma-to-prefab/figma_to_prefab_request.json` 后，生成 MCP Relay 请求并提交导出 → 等待结果。
+3. 环境检查（并行）：Relay health、Unity 在线、目录存在、脚本可用。
+4. 在用户已明确确认 Figma URL、目标 Prefab 路径、目标图片目录、覆盖策略以及允许写入 `.tmp/figma-to-prefab/figma_to_prefab_request.json` 后，生成 Relay 请求并提交导出 → 等待结果。
    - 如果这些参数和 `.tmp` 写入授权已在 step 2 同一批次确认过，则无需重复确认；否则必须先输出计划、影响文件、验证方式和风险并等待确认。
 5. 加载 Common_Texture 缓存索引 → 直接调用固化脚本生成 Spec：
    ```bash
    python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" --figma-url "..." --target-prefab "..." --target-image-dir "..." --output-audit-report "<unity-project>/.tmp/spec_audit_report.json"
    ```
    `gen_spec.py` 默认会自动检测本节点内 ComponentSet，命中时写出 `<unity-project>/.tmp/figma_component_specs/*.json` 和 `<unity-project>/.tmp/componentset_report.json`，并把主 spec 中对应业务实例改为 `PrefabInstance + activeVariant`。Component Prefab 内会按实例名最后一个 `_` 后的状态后缀去重；例如多个 `*_Locked` 只保留一个代表 Variant，主 spec 的重复状态实例通过 `activeVariant` 指向该代表 Variant。LLM 只读取 `spec_audit_report.json`、`componentset_report.json` 和脚本生成的 Markdown 摘要，不手工统计 manifest。
-   `INSTANCE` 复用公共 Prefab 时必须优先使用 MCP Relay manifest 的 `component.componentName`、`mainComponentName`、`componentSetName`，最后才回退到 Figma 节点名；节点名如 `Help_Btn` 不得阻止命中 `Common_Prefab_TipBtn_1` 这类真实组件名。
+   `INSTANCE` 复用公共 Prefab 时必须优先使用 Relay manifest 的 `component.componentName`、`mainComponentName`、`componentSetName`，最后才回退到 Figma 节点名；节点名如 `Help_Btn` 不得阻止命中 `Common_Prefab_TipBtn_1` 这类真实组件名。
    所有 `ImageSpec.targetDir` 与 `image_download_plan.images[].targetAssetPath` 必须通过脚本的 Unity 资产路径 join 逻辑生成，禁止用字符串相加拼 `Assets/...` 路径，避免 `Assets/.../ExportTimerBackplate.png` 这类漏斜杠路径。
    Unity GameObject 显示名会自动去掉 Figma 层级开头的数字排序前缀，例如 `75--ui--main--view` → `ui--main--view`。只移除开头纯数字加分隔符，不移除业务名中间的数字，例如 `Level_75_Reward` 不变。
 6. **批量确认（一次确认代替原来 3 次）**：输出以下完整摘要 → **等待用户一次性确认**：
-   - MCP Relay result（status / 错误 / 警告 / 节点数）
+   - Relay result（status / 错误 / 警告 / 节点数）
    - Spec 预检结果（节点类型分布 / imageId 完整性 / childIndices 合法性）
    - 九宫容器最小尺寸门禁表
    - 图片去重 / Common_Texture 复用 / INSTANCE 降级汇总
    - 影响文件列表
-7. 用户确认后直接进入阶段二，无需再次确认 MCP Relay 或 Spec。
+7. 用户确认后直接进入阶段二，无需再次确认 Relay 或 Spec。
 
 ### 阶段二：执行（uLoop CLI 主导 Unity 写入与验证）
 
@@ -267,7 +277,7 @@ MCP Relay result 是 Figma 侧交付门禁。至少包含：
    ```bash
    python "<relay-root>/ai/skills/figma-to-prefab/scripts/process_images.py" --unity-project "<unity-project>" --manifest-dir .tmp/figma-to-prefab --output-dir "<targetImageDir>" --workers 6 --output-report "<unity-project>/.tmp/image_process_report.json"
    ```
-   脚本负责：九宫 ThreadPool 并行合成或直接写入 MCP Relay 正确导出 → 普通图片 base64 解码 → Common_Texture 复用 → 文件名对齐。`--output-dir` 必须规范化到 `<unity-project>`；传入 `Assets/...` 时脚本应解析为 `<unity-project>/Assets/...`，并校验它与 `image_download_plan.json` 中非复用图片的 `targetAssetPath` 父目录一致，否则阻塞且不写文件。若 `targetAssetPath` 对应的 Unity PNG 已存在，必须直接复用现有文件，记录到 `existingImageReused` / `existingImageReuse`，禁止覆盖、删除后重建或重写 `.meta`。`white_1x1.png` 只允许在 Spec 实际引用 `builtin_white_1x1` 时创建；没有 SOLID fill 白像素引用时禁止创建。
+   脚本负责：九宫 ThreadPool 并行合成或直接写入 Relay 正确导出 → 普通图片 base64 解码 → Common_Texture 复用 → 文件名对齐。`--output-dir` 必须规范化到 `<unity-project>`；传入 `Assets/...` 时脚本应解析为 `<unity-project>/Assets/...`，并校验它与 `image_download_plan.json` 中非复用图片的 `targetAssetPath` 父目录一致，否则阻塞且不写文件。若 `targetAssetPath` 对应的 Unity PNG 已存在，必须直接复用现有文件，记录到 `existingImageReused` / `existingImageReuse`，禁止覆盖、删除后重建或重写 `.meta`。`white_1x1.png` 只允许在 Spec 实际引用 `builtin_white_1x1` 时创建；没有 SOLID fill 白像素引用时禁止创建。
    `INSTANCE` 父节点没有直接导出图时，脚本必须自动解析到唯一/最大可导出的子节点，并在报告中写出 `plannedNodeId`、`resolvedExportNodeId`、`resolvedReason`。
    **如果 `image_process_report.json` 中 `nineSliceSizeMismatch` 或 `nineSliceOversize > 0`**：在用户已确认阶段二图片写入范围后，读取报告的 blockingErrors 九宫尺寸列表 → 调用固化裁剪脚本（AI 无需手工裁剪）：
    ```bash
@@ -331,9 +341,9 @@ AI 在阶段一生成的 `.tmp/prefab_spec.json` 是 AI 与 `FigmaPrefabGenerato
 
 ### 性能对比
 
-| 原流程 | MCP Relay 流程 |
+| 原流程 | Relay 流程 |
 |--------|-------------|
-| 多次远程读取 Figma 节点和截图 | MCP Relay 一次性导出节点、图片和截图 |
+| 多次远程读取 Figma 节点和截图 | Relay 一次性导出节点、图片和截图 |
 | 50-80 次 LLM 往返（逐行写 YAML） | **3-4 次** LLM 往返（生成 JSON Spec） |
 | 图片串行下载 | **并行**下载 |
 | AI 手写 .meta 文件 | Unity `AssetDatabase` **自动生成** |
@@ -442,10 +452,10 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/run_import_benchmark.py" 
   --modes reuse-manifest
 ```
 
-功能：在 Unity 工程内创建 `Assets/FigmaImportBenchmark/<run-id>/` 测试文件夹，循环调用 `run_full_import.py`，每轮隔离生成 Prefab 和图片目录，记录耗时、阶段 timings、`spec_audit_report.json`、`image_process_report.json`、`verify_prefab.py` 结果和 MCP manifest 证据副本。
+功能：在 Unity 工程内创建 `Assets/FigmaImportBenchmark/<run-id>/` 测试文件夹，循环调用 `run_full_import.py`，每轮隔离生成 Prefab 和图片目录，记录耗时、阶段 timings、`spec_audit_report.json`、`image_process_report.json`、`verify_prefab.py` 结果和 Relay manifest 证据副本。
 报告：`benchmark_records.jsonl` 记录每轮明细；`benchmark_summary.json` 和 `benchmark_summary.md` 汇总成功率、准确度、median/p95/stdev 耗时、blocking/warning 数，并输出 `fastestMode`、`stablestMode`、`bestOverallMode`。
 准确度口径：一轮成功必须满足 `run_full_import.py` summary completed、Spec audit allPass、图片处理 allPass、Prefab 静态验证 allPass；准确度分数为所有自动 gate 的通过比例，不由 AI 主观打分。
-模式：`reuse-manifest` 第一轮导出 Figma manifest，后续复用同一 manifest 评估 Unity 导入稳定性；`full` 每轮重新走 MCP 导出；`check-only` 只评估 Figma→Spec 阶段。
+模式：`reuse-manifest` 第一轮导出 Figma manifest，后续复用同一 manifest 评估 Unity 导入稳定性；`full` 每轮重新走 CLI 导出；`check-only` 只评估 Figma→Spec 阶段。
 约束：真实运行前仍需明确 Figma URL、目标节点、Relay/Unity 在线环境；脚本只负责记录和聚合，不替代 Figma 层级整理门禁和标准导入门禁。
 
 #### `gen_spec.py --output-report` — Markdown 确认报告
@@ -470,7 +480,7 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
 ### 主控 Agent 职责
 
 - 主控 Agent 是唯一决策者、唯一 Spec owner 和唯一写入协调者。
-- 主控 Agent 负责读取必读文档、确认 Required Inputs、准备 MCP Relay 请求、拆分只读任务、汇总证据、处理冲突、输出计划并等待用户确认。
+- 主控 Agent 负责读取必读文档、确认 Required Inputs、准备 Relay 请求、拆分只读任务、汇总证据、处理冲突、输出计划并等待用户确认。
 - 主控 Agent 只能生成一份最终 `.tmp/prefab_spec.json` 和一份最终 `.tmp/image_download_plan.json`；不得保留多份互相竞争的 Spec。
 - 主控 Agent 必须在写入前列出修改计划、影响文件、验证方式、风险和待确认项，等待用户明确确认后才能进入阶段二。
 - 多 Agent 分析结果冲突时，主控 Agent 必须采用保守策略：优先保留现有 Unity 资产和项目规范，无法判断的内容列为待确认项，不得自动推断写入。
@@ -481,21 +491,21 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
 
 - 修改、创建或覆盖 Prefab、PNG、`.meta`、Scene、C# 脚本、Addressables、生成数据、Hotfix DLL bytes。
 - 创建最终 `.tmp/prefab_spec.json` 或最终 `.tmp/image_download_plan.json`。
-- 提交 MCP Relay 写入任务、调用 `FigmaPrefabGenerator.Generate()`、执行 Unity 代码、Unity 编译、Unity 保存资源或任何会改变工程状态的工具。
+- 提交 Relay 写入任务、调用 `FigmaPrefabGenerator.Generate()`、执行 Unity 代码、Unity 编译、Unity 保存资源或任何会改变工程状态的工具。
 - 凭相似 Prefab 自动挂业务脚本、自动绑定 `[SerializeField]` 字段、自动替换组件或自动修改交互结构。
 
 子 Agent 输出必须是分析报告，并且所有结论必须带证据：Figma nodeId / node path、Unity Prefab 路径、Unity 对象路径、组件名、字段名、文档或代码行号。信息不足时必须明确说明缺少证据。
 
 ### 推荐子 Agent 拆分
 
-- **Figma 结构分析 Agent**：只读分析 MCP Relay 导出的 `figma_node_manifest.json`，分类 Image / Text / Panel / PrefabInstance，提取尺寸、位置、文本、颜色、透明度和图片候选。
+- **Figma 结构分析 Agent**：只读分析 Relay 导出的 `figma_node_manifest.json`，分类 Image / Text / Panel / PrefabInstance，提取尺寸、位置、文本、颜色、透明度和图片候选。
 - **Unity 参考 Prefab 分析 Agent**：只读扫描目标目录、相似命名 Prefab 和用户指定 reference Prefab，输出层级、组件、字段绑定和公共复用建议。
 - **图片与九宫图分析 Agent**：只读分析 `image_export_manifest.json`，判断 Simple / Sliced，计算 border，检查九宫图最小可拉伸尺寸规则。
 - **Spec 门禁审查 Agent**：只读审查主控准备的 Spec 草案，检查 JSON 契约、TMP CommonFont、TMP AutoSize、图片 RaycastTarget、PrefabInstance 映射和手写 YAML 风险。
 
 ### 写入串行规则
 
-- 多 Agent 只能并行加速“看、查、审”，不能并行写 Prefab、PNG、`.meta`、MCP Relay 请求或 Spec。
+- 多 Agent 只能并行加速“看、查、审”，不能并行写 Prefab、PNG、`.meta`、Relay 请求或 Spec。
 - 阶段二写入必须由主控 Agent 在用户确认后串行执行：先下载并校验图片，再通过 `uloop execute-dynamic-code` 执行 `FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")` 生成 Prefab，最后通过 `uloop` CLI 执行编译、日志和截图验收。
 - 导入后参考 Prefab 分析仍然只读，只能输出建议报告；建议报告输出后必须停止并等待用户对具体建议项二次确认。
 
@@ -510,24 +520,24 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
   - `已加载 json-spec-format: references/json-spec-format.md`
 - Default to creating new Prefab, PNG, and `.meta`; never overwrite existing assets unless the user explicitly approves exact paths.
 - Do not modify Unity C# scripts, Scenes, Addressables, generated data, or Hotfix DLL bytes.
-- **MCP Relay 请求路径**：`.tmp/figma-to-prefab/figma_to_prefab_request.json`。
-- **MCP Relay 输出路径**：`.tmp/figma-to-prefab/figma_node_manifest.json`、`.tmp/figma-to-prefab/image_export_manifest.json`、`.tmp/figma-to-prefab/figma_to_prefab_mcp_result.json`、`.tmp/figma-to-prefab/mcp_screenshots/`。
-- **MCP Relay Client 命令**：标准入口，内部调用 MCP。Windows 环境优先使用 `python`：`python .claude\skills\figma-to-prefab\scripts\figma_to_prefab_mcp_client.py --request .tmp\figma-to-prefab\figma_to_prefab_request.json --result .tmp\figma-to-prefab\figma_to_prefab_mcp_result.json`。
+- **Relay 请求路径**：`.tmp/figma-to-prefab/figma_to_prefab_request.json`。
+- **Relay 输出路径**：`.tmp/figma-to-prefab/figma_node_manifest.json`、`.tmp/figma-to-prefab/image_export_manifest.json`、`.tmp/figma-to-prefab/figma_to_prefab_relay_result.json`、`.tmp/figma-to-prefab/relay_screenshots/`。
+- **Relay Client 命令**：标准入口，内部调用项目 CLI。Windows 环境优先使用 `python`：`python .claude\skills\figma-to-prefab\scripts\figma_to_prefab_cli.py --request .tmp\figma-to-prefab\figma_to_prefab_request.json --result .tmp\figma-to-prefab\figma_to_prefab_relay_result.json`。
 - **Spec 路径**：写入 `<unity-project>/.tmp/prefab_spec.json`；在 `<unity-project>` 上下文中通过 `uloop execute-dynamic-code` 调用 `FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")`。命令必须显式传入 `--project-path "<unity-project>"`，禁止猜测工程路径或混用 Relay 根/Unity 工程根相对路径。
-- **图片处理**：阶段二必须调用 `process_images.py` 读取 MCP Relay manifest/base64 并写入 PNG；`ImageSpec` 不包含下载 URL，必须同时生成 `<unity-project>/.tmp/image_download_plan.json` 作为脚本侧校验契约。禁止 LLM 手写 PowerShell 下载循环。
+- **图片处理**：阶段二必须调用 `process_images.py` 读取 Relay manifest/base64 并写入 PNG；`ImageSpec` 不包含下载 URL，必须同时生成 `<unity-project>/.tmp/image_download_plan.json` 作为脚本侧校验契约。禁止 LLM 手写 PowerShell 下载循环。
 - **JSON UTF-8 规则**：修改带中文的 spec、plan、manifest 或报告 JSON 时，只能使用 Python 读写，并显式 `encoding="utf-8-sig"` 读取、`encoding="utf-8"` 写入。禁止用 PowerShell `ConvertFrom-Json` / `ConvertTo-Json` / `Set-Content` 改写这类 JSON，避免中文节点名被转码破坏。
-- **禁止手动转录**：不得从终端输出手抄坐标、尺寸、颜色、文本或图片 hash 到 Spec；必须由脚本从 MCP Relay manifest 生成 Spec 或下载计划。
+- **禁止手动转录**：不得从终端输出手抄坐标、尺寸、颜色、文本或图片 hash 到 Spec；必须由脚本从 Relay manifest 生成 Spec 或下载计划。
 - **父子相对坐标硬规则**：`prefab_spec.json` 中除根节点外，所有 `NodeSpec.rect.x/y` 必须是相对**直接 Unity 父节点**的 anchoredPosition，不得统一使用相对 Figma 根节点的坐标。因为 `FigmaPrefabGenerator.BuildNodeTree()` 会按 `childIndices` 递归挂载子节点，`ApplyRectTransform()` 会直接把 `node.rect.x/y` 写入当前父节点下的 `RectTransform.anchoredPosition`。如果子节点仍使用根坐标，会导致整批 UI 位置叠加父节点偏移而全部错乱。
 - **父子坐标抽查门禁**：调用 `FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")` 前，必须至少抽查一个有子节点的父节点和一个子节点，确认子节点坐标已从 `child.relativeBounds - parent.relativeBounds` 转换。例如父节点 `Attack_TopBanner` 内的背景图不应继续使用根坐标 `y≈876`，而应是相对父节点的小偏移 `y≈-19`。抽查结果必须写入执行前门禁摘要。
 - **九宫图导出尺寸**：`9slice` PNG 必须满足 `width = left + right + 2`、`height = top + bottom + 2`；`h3slice` 必须满足 `width = left + right + 2` 且高度保留父节点 `sourceVisibleSize.height`；`v3slice` 必须满足宽度保留父节点 `sourceVisibleSize.width` 且 `height = top + bottom + 2`。严禁把标准 9slice 的可见大图直接保存为 Unity 九宫 Sprite，也严禁把 h3/v3 的非拉伸轴压成 2px。
 - **九宫隐藏源图硬规则**：识别到 `__slice_*` 子节点后，必须优先把父节点按九宫容器处理，并允许读取父节点 invisible/opacity=0 的 IMAGE fill 作为 Sprite 源图。不要按普通可见图层规则跳过隐藏 IMAGE fill，否则会把 `[jiugong_dbx1]` 一类节点降级为 Panel 或造成丢图。
-- **九宫临时导出硬规则**：MCP Relay 为九宫图生成最小 PNG 时，临时 Frame/Rectangle 不能设置 `visible=false`；Figma 对不可见临时节点可能导出 `1x1` PNG。正确做法是保持可见、放到远离画布的位置（如 `x=-100000,y=-100000`），导出后立即删除。
+- **九宫临时导出硬规则**：Relay 为九宫图生成最小 PNG 时，临时 Frame/Rectangle 不能设置 `visible=false`；Figma 对不可见临时节点可能导出 `1x1` PNG。正确做法是保持可见、放到远离画布的位置（如 `x=-100000,y=-100000`），导出后立即删除。
 - **九宫逐张门禁**：执行 `FigmaPrefabGenerator.Generate()` 前必须逐张列出所有 Sliced 图片的文件名、实际 PNG 尺寸、border、期望尺寸和 `sliceKind`。`9slice` 按最小九宫校验，`h3slice/v3slice` 按完整非拉伸轴校验。任何 `1x1`、标准 9slice 显示态大图、或 h3/v3 非拉伸轴被压成 2px 都是阻塞失败。
 - **TMP CommonFont 后处理**：只要生成或修改了 `TextMeshProUGUI`，必须在执行计划中列出后处理：`font = Assets/MagicWarrior/_Resources/Font/Package/CommonFont.asset`，`fontSharedMaterial = Assets/MagicWarrior/_Resources/Font/Package/CommonFont.mat`。禁止保留 TMP 默认字体或默认材质。
 - **TMP AutoSize 强制关闭规则**：只要生成或修改了 `TextMeshProUGUI`，必须统一设置 `enableAutoSizing = false`。`ApplyPostProcessing()` 在设置字体和材质后必须紧跟 `tmp.enableAutoSizing = false`，防止 TMP 内部序列化重设。如确有例外需开启 AutoSize，必须由用户明确指定具体节点路径。
-- **TMP 文本框宽高硬规则**：所有 Text 节点的 `NodeSpec.rect.w/h` 必须来自 MCP Relay manifest 中该 Figma 文本节点自身的 `bounds.width/height`，Unity 生成后对应 `TextMeshProUGUI` 所在 `RectTransform.sizeDelta.x/y` 必须与 Spec 宽高一致，容差 0.5px。任何 Unity 文本框比 Figma 小或大的残留都视为阻塞失败，不能作为 warning 交付。
+- **TMP 文本框宽高硬规则**：所有 Text 节点的 `NodeSpec.rect.w/h` 必须来自 Relay manifest 中该 Figma 文本节点自身的 `bounds.width/height`，Unity 生成后对应 `TextMeshProUGUI` 所在 `RectTransform.sizeDelta.x/y` 必须与 Spec 宽高一致，容差 0.5px。任何 Unity 文本框比 Figma 小或大的残留都视为阻塞失败，不能作为 warning 交付。
 - **图片 RaycastTarget 强制规则**：所有生成或修改的 `UnityEngine.UI.Image`、`CustomImage`、Simple Image、Sliced Image、九宫图 Image 组件必须统一取消勾选 `RaycastTarget`（对应 `raycastTarget = false`）。除非用户明确指定某张图片用于点击拦截，否则不允许开启。
-- **执行前门禁**：只有 MCP Relay result 通过、`spec_audit_report.json` 通过、`childIndices` 合法、所有 Image 节点引用的 `imageId` 存在、父子相对坐标抽查通过、`image_process_report.json` 通过、所有图片文件存在且尺寸/MD5 校验通过、九宫图最小尺寸校验通过、TMP CommonFont 后处理计划明确、TMP AutoSize 字号锁定计划明确、TMP 文本框宽高门禁明确、图片 RaycastTarget=false 后处理计划明确后，才能调用 `FigmaPrefabGenerator.Generate()`。
+- **执行前门禁**：只有 Relay result 通过、`spec_audit_report.json` 通过、`childIndices` 合法、所有 Image 节点引用的 `imageId` 存在、父子相对坐标抽查通过、`image_process_report.json` 通过、所有图片文件存在且尺寸/MD5 校验通过、九宫图最小尺寸校验通过、TMP CommonFont 后处理计划明确、TMP AutoSize 字号锁定计划明确、TMP 文本框宽高门禁明确、图片 RaycastTarget=false 后处理计划明确后，才能调用 `FigmaPrefabGenerator.Generate()`。
 - **TextureImporter refresh gate**: After PNG files are written into the Unity project, the first Prefab generation may only create default `.meta` files that still use `textureType: 0`; in that state `AssetDatabase.LoadAssetAtPath<Sprite>()` can return null. After running the generator, statically check the target Prefab for `m_Sprite: {fileID: 0}`. If the count is greater than 0, first confirm every target PNG `.meta` has `textureType: 8`, `spriteMode: 1`, `alphaIsTransparency: 1`, and correct nine-slice `spriteBorder`, then run `FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")` again. Never report completion while SpriteNull residues remain.
 - **Feature-local ComponentSet gate**: Every import runs default detection for internal ComponentSet / 自己的 ComponentSet / reusable business instances. When detected, do not accept a visually correct main Prefab alone. Generate one feature-local Prefab per expected set, make the main spec reference it through `PrefabInstance + activeVariant`, and run `verify_spec_contract.py` with explicit `--expect-prefab-instance Name=prefabId` mappings. This is required even if `verify_prefab.py` passes, because an expected component can otherwise be flattened into `Image`.
 - **Prefab 创建**：阶段二中只通过 `uloop execute-dynamic-code` 执行 `FigmaPrefabGenerator.Generate()`，**严禁 AI 手写 Prefab YAML**。
@@ -552,7 +562,7 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
 - Target Prefab path/directory, or an existing reference Prefab.
 - Target image directory when images need to be created or replaced.
 - Overwrite policy for existing Prefab, PNG, and `.meta` files.
-- When the request comes from the Figma MCP Relay plugin AI prompt, treat the prompt's `selectionBlock` / URL / fileKey / node id and Unity path fields as a captured target snapshot. Do not ask the user to click Figma again after these values are present.
+- When the request comes from the Figma Relay plugin AI prompt, treat the prompt's `selectionBlock` / URL / fileKey / node id and Unity path fields as a captured target snapshot. Do not ask the user to click Figma again after these values are present.
 
 ## Required Reads
 
@@ -567,11 +577,11 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
 ## Environment Checks
 
 - Confirm `<relay-root>/` exists.
-- Confirm `<relay-root>/server/figma_mcp_relay_server.py` exists.
-- Confirm `<relay-root>/ai/skills/figma-hierarchy-cleanup-mcp/scripts/figma_hierarchy_cleanup_mcp_client.py` exists when the Figma node still needs cleanup.
-- Confirm `<relay-root>/ai/skills/figma-to-prefab/scripts/figma_to_prefab_mcp_client.py` exists.
-- Confirm `figmaMcpRelay.figma_health` succeeds（轻量只读查询，直接 MCP tool 即可）。
-- Confirm Figma Desktop has opened the target file and the MCP Relay plugin is connected before submitting export requests.
+- Confirm `<relay-root>/server/prefab_import_pipeline.py` exists.
+- Confirm `<relay-root>/ai/skills/figma-hierarchy-cleanup/scripts/figma_hierarchy_cleanup_cli.py` exists when the Figma node still needs cleanup.
+- Confirm `<relay-root>/ai/skills/figma-to-prefab/scripts/figma_to_prefab_cli.py` exists.
+- Confirm `node dist/cli.js sessions` succeeds（轻量只读查询，项目 CLI 即可）。
+- Confirm Figma Desktop has opened the target file and the Relay plugin is connected before submitting export requests.
 - Confirm `<unity-project>/Assets/` and `<unity-project>/ProjectSettings/` exist.
 - Confirm `<unity-project>/.tmp/` exists or create it only after user confirmed Unity-side writes.
 - Confirm `<unity-project>/Assets/MagicWarrior/Scripts/Editor/FigmaMcpRelay/PrefabImport/FigmaPrefabGenerator.cs` exists.
@@ -583,9 +593,9 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
 
 - Missing required inputs means stop and ask.
 - A later `figma_query_selection` result must not invalidate a complete prompt snapshot. If current Figma selection is empty or different, continue with the snapshot target by default and only report the mismatch as a risk. Ask the user to reselect Figma only when the snapshot itself lacks fileKey/nodeId or the user explicitly wants to switch targets.
-- If the current Figma target root has `directChildCount > 15`, treat it as not production-hierarchy-cleaned, stop the Prefab export flow, and ask the user whether to use `$figma-hierarchy-cleanup-mcp` first. If `directChildCount <= 15`, treat cleanup as satisfied by default and do not ask again.
+- If the current Figma target root has `directChildCount > 15`, treat it as not production-hierarchy-cleaned, stop the Prefab export flow, and ask the user whether to use `$figma-hierarchy-cleanup` first. If `directChildCount <= 15`, treat cleanup as satisfied by default and do not ask again.
 - When cleanup is required or requested by the user, Figma hierarchy cleanup must complete with `allPass == true` and empty `blockingErrors` before this skill may create export requests, manifests, specs, Prefabs, PNGs, or `.meta` files.
-- MCP Relay unavailable, target file not open, or plugin not connected means stop and report; do not continue with another Figma channel.
+- Relay unavailable, target file not open, or plugin not connected means stop and report; do not continue with another Figma channel.
 - Existing Prefab sync must name the exact Prefab path.
 - `.meta` changes must state Sprite settings and nine-slice border handling.
 - 如果 Unity 中已存在目标 PNG 或 Common_Texture / Common_Prefab / UI_Common 资源，导入流程必须直接引用现有资源；不得删除、覆盖、复制成新文件或重建 `.meta`，除非用户明确批准 overwrite 的精确路径。
@@ -611,8 +621,8 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
 - Validate this skill after edits:
   `node --test "<relay-root>/tests/path-portability.test.mjs"`
 - Report validation by phase. If a phase was skipped, blocked, or not applicable, say so explicitly; never infer Unity loadability, image importer correctness, compile health, or screenshot fidelity from an earlier Figma/export/spec phase.
-- Confirm the Figma hierarchy cleanup precondition was satisfied before export: MCP Relay/analyze reported the target root `directChildCount <= 15`, or the user confirmed running cleanup for `directChildCount > 15` and `$figma-hierarchy-cleanup-mcp` completed apply + verify with `allPass == true` and empty `blockingErrors`.
-- Confirm MCP Relay result status is `completed`, `blockingErrors` is empty, exported node count matches expected node count, and screenshot path exists.
+- Confirm the Figma hierarchy cleanup precondition was satisfied before export: Relay/analyze reported the target root `directChildCount <= 15`, or the user confirmed running cleanup for `directChildCount > 15` and `$figma-hierarchy-cleanup` completed apply + verify with `allPass == true` and empty `blockingErrors`.
+- Confirm Relay result status is `completed`, `blockingErrors` is empty, exported node count matches expected node count, and screenshot path exists.
 - Confirm `figma_node_manifest.json` and `image_export_manifest.json` are the only sources used for Spec generation; no manual coordinate, color, text or image hash transcription.
 - Confirm new Prefab references expected image GUIDs, and `m_Sprite: {fileID: 0}` residue count is 0. If residue is not 0, treat it as a blocking failure and check TextureImporter refresh timing before regenerating.
 - Confirm new image `.meta` has expected Sprite settings, nine-slice border, `textureType=Sprite`, `alphaIsTransparency=true`, and `mipmapEnabled=false`.
@@ -624,7 +634,7 @@ python "<relay-root>/ai/skills/figma-to-prefab/scripts/gen_spec.py" ... --output
 - Confirm every generated or synchronized non-common `Image` / `CustomImage` has `RaycastTarget = false`; report image component count, RaycastTarget=false count, RaycastTarget=true residue count, and skipped common component count. Common prefab instances and `Common_` / `Common_Texture_` / `Common_Prefab_` / `UI_Common_` nodes keep their source RaycastTarget values and are not failures by themselves.
 - After successful import, include a read-only reference Prefab analysis report: reference prefab paths, hierarchy patterns, mounted component patterns, serialized field binding patterns, suggested adjustments, evidence paths/line numbers or Unity object paths, and items requiring user confirmation.
 - Run Unity compile through `uloop compile` only when `.cs` files were modified (asset-only operations skip this); Console log checks use `uloop get-logs` and report any CLI error directly.
-- Compare Unity result with MCP Relay-exported Figma screenshot for position, size, hierarchy, text, color, transparency, edges, and slicing.
+- Compare Unity result with Relay-exported Figma screenshot for position, size, hierarchy, text, color, transparency, edges, and slicing.
 - If Multi-Agent Execution was used, final report must include whether multi Agent was enabled, each child Agent read-only summary, conflicts found, main Agent resolution, and any suggestions not adopted with reasons.
 
 ## Project Steering

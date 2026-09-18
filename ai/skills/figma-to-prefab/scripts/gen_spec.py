@@ -169,7 +169,8 @@ def normalize_unity_asset_dir(asset_dir):
 
 def canonicalize_writer_paths(target_prefab: str, target_image_dir: str) -> tuple[str, str]:
     """Return canonical Unity writer paths without a project-name prefix."""
-    return normalize_asset_path(target_prefab), normalize_asset_path(target_image_dir).rstrip("/") + "/"
+    normalized_image_dir = str(target_image_dir or "").replace("\\", "/").strip().rstrip("/")
+    return normalize_asset_path(target_prefab), normalize_asset_path(normalized_image_dir).rstrip("/") + "/"
 
 
 def is_solid_only_no_effects(node):
@@ -315,6 +316,70 @@ def image_plan_size_key(dl_item):
     return width, height
 
 
+def _image_content_identity(dl_item):
+    """Return a conservative identity for deciding whether two image plans are the same asset."""
+    fingerprint = str(dl_item.get("expectedMD5") or dl_item.get("imageHash") or "").strip()
+    if not fingerprint:
+        return None
+    return fingerprint, image_plan_size_key(dl_item)
+
+
+def resolve_asset_path_collisions(images_spec, dl_images, spec_nodes):
+    """Keep same-named, different-content exports separate while reusing exact duplicates."""
+    asset_path_to_content = {}
+    remap_image_ids = {}
+    used_paths = set()
+
+    for index, dl_item in enumerate(dl_images):
+        if index >= len(images_spec):
+            continue
+        image = images_spec[index]
+        target_asset_path = str(dl_item.get("targetAssetPath") or "").replace("\\", "/")
+        image_id = image.get("id") or dl_item.get("imageId")
+        if not target_asset_path or not image_id:
+            continue
+        dl_item["imageId"] = image_id
+        identity = _image_content_identity(dl_item)
+        previous = asset_path_to_content.get(target_asset_path)
+        if previous is None:
+            asset_path_to_content[target_asset_path] = (image_id, identity)
+            used_paths.add(target_asset_path.lower())
+            continue
+
+        canonical_id, canonical_identity = previous
+        if identity is not None and identity == canonical_identity:
+            remap_image_ids[image_id] = canonical_id
+            continue
+
+        original_name = str(image.get("fileName") or "image.png")
+        base, ext = os.path.splitext(original_name)
+        suffix_seed = str(dl_item.get("expectedMD5") or dl_item.get("imageHash") or "").strip()
+        suffix = suffix_seed[:8] if suffix_seed else str(index + 1)
+        candidate_name = f"{base}_{suffix}{ext}"
+        candidate_path = unity_asset_join(image.get("targetDir", ""), candidate_name)
+        counter = 2
+        while candidate_path.lower() in used_paths:
+            candidate_name = f"{base}_{suffix}_{counter}{ext}"
+            candidate_path = unity_asset_join(image.get("targetDir", ""), candidate_name)
+            counter += 1
+        image["fileName"] = candidate_name
+        dl_item["fileName"] = candidate_name
+        dl_item["targetAssetPath"] = candidate_path
+        asset_path_to_content[candidate_path] = (image_id, identity)
+        used_paths.add(candidate_path.lower())
+
+    if remap_image_ids:
+        for node in spec_nodes:
+            image_id = node.get("imageId")
+            if image_id in remap_image_ids:
+                node["imageId"] = remap_image_ids[image_id]
+        keep_ids = {node["imageId"] for node in spec_nodes if node.get("imageId")}
+        images_spec[:] = [image for image in images_spec if image.get("id") in keep_ids]
+        dl_images[:] = [item for item in dl_images if item.get("imageId") in keep_ids]
+
+    return remap_image_ids
+
+
 def apply_name_size_fallback_dedup(spec_nodes, images_spec, dl_images):
     """在所有精确判断后，按基础文件名+尺寸兜底合并图片，并输出人工审核数据。"""
     canonical_by_name_size = {}
@@ -339,6 +404,12 @@ def apply_name_size_fallback_dedup(spec_nodes, images_spec, dl_images):
         canonical_index = canonical_by_name_size[key]
         canonical_img = images_spec[canonical_index]
         canonical_dl = dl_images[canonical_index]
+        current_identity = _image_content_identity(dl_item)
+        canonical_identity = _image_content_identity(canonical_dl)
+        # A matching name and dimensions are not enough to prove pixels match.
+        # Keep both exports whenever either content fingerprint is missing or differs.
+        if current_identity is None or canonical_identity is None or current_identity != canonical_identity:
+            continue
         remap_image_ids[img["id"]] = canonical_img["id"]
         review_items.append({
             "reason": "sameNameAndSizeFallback",
@@ -383,7 +454,7 @@ def unity_node_name(raw_name, is_root, prefab_name):
 
 
 def calculate_base64_md5(base64_value):
-    """计算 MCP Relay 导出 base64 图片内容的 MD5，失败时返回空字符串。"""
+    """计算 Relay 导出 base64 图片内容的 MD5，失败时返回空字符串。"""
     if not base64_value:
         return ""
     try:
@@ -665,7 +736,7 @@ def build_spec(
     disable_common_prefab_reuse=False,
 ):
     target_image_dir = normalize_unity_asset_dir(target_image_dir)
-    """核心：从 MCP Relay manifest 生成 prefab_spec.json 和 image_download_plan.json"""
+    """核心：从 Relay manifest 生成 prefab_spec.json 和 image_download_plan.json"""
     manifest_dir = resolve_manifest_dir(manifest_dir)
     with open(manifest_dir / "figma_node_manifest.json", "r", encoding="utf-8-sig") as f:
         node_data = json.load(f)
@@ -719,7 +790,7 @@ def build_spec(
         SIXED_DATA[nid] = {"type": st, "border": bd, "displayBounds": n["bounds"]}
 
     # ── Phase 1b: 从 exports 识别 Instance 中的九宫 ──
-    # MCP Relay 导出时会标记 sliceKind，但 Instance 内部结构不在 nodes_list 中
+    # Relay 导出时会标记 sliceKind，但 Instance 内部结构不在 nodes_list 中
     for e in exports_list:
         slice_kind = e.get("sliceKind")
         if slice_kind not in ("9slice", "h3slice", "v3slice"):
@@ -1119,25 +1190,7 @@ def build_spec(
         images_spec = [img for img in images_spec if img["id"] in keep_ids]
         dl_images = [img for img in dl_images if img["imageId"] in keep_ids]
 
-    asset_path_to_image_id = {}
-    remap_image_ids = {}
-    for dl_item in dl_images:
-        target_asset_path = str(dl_item.get("targetAssetPath") or "").replace("\\", "/")
-        image_id = dl_item.get("imageId")
-        if not target_asset_path or not image_id:
-            continue
-        if target_asset_path in asset_path_to_image_id:
-            remap_image_ids[image_id] = asset_path_to_image_id[target_asset_path]
-            continue
-        asset_path_to_image_id[target_asset_path] = image_id
-    if remap_image_ids:
-        for sn in spec_nodes:
-            image_id = sn.get("imageId")
-            if image_id in remap_image_ids:
-                sn["imageId"] = remap_image_ids[image_id]
-        keep_ids = {sn["imageId"] for sn in spec_nodes if sn.get("imageId")}
-        images_spec = [img for img in images_spec if img["id"] in keep_ids]
-        dl_images = [img for img in dl_images if img["imageId"] in keep_ids]
+    resolve_asset_path_collisions(images_spec, dl_images, spec_nodes)
 
     fname_counts = Counter(
         img["fileName"]
@@ -1404,7 +1457,7 @@ def validate_image_references(spec, dl_plan):
     for image_spec in spec.get("images", []):
         image_id = image_spec.get("id")
         if image_id == WHITE_PIXEL_IMAGE_ID:
-            continue  # 本地生成的白像素，无需 MCP Relay 下载
+            continue  # 本地生成的白像素，无需 Relay 下载
         plan_item = plan_by_id.get(image_id)
         if not plan_item:
             plan_mismatches.append({"imageId": image_id, "reason": "missing_download_plan"})
@@ -1546,7 +1599,7 @@ def main():
     parser.add_argument("--target-prefab", help="目标 Prefab 路径，如 Assets/_Resources/X/UI_X.prefab")
     parser.add_argument("--target-image-dir", help="图片输出目录，如 Assets/_Art/Texture/GUI/X/")
     parser.add_argument("--prefab-name", help="Prefab 根节点名（默认从 URL 推断）")
-    parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="MCP Relay manifest 目录")
+    parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab", help="Relay manifest 目录")
     parser.add_argument("--output-spec", default="", help="Spec 输出路径")
     parser.add_argument("--output-plan", default="", help="下载计划输出路径")
     parser.add_argument("--output-roslyn-import-plan", default="",

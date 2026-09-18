@@ -18,7 +18,7 @@ const operationOwners = [
   "src/localAiRunner.ts",
   "src/psdImportTask.ts",
   "src/pythonWorker.ts",
-  "src/mcpConfig.ts",
+  "src/relayControl.ts",
   "src/unityProjectRegistry.ts",
   "src/unityGatewayDiscovery.ts",
   "src/unityBridgeInstaller.ts",
@@ -52,7 +52,7 @@ test("decisive operation steps remain covered by source-level guardrails", () =>
     "provider-probe", "cli-spawn", "cli-exit", "timeout", "cancel",
     "queued", "export", "submit", "result",
     "discover", "install", "connect",
-    "read", "write", "delete", "open",
+    "read", "write",
   ];
   const missing = requiredSteps.filter((step) => !source.includes(`"${step}"`));
   assert.deepEqual(missing, []);

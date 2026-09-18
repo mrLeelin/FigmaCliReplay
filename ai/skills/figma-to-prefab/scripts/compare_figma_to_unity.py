@@ -2,7 +2,7 @@
 """
 Figma → Unity 差异对比器
 
-输入: MCP Relay analyze 结果 + Unity Prefab 路径
+输入: Relay analyze 结果 + Unity Prefab 路径
 输出: 差异报告 + 路径判定 (lightweight / lightweight+images / full)
 """
 
@@ -92,10 +92,10 @@ def parse_prefab(prefab_path):
     return nodes
 
 
-# ── MCP Relay analyze 结果解析 ───────────────────────────────
+# ── Relay analyze 结果解析 ───────────────────────────────
 
 def parse_mcp_analysis(analysis_path):
-    """从 figma-hierarchy-cleanup-mcp 的 analysis_result.json 提取节点信息"""
+    """从 figma-hierarchy-cleanup 的 analysis_result.json 提取节点信息"""
     data = json.loads(Path(analysis_path).read_text(encoding="utf-8"))
 
     result = data.get('result', data)
@@ -223,7 +223,7 @@ def output_report(diff, verdict_label, reason, output_path):
 
 def main():
     parser = argparse.ArgumentParser(description='Figma → Unity 差异对比')
-    parser.add_argument('--figma-analysis', required=True, help='MCP Relay analyze 结果 JSON')
+    parser.add_argument('--figma-analysis', required=True, help='Relay analyze 结果 JSON')
     parser.add_argument('--prefab', required=True, help='Unity Prefab 路径')
     parser.add_argument('--output', default='.tmp/compare_report.json', help='输出路径')
     args = parser.parse_args()

@@ -19,9 +19,9 @@ test("cleanup UI template is normalized into one user request instead of duplica
   const task = buildCleanupConversationTask("\u6574\u7406\u5f53\u524d\u9009\u4e2d\u7684 Figma \u8282\u70b9\u3002");
 
   assert.equal(cleanupInitialUserRequest(uiTemplate), "\u6574\u7406\u5f53\u524d\u9009\u4e2d\u7684 Figma \u8282\u70b9\u3002");
-  assert.equal(cleanupInitialUserRequest("\u4f7f\u7528 Relay \u5185\u7f6e\u6574\u7406\u6280\u80fd\uff1a$figma-hierarchy-cleanup-mcp\u3002"), "\u6574\u7406\u5f53\u524d\u9009\u4e2d\u7684 Figma \u8282\u70b9\u3002");
+  assert.equal(cleanupInitialUserRequest("\u4f7f\u7528 Relay \u5185\u7f6e\u6574\u7406\u6280\u80fd\uff1a$figma-hierarchy-cleanup\u3002"), "\u6574\u7406\u5f53\u524d\u9009\u4e2d\u7684 Figma \u8282\u70b9\u3002");
   assert.equal(cleanupInitialUserRequest("\u6309\u94ae\u533a\u548c\u80cc\u666f\u9700\u5206\u5f00\u3002"), "\u6309\u94ae\u533a\u548c\u80cc\u666f\u9700\u5206\u5f00\u3002");
-  assert.match(task, /\$figma-hierarchy-cleanup-mcp/);
+  assert.match(task, /\$figma-hierarchy-cleanup/);
   assert.match(source, /Cleanup prompt normalized/);
   assert.match(source, /embeddedPolicyRemoved/);
 });
@@ -32,8 +32,8 @@ test("cleanup conversation begins with Relay-managed provider-neutral analysis a
   assert.match(task, /Relay-managed cleanup policy/);
   assert.match(task, /所有面向用户的回复、进度摘要和错误说明必须使用简体中文/);
   assert.match(task, /Do not call Skill\(\) or ToolSearch to discover this skill/i);
-  assert.match(task, /figma-hierarchy-cleanup-mcp\/SKILL\.md/);
-  assert.match(task, /figma_hierarchy_cleanup_mcp_client\.py/);
+  assert.match(task, /figma-hierarchy-cleanup\/SKILL\.md/);
+  assert.match(task, /figma_hierarchy_cleanup_cli\.py/);
   assert.match(task, /analyze.*plan.*apply/i);
   assert.match(task, /Relay is the only Figma write authority/i);
   assert.doesNotMatch(task, /no external Skill installation, lookup, or terminal setup is required/i);
@@ -60,7 +60,7 @@ test("cleanup conversation treats duplicate PSD names as normal input and always
   assert.match(task, /node IDs, sibling order, type, geometry, and hierarchy are authoritative/i);
   assert.match(task, /Do not ask the user to resolve duplicate layer names/i);
   assert.match(task, /write cleanup-plan-decision\.json before ending this initial turn/i);
-  assert.match(task, /figma-hierarchy-cleanup-mcp\/SKILL\.md/);
+  assert.match(task, /figma-hierarchy-cleanup\/SKILL\.md/);
 });
 
 test("cleanup conversation requires an explicit machine-validated mapping before Relay dispatch", () => {
@@ -81,7 +81,7 @@ test("cleanup conversation requires an explicit machine-validated mapping before
 test("Relay-owned cleanup progress messages are Chinese for the plugin window", () => {
   const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
   const executor = fs.readFileSync(new URL("../src/cleanup/cleanupExecutor.ts", import.meta.url), "utf8");
-  const applyScript = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup-mcp/scripts/apply_cleanup_plan.py", import.meta.url), "utf8");
+  const applyScript = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup/scripts/apply_cleanup_plan.py", import.meta.url), "utf8");
 
   assert.match(runner, /Relay 正在执行已验证的层级整理事务/);
   assert.match(runner, /层级整理已完成并验证，是否满意？/);
@@ -139,13 +139,20 @@ test("cleanup adjustment follow-ups replace the stale authoritative snapshot", (
   assert.match(source, /fresh cleanup snapshot is required for cleanup plan adjustments/i);
 });
 
-test("Claude cleanup turns ignore unrelated global MCP servers", () => {
+test("cleanup run creation returns the locked snapshot root id", () => {
+  const source = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
+
+  assert.match(source, /run\.cleanupSnapshot \? \{ rootNodeId: run\.cleanupSnapshot\.rootNodeId \}/);
+  assert.match(source, /existing\.cleanupSnapshot \? \{ rootNodeId: existing\.cleanupSnapshot\.rootNodeId \}/);
+});
+
+test("Claude cleanup turns isolate unrelated global MCP servers", () => {
   const source = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
   const start = source.indexOf("function commandArgs(");
   const end = source.indexOf("export function codexExecArgs", start);
   const commandArgs = source.slice(start, end);
 
-  assert.match(commandArgs, /run\.taskKind === "cleanup"[\s\S]*--strict-mcp-config/);
+  assert.match(commandArgs, /run\.taskKind === "cleanup"[\s\S]*--strict-ai-config/);
 });
 
 test("Claude result events end the current turn immediately", () => {

@@ -4,7 +4,7 @@
 
 ## LLM 只审核原则
 
-- MCP Relay 和 Python 脚本负责读取 Figma、导出图片、生成 `prefab_spec.json`、生成 `image_download_plan.json`、处理 PNG、验证 Prefab。
+- Relay 和 Python 脚本负责读取 Figma、导出图片、生成 `prefab_spec.json`、生成 `image_download_plan.json`、处理 PNG、验证 Prefab。
 - LLM 只读取脚本输出的统一报告：`allPass`、`blockingErrors`、`warnings`、`summary`、`checks`、`artifacts`。
 - LLM 不手算坐标、border、MD5、尺寸，不手写 Prefab YAML，不手写 `.meta`，不把终端输出手动复制进 Spec。
 - `blockingErrors` 非空时必须停止；`warnings` 只允许由 LLM 判断是否需要用户确认。
@@ -27,21 +27,21 @@
 
 ## 只读分析流程
 
-1. 通过 `figmaMcpRelay` 驱动 `<relay-root>` 下的插件导出 Figma 节点、图片、截图和校验结果。
-2. MCP-backed wrapper 保存 `figma_to_prefab_mcp_result.json`、`figma_node_manifest.json`、`image_export_manifest.json` 和 `mcp_screenshots/*.png`。
+1. 通过 `figmaRelay` 驱动 `<relay-root>` 下的插件导出 Figma 节点、图片、截图和校验结果。
+2. CLI + WebSocket wrapper 保存 `figma_to_prefab_relay_result.json`、`figma_node_manifest.json`、`image_export_manifest.json` 和 `relay_screenshots/*.png`。
 3. 加载 `references/json-spec-format.md`（JSON Spec 格式规范）。
-4. 调用 `gen_spec.py` 从 MCP Relay manifest 生成：
+4. 调用 `gen_spec.py` 从 Relay manifest 生成：
    - `<unity-project>/.tmp/prefab_spec.json`
    - `<unity-project>/.tmp/image_download_plan.json`
    - `<unity-project>/.tmp/spec_audit_report.json`
 5. `gen_spec.py` 默认自动调用 ComponentSet 后处理：
-   - 优先使用 MCP Relay manifest 中的 `component.componentSetId` / `mainComponentSetId`
+   - 优先使用 Relay manifest 中的 `component.componentSetId` / `mainComponentSetId`
    - 命中时生成 `<unity-project>/.tmp/figma_component_specs/*.json`
    - 改写主 spec 的业务实例为 `PrefabInstance + activeVariant`
    - 写出 `<unity-project>/.tmp/componentset_report.json`
 6. LLM 读取 `spec_audit_report.json` 和 `componentset_report.json`，只审核 `blockingErrors`、`warnings` 和 `summary`，不逐节点重算 manifest。
 7. 在 Unity 工程内只读查找相似 Prefab 和相似图片目录，用于输出建议，不自动改结构。
-8. 列出修改计划 + MCP Relay result + Spec 审核摘要 + 影响文件，等待用户确认。
+8. 列出修改计划 + Relay result + Spec 审核摘要 + 影响文件，等待用户确认。
 
 ## 写入规则（优化后）
 
@@ -49,7 +49,7 @@
 
 ### 阶段二执行流程
 
-1. **[脚本处理图片]** 调用 `process_images.py` 读取 MCP Relay manifest/base64，按 `sliceKind` 直接写入或 fallback 合成九宫 PNG、导出普通图片、复制 Common_Texture。脚本必须校验 `--output-dir` 与 `image_download_plan.json` 的非复用 `targetAssetPath` 父目录一致；`Assets/...` 参数必须解析到 `<unity-project>/Assets/...`。
+1. **[脚本处理图片]** 调用 `process_images.py` 读取 Relay manifest/base64，按 `sliceKind` 直接写入或 fallback 合成九宫 PNG、导出普通图片、复制 Common_Texture。脚本必须校验 `--output-dir` 与 `image_download_plan.json` 的非复用 `targetAssetPath` 父目录一致；`Assets/...` 参数必须解析到 `<unity-project>/Assets/...`。
 2. `process_images.py` 必须写入 `<unity-project>/.tmp/image_process_report.json`。
 3. **[执行前门禁]** LLM 读取 `image_process_report.json`，确认 `blockingErrors` 为空；文件存在性和导入状态由 `uloop execute-dynamic-code` 的 Unity 返回值确认。
 4. **[uLoop CLI]** 反射执行生成。若存在 `componentset_report.json` 中的 component spec，必须先生成所有 component spec，再生成 `.tmp/prefab_spec.json`
@@ -66,7 +66,7 @@
    - 所有 `images[].targetDir` 必须等于本次目标图片目录。
    - 每个预期业务实例必须通过 `--expect-prefab-instance Name=prefabId` 显式声明。
    - 脚本通过只能说明 JSON 契约正确；仍要通过 `uloop execute-dynamic-code` 的 AssetDatabase 检查证明 `sourcePrefabPath` 可加载。
-8. 图片更新策略仍按 `references/workflow-figma-to-unity.md` 中的 MD5 对比规则执行，但 MD5 计算必须由 MCP Relay/脚本报告提供，不由 LLM 手算。
+8. 图片更新策略仍按 `references/workflow-figma-to-unity.md` 中的 MD5 对比规则执行，但 MD5 计算必须由 Relay/脚本报告提供，不由 LLM 手算。
 9. 导入成功并完成基础验证后，必须只读分析目标 Prefab 同目录和相似命名 Prefab，推算层级、组件挂载、字段绑定和公共复用习惯，并输出建议报告。
 10. 建议报告输出后必须停止并询问用户是否执行具体建议项；没有二次确认前，不得执行任何推断建议产生的 Unity 写入。
 
@@ -89,7 +89,7 @@
 1. 从切片尺寸推算 `spriteBorder`（left/bottom/right/top），写入 JSON Spec 的 `spriteSettingJson`
 2. 导出图片时必须按 `sliceKind` 输出：`9slice = (left + 2 + right) × (top + 2 + bottom)`；`h3slice = (left + 2 + right) × sourceVisibleSize.height`；`v3slice = sourceVisibleSize.width × (top + 2 + bottom)`
 3. 在 JSON Spec 中设置 `"imageType": "Sliced"`，FigmaPrefabGenerator 自动设置 `m_Type: 1`
-4. MCP Relay 父节点有 IMAGE fill 时优先使用父节点 `imageHash`；父节点缺失时才解析 `__slice_*` 子节点，并在报告中记录 fallback。
+4. Relay 父节点有 IMAGE fill 时优先使用父节点 `imageHash`；父节点缺失时才解析 `__slice_*` 子节点，并在报告中记录 fallback。
 
 ## TMP 文字 AutoSize 规则
 
@@ -102,7 +102,7 @@
 
 ## TMP 文本框宽高规则
 
-从 Figma 导入 Text 节点时，`NodeSpec.rect.w/h` 必须使用 MCP Relay manifest 中该文本节点自身的 `bounds.width/height`。生成 Prefab 后，对应 `TextMeshProUGUI` 所在 `RectTransform.sizeDelta.x/y` 必须与 Spec 宽高一致，容差 0.5px；任何 Unity 文本框比 Figma 小或大的残留都是阻塞失败。
+从 Figma 导入 Text 节点时，`NodeSpec.rect.w/h` 必须使用 Relay manifest 中该文本节点自身的 `bounds.width/height`。生成 Prefab 后，对应 `TextMeshProUGUI` 所在 `RectTransform.sizeDelta.x/y` 必须与 Spec 宽高一致，容差 0.5px；任何 Unity 文本框比 Figma 小或大的残留都是阻塞失败。
 
 ### 文本业务绑定限制
 

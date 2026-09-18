@@ -22,8 +22,8 @@ test("log viewer exposes source, level, operation and keyword filters", async ()
 test("log viewer queries the Relay log API and can download filtered JSONL", async () => {
   const ui = await readFile(uiPath, "utf8");
 
-  assert.match(ui, /relayEndpoint\("\/logs\?"\s*\+\s*query\.toString\(\)\)/);
-  assert.match(ui, /relayEndpoint\("\/logs\/download\?"\s*\+\s*query\.toString\(\)\)/);
+  assert.match(ui, /sendRelaySocketRequest\("logs.query"/);
+  assert.match(ui, /new Blob/);
   assert.match(ui, /function\s+refreshLogViewer\s*\(/);
   assert.match(ui, /function\s+downloadFilteredLogs\s*\(/);
 });

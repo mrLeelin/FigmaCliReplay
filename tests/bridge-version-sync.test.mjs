@@ -70,15 +70,13 @@ test("Bridge version comparison requires an exact reported release version", () 
   );
 });
 
-test("Bridge version mismatch is terminal for configured and scanned gateways", () => {
-  const scanStart = ui.indexOf("async function scanUnityGateways(preferredUrl)");
-  const connectStart = ui.indexOf("async function connectUnity()", scanStart);
+test("Bridge version mismatch is terminal without scanning other gateways", () => {
+  const connectStart = ui.indexOf("async function connectUnity()");
   const disconnectStart = ui.indexOf("function disconnectUnity()", connectStart);
-  const scanSource = ui.slice(scanStart, connectStart);
   const connectSource = ui.slice(connectStart, disconnectStart);
 
-  assert.match(scanSource, /if \(error && error\.bridgeVersionMismatch\) throw error/);
-  assert.match(connectSource, /probeUnityUrl\(configuredUrl\)[\s\S]*?if \(error && error\.bridgeVersionMismatch\) throw error/);
+  assert.doesNotMatch(ui, /scanUnityGateways|buildUnityProbeUrls/);
+  assert.match(connectSource, /await probeUnityUrl\(configuredUrl\)/);
   assert.match(connectSource, /unityBridgeVersionMismatch = error && error\.bridgeVersionMismatch \? error : null/);
 });
 

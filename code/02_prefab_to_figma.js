@@ -157,7 +157,7 @@ async function handleFigmaToPrefabExport(message) {
   }
 }
 
-/** 执行 Figma 节点层级整理只读分析，供本地 MCP Relay 客户端生成计划。 */
+/** 执行 Figma 节点层级整理只读分析，供本地 Relay 客户端生成计划。 */
 async function handleFigmaHierarchyCleanupAnalyze(message) {
   try {
     const result = await analyzeFigmaHierarchyCleanupJob(message.job || {});
@@ -418,7 +418,7 @@ async function handleFigmaCreateComponentSetFromNodeGroups(message) {
   }
 }
 
-/** 调整指定节点的宽高尺寸，通过 MCP Relay 提供给外部客户端调用。 */
+/** 调整指定节点的宽高尺寸，通过 Relay 提供给外部客户端调用。 */
 async function handleResizeNode(message) {
   try {
     const job = message.job || {};
@@ -489,7 +489,7 @@ async function handleResizeNode(message) {
   }
 }
 
-/** 执行 Unity Prefab 导出包写入 Figma，供 prefab-to-figma HTTP MCP Relay 客户端调用。 */
+/** 执行 Unity Prefab 导出包写入 Figma，供 prefab-to-figma HTTP Relay 客户端调用。 */
 /** 鍒犻櫎鎸囧畾鑺傜偣 ID锛屼粎鐢ㄤ簬娓呯悊鏄庣‘澶辫触鐨勮嚜鍔ㄥ鍏ヨ妭鐐广€?*/
 async function handleDeleteNodeById(message) {
   try {

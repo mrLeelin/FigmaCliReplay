@@ -37,7 +37,7 @@ def get_png_from_base64(b64_str):
 
 
 def write_base64_png(b64_str, file_path):
-    """把 MCP Relay 导出的 PNG base64 原样写入磁盘，避免重编码导致 MD5 变化。"""
+    """把 Relay 导出的 PNG base64 原样写入磁盘，避免重编码导致 MD5 变化。"""
     raw = base64.b64decode(b64_str)
     file_path.write_bytes(raw)
     return len(raw)
@@ -292,7 +292,7 @@ def synthesize_9slice(slices, children, base64_by_node):
 def synthesize_h3slice(slices, children, base64_by_node, display_height=None, parent_node_id=None):
     """h3-slice: 左 + 中 + 右 横向合成，保留完整显示高度。
 
-    MCP Relay 把 Figma CROP fill 导出为完整源图，需要根据 slice bounds 手动裁剪。
+    Relay 把 Figma CROP fill 导出为完整源图，需要根据 slice bounds 手动裁剪。
     """
     from PIL import Image
 
@@ -338,7 +338,7 @@ def synthesize_h3slice(slices, children, base64_by_node, display_height=None, pa
 def synthesize_v3slice(slices, children, base64_by_node, display_width=None, parent_node_id=None):
     """v3-slice: 上 + 中 + 下 纵向合成，保留完整显示宽度。
 
-    MCP Relay 把 Figma CROP fill 导出为完整源图（不是裁剪后区域），
+    Relay 把 Figma CROP fill 导出为完整源图（不是裁剪后区域），
     所以 get_slice 拿到的是整张源图，需要根据 slice bounds 手动裁剪。
     """
     from PIL import Image
@@ -615,7 +615,7 @@ def build_download_plan_size_map(plan_data):
 
 
 def load_manifest_data(manifest_dir):
-    """读取 MCP Relay manifest；缺失或解析失败时返回前置门禁错误。"""
+    """读取 Relay manifest；缺失或解析失败时返回前置门禁错误。"""
     manifest_path = Path(manifest_dir)
     node_path = manifest_path / "figma_node_manifest.json"
     export_path = manifest_path / "image_export_manifest.json"
@@ -731,7 +731,7 @@ def validate_manifest_plan_contract(manifest_dir, plan_data, node_data, export_d
         if mismatches:
             errors.append({
                 "code": "manifestProvenanceMismatch",
-                "message": "image_download_plan.json 与当前 MCP Relay manifest 不是同一批产物，停止图片写入。",
+                "message": "image_download_plan.json 与当前 Relay manifest 不是同一批产物，停止图片写入。",
                 "details": {
                     "downloadPlanManifest": provenance,
                     "actualManifest": {
@@ -797,7 +797,7 @@ def crop_png_to_expected_size(file_path, expected_size):
 
 
 def build_exports_by_node(exports_list):
-    """按 Figma nodeId 聚合 MCP Relay 图片导出记录。"""
+    """按 Figma nodeId 聚合 Relay 图片导出记录。"""
     exports_by_node = defaultdict(list)
     for item in exports_list:
         node_id = str(item.get("nodeId") or "")
@@ -1153,7 +1153,7 @@ def build_image_process_report(nine_results, skipped_nine, written, normal_error
     if skipped_nine:
         warnings.append({
             "code": "nineSliceSkipped",
-            "message": "部分九宫容器缺少可合成数据，已跳过，需要检查 MCP Relay 图片导出。",
+            "message": "部分九宫容器缺少可合成数据，已跳过，需要检查 Relay 图片导出。",
             "details": skipped_nine,
         })
     if resolved_plan_exports:
@@ -1274,7 +1274,7 @@ def main():
     parser = argparse.ArgumentParser(description="并行九宫合成 + 图片导出")
     parser.add_argument("--unity-project", default="", help="Unity project root containing Assets and ProjectSettings")
     parser.add_argument("--manifest-dir", default=".tmp/figma-to-prefab",
-                        help="MCP Relay manifest 目录")
+                        help="Relay manifest 目录")
     parser.add_argument("--output-dir", default="Assets/_Art/Texture/GUI/Sharders",
                         help="PNG 输出目录")
     parser.add_argument("--common-dir", default="Assets/_Art/Texture/GUI/_Common/Element",
@@ -1302,7 +1302,7 @@ def main():
         write_guard_failure_report(args.output_report, output_dir, output_dir_errors)
         return 2
 
-    # 加载 MCP Relay 数据
+    # 加载 Relay 数据
     node_data, export_data, manifest_errors = load_manifest_data(manifest_dir)
     if manifest_errors:
         write_guard_failure_report(args.output_report, output_dir, manifest_errors)
@@ -1450,7 +1450,7 @@ def main():
         })
 
     # ── 从 exports 识别 Instance 中的九宫 ──
-    # MCP Relay 导出时会标记 sliceKind，但 Instance 内部结构不在 nodes_list 中
+    # Relay 导出时会标记 sliceKind，但 Instance 内部结构不在 nodes_list 中
     for e in exports_list:
         slice_kind = e.get("sliceKind")
         if slice_kind not in ("9slice", "h3slice", "v3slice"):
@@ -1464,7 +1464,7 @@ def main():
         w = source_size.get("width", e.get("width", 0))
         h = source_size.get("height", e.get("height", 0))
 
-        # MCP Relay 已经导出了合成后的九宫图，直接写入
+        # Relay 已经导出了合成后的九宫图，直接写入
         if nid in base64_by_node:
             nn = node_map.get(nid, {}).get("name", "unknown")
             sixed_fname = resolve_output_file_name(

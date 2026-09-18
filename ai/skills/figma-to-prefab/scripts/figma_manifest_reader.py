@@ -130,7 +130,7 @@ def summarize_exports(image_manifest: dict[str, Any], max_samples: int) -> dict[
 def build_summary(manifest_dir: Path, max_samples: int) -> dict[str, Any]:
     node_path = manifest_dir / "figma_node_manifest.json"
     image_path = manifest_dir / "image_export_manifest.json"
-    result_path = manifest_dir / "figma_to_prefab_mcp_result.json"
+    result_path = manifest_dir / "figma_to_prefab_relay_result.json"
 
     node_manifest = load_json(node_path) if node_path.exists() else {}
     image_manifest = load_json(image_path) if image_path.exists() else {}

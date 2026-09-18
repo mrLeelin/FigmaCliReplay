@@ -43,7 +43,7 @@ export function corsHeaders(headers: Record<string, string> = {}): Record<string
   return {
     ...headers,
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Figma-Mcp-Relay-Token, X-Figma-Mcp-Relay-Internal, X-Operation-Id, X-AI-Run-Capability, Mcp-Session-Id, MCP-Protocol-Version",
+    "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Figma-Relay-Token, X-Figma-Relay-Internal, X-Operation-Id, X-AI-Run-Capability",
     "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
     "Access-Control-Max-Age": "600"
   };
@@ -72,7 +72,7 @@ export function isFigmaPluginRequest(request: IncomingMessage): boolean {
 }
 
 export function isInternalRelayRequest(request: IncomingMessage): boolean {
-  const value = request.headers["x-figma-mcp-relay-internal"];
+  const value = request.headers["x-figma-relay-internal"];
   const text = Array.isArray(value) ? String(value[0] || "") : String(value || "");
   return text.toLowerCase() === "plugin-runtime";
 }
@@ -147,7 +147,7 @@ export function bearerToken(request: IncomingMessage): string {
   if (typeof value === "string" && value.toLowerCase().startsWith("bearer ")) {
     return value.slice("bearer ".length).trim();
   }
-  const direct = request.headers["x-figma-mcp-relay-token"];
+  const direct = request.headers["x-figma-relay-token"];
   return Array.isArray(direct) ? String(direct[0] || "") : String(direct || "");
 }
 

@@ -25,7 +25,7 @@ AI 第一次加载时只读快速检查清单，后续按确定性触发条件�
 | `prefab_export_audit_report.json` 中 `blockingErrors` 非空 | `references/pitfalls-unity-to-figma.md` 对应规则 |
 | `figma_write_plan_audit_report.json` 中 `prefabInstancePolicy` 失败 | `references/figma-layer-mapping.md#嵌套 PrefabInstance 组件复用规则` |
 | 导出包中 `prefabInstances.length > 0` | `references/figma-layer-mapping.md#嵌套 PrefabInstance 组件复用规则` |
-| MCP Relay 错误 `Cannot call with documentAccess: dynamic-page` | `references/pitfalls-dynamic-page-findall.md` |
+| Relay 错误 `Cannot call with documentAccess: dynamic-page` | `references/pitfalls-dynamic-page-findall.md` |
 | `figma_write_verify_report.json` 中 `prefabInstanceNodeType` 失败，reason=`parser_did_not_provide_instance_node_mapping` | `references/pitfalls-parent-mapping-write-plan.md` |
 | 非 PrefabInstance 节点但名称含 `Common_Prefab_` 前缀 | `references/pitfalls-static-image-vs-component-instance.md` |
 | 导出包中九宫数量 > 0 | `references/figma-layer-mapping.md#九宫动态切片规则` |
@@ -34,13 +34,13 @@ AI 第一次加载时只读快速检查清单，后续按确定性触发条件�
 
 ### AI 职责
 
-Prefab → Figma 默认走“无大模型确定性流水线”：AI MCP Host / Figma 插件 UI → `figmaMcpRelay` local companion (`/mcp`) → runtime relay → 固化脚本 → Figma 插件写入 → 插件读回验证。AI 不参与几何、资源、warning 阻塞性或截图验收的判定。
+Prefab → Figma 默认走“无大模型确定性流水线”：AI CLI / Figma 插件 UI → `figmaRelay` CLI + WebSocket (`/relay`) → runtime relay → 固化脚本 → Figma 插件写入 → 插件读回验证。AI 不参与几何、资源、warning 阻塞性或截图验收的判定。
 
-- ✅ AI 标准控制面优先使用仓库 `.mcp.json` 中的 `figmaMcpRelay`，调用 `figma_prefab_import_start` / `figma_prefab_import_status` 或通用 `figma_submit_job`。
-- ✅ `<relay-root>` 提供的 `/figma/pending`、`/figma/result`、`/assets/...`、`/prefab-to-figma/import` 是 MCP server 与 Figma 插件之间的 runtime relay，不是 AI 直接操作的首选入口。
-- ✅ MCP 默认 endpoint 是 `http://127.0.0.1:32130/mcp`；如果当前 `.mcp.json` 或本地配置使用其它端口，以配置为准，不要硬猜端口。
-- ✅ `prefab_to_figma_mcp_client.py` 只是命令行调试 / 无 MCP tool 暴露时的 fallback wrapper；AI runtime 已有 `figmaMcpRelay` tools 时，不要优先跑 Python wrapper。
-- ✅ Figma 插件通信优先 WebSocket `/figma`，polling endpoint 只作为 runtime fallback；AI 侧仍只调用 MCP tools。
+- Relay 生命周期由外部管理。AI 不得启动、重启、停止或重配服务；插件任务以 Relay 接受为预检，独立任务使用 `node dist/cli.js sessions`。连接失败记录原始错误并停止，不探测替代端口。
+- 业务命令与结果只走 WebSocket；HTTP 仅保留受控资源下载。
+- Relay 生命周期由外部管理。AI 不得启动、重启、停止或重配服务；插件任务以 Relay 接受为预检，独立任务使用 `node dist/cli.js sessions`。连接失败记录原始错误并停止，不探测替代端口。
+- 使用 `prefab_to_figma_cli.py` 提交固定写入计划，或通过共享 `prefab.import.start/get` 控制编排任务。
+- 插件命令与结果只走 `/figma` WebSocket；CLI 通过 `/relay` 查询和订阅原任务，不回退 HTTP，不重放结果未知的写入。
 - ✅ AI 只负责启动任务、读取任务状态、转述 `allPass/blockingErrors/warnings/summary/checks/artifacts`、定位失败发生在哪个固化步骤。
 - ✅ 失败时修脚本、插件或验证规则，让流水线下次自动判断；不要把判断外包给 AI 经验。
 - ❌ 不要手算坐标、九宫 CROP、旋转/翻转矩阵、图片 hash、节点数量。
@@ -80,7 +80,7 @@ Prefab → Figma 默认走“无大模型确定性流水线”：AI MCP Host / F
 ## Environment Checks
 
 - Run `python --version`; require Python 3.10+.
-- Confirm the local `figmaMcpRelay` companion is configured in `.mcp.json` or the current AI MCP config, and start it with `powershell -ExecutionPolicy Bypass -File "<relay-root>\start_mcp_companion.ps1" -Mode mcp` before AI tool calls.
+- Relay 生命周期由外部管理。AI 不得启动、重启、停止或重配服务；插件任务以 Relay 接受为预检，独立任务使用 `node dist/cli.js sessions`。连接失败记录原始错误并停止，不探测替代端口。
 - Confirm the Figma plugin UI panel is open; the plugin connects to the local runtime relay by WebSocket when available and falls back to polling because Figma plugins cannot listen as a server.
 - Confirm `<unity-project>/Assets/` and `<unity-project>/ProjectSettings/` exist.
 - Do not auto-install dependencies.
@@ -123,7 +123,7 @@ Expected outputs include `prefab-to-figma.json` and `report.md`.
 
 ## 固化脚本（确定性流水线模式）
 
-所有生产脚本和插件读回验证都必须优先输出统一审核结构，供 MCP Relay Server 和 UI 自动判断任务状态；AI 只转述，不重新裁决：
+所有生产脚本和插件读回验证都必须优先输出统一审核结构，供 Relay Server 和 UI 自动判断任务状态；AI 只转述，不重新裁决：
 
 ```json
 {
@@ -177,47 +177,38 @@ python "<relay-root>/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py
 
 功能：只生成 `figma_write_plan.json` 和 `figma_write_plan_audit_report.json`，不写 Figma。计划中列出图片上传、占位节点清理、文本描边、TMP 材质元数据、九宫源图、PrefabInstance、旋转/翻转 relativeTransform 和写入后验证项。
 
-### `figmaMcpRelay` — AI 标准写入控制面
+### `figmaRelay` — AI 标准写入控制面
 
-AI 侧优先通过 MCP tool 启动后台导入：
-
-```json
-{
-  "tool": "figma_prefab_import_start",
-  "arguments": {
-    "prefabPaths": ["Assets/MagicWarrior/_Resources/Prefabs/UGUI/Panel.prefab"],
-    "canvas": "auto",
-    "componentMode": "component",
-    "nestedPrefabComponentMode": "all",
-    "figmaUrl": "https://www.figma.com/design/FILE/NAME?node-id=1-2",
-    "targetNodeId": "1:2"
-  }
-}
-```
-
-随后使用 `figma_prefab_import_status` 轮询 `taskId`，只转述 `status/stage/percent/logs/result/errors` 和产物路径。
-
-### `prefab_to_figma_mcp_client.py` — MCP 命令行调试 wrapper
+将导入参数保存为 JSON（包含 clientRequestId、sessionId、fileKey 和 prefabPaths），执行：
 
 ```powershell
-python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" `
-  --package ".tmp/prefab-to-figma/Panel/prefab-to-figma.json" `
-  --write-plan ".tmp/prefab-to-figma/Panel/figma_write_plan.json" `
-  --result ".tmp/prefab-to-figma/Panel/prefab_to_figma_mcp_result.json"
+node dist/cli.js control --job-type prefab.import.start --session-id <sessionId> --payload-file import-request.json
+node dist/cli.js control --job-type prefab.import.get --session-id <sessionId> --payload-file import-status.json
 ```
 
-功能：调试模式下仍通过 `figmaMcpRelay` 提交写入任务；`http://127.0.0.1:32130/mcp` 是默认 AI MCP endpoint，`http://localhost:32130` 是默认插件 runtime relay。若当前配置使用其它端口，以配置为准。由 Figma 插件执行节点创建、图片写入、九宫切片、文本元数据、组件化和读回验证。脚本会输出：
+状态参数包含 taskId 和原 sessionId；只转述结构化结果，不重复提交未知写入。
 
-- `prefab_to_figma_mcp_result.json`
+### `prefab_to_figma_cli.py` — CLI 命令行入口
+
+```powershell
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_cli.py" `
+  --package ".tmp/prefab-to-figma/Panel/prefab-to-figma.json" `
+  --write-plan ".tmp/prefab-to-figma/Panel/figma_write_plan.json" `
+  --result ".tmp/prefab-to-figma/Panel/prefab_to_figma_relay_result.json"
+```
+
+- CLI 连接 `ws://127.0.0.1:32130/relay`，插件连接 `/figma` WebSocket。地址覆盖使用 CLI `--url` 或 Python `--relay-url`；HTTP 仅保留受控资源下载。
+
+- `prefab_to_figma_relay_result.json`
 - `figma_write_result.json`
 - `figma_write_verify_report.json`
-- `mcp_screenshots/*.png`（如插件返回截图）
+- `relay_screenshots/*.png`（如插件返回截图）
 
 可先运行健康检查或 job 预览：
 
 ```powershell
-python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --health
-python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_client.py" --dry-run `
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_cli.py" --health
+python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_cli.py" --dry-run `
   --package ".tmp/prefab-to-figma/Panel/prefab-to-figma.json" `
   --write-plan ".tmp/prefab-to-figma/Panel/figma_write_plan.json" `
   --job-output ".tmp/prefab-to-figma/Panel/prefab_to_figma_write_job.json"
@@ -226,14 +217,14 @@ python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_clien
 ## 默认执行流程（无大模型）
 
 1. 用户在 Unity Project 选择一个或多个 `.prefab`，Figma 插件读取 Unity 网关选区。
-2. AI 侧使用 `figmaMcpRelay.figma_prefab_import_start`，或 Figma 插件 UI 用当前文件 key、页面/选区上下文、组件模式调用本地后台导入。
-3. 本地 MCP/relay 后台依次执行：
+2. AI 侧使用 `node dist/cli.js control --job-type prefab.import.start`，或 Figma 插件 UI 用当前文件 key、页面/选区上下文、组件模式调用本地后台导入。
+3. 本地 Relay 后台依次执行：
    - `prefab_to_figma.py`
    - `verify_export_package.py`
    - `build_figma_write_plan.py`
-   - `prefab_to_figma_mcp_client.py`
+   - `prefab_to_figma_cli.py`
 4. 每一步只接受统一审核结构；`allPass=false` 或 `blockingErrors` 非空立即停止任务。
-5. Figma 插件读回验证生成 `figma_write_verify_report.json`，MCP server / runtime relay 汇总状态并返回 UI。
+5. Figma 插件读回验证生成 `figma_write_verify_report.json`，Relay 汇总状态并返回 UI。
 6. AI 只读取任务状态和报告路径，说明成功、失败或待用户决策项；不得补算或替代验证。
 
 ## 调试执行流程（AI 辅助）
@@ -244,7 +235,7 @@ python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_clien
 
 1. 加载 workflow、pitfalls、supported-components。
 2. 检查 Required Inputs：Prefab 输入（单 Prefab、目录批量、Unity 多选 Prefab 或 prefab-list）、Figma file URL/key、Canvas、component mode、`.tmp` 输出目录。
-3. 环境检查：`python --version`、`figmaMcpRelay.figma_health`、Figma 插件 UI 面板、`<unity-project>/Assets/` 与 `<unity-project>/ProjectSettings/`、脚本存在。
+3. 环境检查：`python --version`、`node dist/cli.js sessions`、Figma 插件 UI 面板、`<unity-project>/Assets/` 与 `<unity-project>/ProjectSettings/`、脚本存在。
 4. 用户确认 `.tmp` 输出后，调用 `prefab_to_figma.py`；Unity 多选 Prefab 时先生成 `.tmp/prefab-to-figma/prefab-list.txt`，再用 `--prefab-list`。
 5. 读取 `prefab_export_audit_report.json`，只基于 `allPass/blockingErrors/warnings/summary/checks/artifacts` 审核。
 6. 调用 `build_figma_write_plan.py` 生成写入计划。
@@ -257,8 +248,8 @@ python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_clien
 ### 阶段二：执行（Figma 写入与读回验证）
 
 1. 写入前必须读取 `references/figma-layer-mapping.md`。
-2. 标准 AI 写入路径是 `figmaMcpRelay` MCP tool → runtime relay → `figma-mcp-relay` Figma 插件。命令行调试也必须使用 MCP wrapper `prefab_to_figma_mcp_client.py`；不得直接 POST `/jobs`、`/figma/pending`、`/figma/result` 或让 LLM 手写官方/通用 Figma MCP `use_figma` 大段创建脚本。
-3. 正式写入时必须按 `figma_write_plan.json` 构建 MCP Relay job，不从终端输出手抄坐标或 hash。
+2. 标准 AI 写入路径是 项目 CLI → WebSocket Relay → `figma-relay` Figma 插件。命令行调试也必须使用 CLI wrapper `prefab_to_figma_cli.py`；不得直接 POST `/jobs`、`/figma/pending`、`/figma/result` 或让 LLM 手写官方/通用 Figma MCP `use_figma` 大段创建脚本。
+3. 正式写入时必须按 `figma_write_plan.json` 构建 Relay job，不从终端输出手抄坐标或 hash。
 4. 写入完成后只读取 `figma_write_verify_report.json` 转述流水线结果：
    - `imageHash` 必须为 40 位。
    - TMP Material Preset plugin data 必须完整。
@@ -266,7 +257,7 @@ python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_clien
    - `prefabInstances` 必须是 Figma `INSTANCE`，禁止 FRAME 占位。
    - 九宫父节点必须保留隐藏源图 fill 与 slice metadata。
    - component mode 结果必须确认。
-5. 截图验收必须由 Figma MCP Relay 插件或服务端产出截图/跳过原因；AI 不能凭肉眼或 JSON 数量宣称完成。若截图缺失，流水线报告必须明确 `screenshotExported=false` 和原因。
+5. 截图验收必须由 Figma Relay 插件或服务端产出截图/跳过原因；AI 不能凭肉眼或 JSON 数量宣称完成。若截图缺失，流水线报告必须明确 `screenshotExported=false` 和原因。
 
 ## Validation
 
@@ -276,7 +267,7 @@ python "<relay-root>/ai/skills/prefab-to-figma/scripts/prefab_to_figma_mcp_clien
 - Run `python "<relay-root>\ai\skills\prefab-to-figma\scripts\prefab_to_figma.py" --self-test` after parser edits.
 - Confirm JSON includes `root`, `nodes`, `warnings`, `stats`, and `visualBounds`.
 - Confirm `prefab_export_audit_report.json` and `figma_write_plan_audit_report.json` use the unified `allPass/blockingErrors/warnings/summary/checks/artifacts` shape.
-- Confirm `figma_write_verify_report.json` uses the unified `allPass/blockingErrors/warnings/summary/checks/artifacts` shape after MCP Relay execution.
+- Confirm `figma_write_verify_report.json` uses the unified `allPass/blockingErrors/warnings/summary/checks/artifacts` shape after Relay execution.
 - Confirm `report.md` lists warnings instead of silently ignoring unsupported data.
 - If Figma import is performed, inspect the target file and summarize visual or structural downgrades.
 

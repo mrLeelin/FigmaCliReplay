@@ -1,5 +1,5 @@
 """
-PSD 网格布局分析 + MCP Relay 提交脚本。
+PSD 网格布局分析 + Relay 提交脚本。
 
 用法:
     python grid_component_creator.py <manifest_summary.json> --root-id <figma_root_id> --relay-url <url>
@@ -8,27 +8,27 @@ PSD 网格布局分析 + MCP Relay 提交脚本。
     1. 读取 manifest_summary.json 获取图层坐标
     2. 通过 root frame 子节点映射 Figma node ID
     3. 分析 7 日签到网格布局
-    4. 提交 CREATE_GRID_COMPONENT 任务到 MCP Relay
+    4. 提交 CREATE_GRID_COMPONENT 任务到 Relay
 """
 import argparse
 import json
 import sys
 from pathlib import Path
 
-# 添加 figmaMcpRelay CLI wrapper 到路径
+# 添加 figmaRelay CLI wrapper 到路径
 def find_relay_root() -> Path:
     script_path = Path(__file__).resolve()
     for parent in script_path.parents:
-        if (parent / "client" / "figma_mcp_client.py").is_file():
+        if (parent / "client" / "figma_relay_cli.py").is_file():
             return parent
     raise RuntimeError(
-        f"Unable to locate the Figma MCP Relay root containing client/figma_mcp_client.py from {script_path}."
+        f"Unable to locate the Figma Relay root containing client/figma_relay_cli.py from {script_path}."
     )
 
 
 RELAY_ROOT = find_relay_root()
 sys.path.insert(0, str(RELAY_ROOT / "client"))
-from figma_mcp_client import health as ensure_mcp_companion, submit_grid_component_job
+from figma_relay_cli import health as ensure_relay, submit_grid_component_job
 
 DEFAULT_RELAY_URL = "http://localhost:32130"
 DAILY_GRID_Y_RANGE = (1780, 2000)
@@ -181,8 +181,8 @@ def String(value):
 def main():
     parser = argparse.ArgumentParser(description="网格 Component 创建工具")
     parser.add_argument("manifest", type=Path, help="manifest_summary.json 路径")
-    parser.add_argument("--root-id", required=True, help="MCP Relay 导入的根 Frame ID")
-    parser.add_argument("--relay-url", default=DEFAULT_RELAY_URL, help="MCP Relay 地址")
+    parser.add_argument("--root-id", required=True, help="Relay 导入的根 Frame ID")
+    parser.add_argument("--relay-url", default=DEFAULT_RELAY_URL, help="Relay 地址")
     parser.add_argument("--bridge-url", dest="relay_url", default=DEFAULT_RELAY_URL, help=argparse.SUPPRESS)
     parser.add_argument("--component-name", default="C_Daily_Slot", help="Component 名")
     parser.add_argument("--children-json", type=Path, help="根 Frame 子节点 JSON（手动提供）/ 省略时尝试从 manifest 构建")
@@ -214,7 +214,7 @@ def main():
     if not args.children_json:
         print(json.dumps({
             "warning": "No --children-json provided, using manifest idx as placeholder",
-            "note": "Run MCP query_frames first to get real node IDs, then pass --children-json",
+            "note": "Run project CLI figma-children first to get real node IDs, then pass --children-json",
             "slotAnalysis": slot_data,
             "mappings": mappings,
         }, ensure_ascii=False, indent=2))
@@ -229,8 +229,8 @@ def main():
         "rewardCount": {"type": "TEXT", "defaultValue": "0"},
     }
 
-    # 提交到 MCP Relay
-    ensure_mcp_companion(args.relay_url)
+    # 提交到 Relay
+    ensure_relay(args.relay_url)
     result = submit_grid_component_job(
         relay_url=args.relay_url,
         root_node_id=args.root_id,

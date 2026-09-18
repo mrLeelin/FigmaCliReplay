@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const taskSource = fs.readFileSync(new URL("../src/psdImportTask.ts", import.meta.url), "utf8");
-const httpSource = fs.readFileSync(new URL("../src/httpServer.ts", import.meta.url), "utf8");
+const controlSource = fs.readFileSync(new URL("../src/runtimeRelay.ts", import.meta.url), "utf8");
 const submitSource = fs.readFileSync(new URL("../ai/skills/psd-layer-to-figma/scripts/submit_psd_import_job.py", import.meta.url), "utf8");
 
 test("PSD task supports preview followed by apply using the same artifacts", () => {
@@ -11,8 +11,8 @@ test("PSD task supports preview followed by apply using the same artifacts", () 
   assert.match(taskSource, /applyPsdImportTask/);
   assert.match(taskSource, /baselineFingerprint/);
   assert.match(taskSource, /readResultSummary/);
-  assert.match(httpSource, /const psdApplyMatch/);
-  assert.match(httpSource, /applyPsdImportTask\(config, taskId, payload\)/);
+  assert.match(controlSource, /psd\.import\.apply/);
+  assert.match(controlSource, /applyPsdImportTask\(this\.config, taskId, payload\)/);
   assert.match(submitSource, /--import-mode/);
 });
 
@@ -28,7 +28,7 @@ test("gateway preserves all preview terminal states", () => {
 test("baseline adoption reuses artifacts but cannot call apply", () => {
   assert.match(taskSource, /adoptPsdImportBaseline/);
   assert.match(taskSource, /incremental-baseline-adopt/);
-  assert.match(httpSource, /\/adopt-baseline/);
+  assert.match(controlSource, /psd\.import\.adopt-baseline/);
   assert.match(submitSource, /baseline-adopted/);
 });
 

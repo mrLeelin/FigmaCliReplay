@@ -15,10 +15,10 @@ python "<relay-root>/ai/skills/prefab-to-figma/scripts/build_figma_write_plan.py
   --out ".tmp/prefab-to-figma/<Name>"
 ```
 
-只有 `figma_write_plan_audit_report.json.allPass == true` 且 `blockingErrors` 为空时，才能进入 Figma 写入。标准 AI 执行路径必须通过 `figmaMcpRelay` 提交任务；命令行调试可通过 `prefab_to_figma_mcp_client.py` 提交 `PREFAB_TO_FIGMA_WRITE`。最终都由 `<relay-root>` 下的插件按计划中的 `operations` 执行：
+只有 `figma_write_plan_audit_report.json.allPass == true` 且 `blockingErrors` 为空时，才能进入 Figma 写入。标准 AI 执行路径必须通过 `figmaRelay` 提交任务；命令行调试可通过 `prefab_to_figma_cli.py` 提交 `PREFAB_TO_FIGMA_WRITE`。最终都由 `<relay-root>` 下的插件按计划中的 `operations` 执行：
 
 - `imageUploads`：上传图片并验证 40 位 `imageHash`。
-- `placeholderCleanup`：`figmaMcpRelay` / runtime relay 路径不使用官方/通用 Figma MCP `upload_assets`，因此不会产生占位节点；如果走用户明确批准的 MCP fallback，仍必须单独清理。
+- MCP 回退入口已移除。Relay 或插件不可用时记录阻塞及实际资产状态，修复环境后继续 CLI + WebSocket 流程。
 - `textWrites`：按 `fontColor`、outline、underlay、TMP Material metadata 写文本。
 - `nineSliceWrites`：按 source rect 生成 CROP transform，并写隐藏源图 fill。
 - `prefabInstanceWrites`：全文件搜索 Component，创建 INSTANCE，禁止 FRAME 占位。
@@ -49,7 +49,7 @@ LLM 不得跳过写入计划，也不得从终端输出手抄坐标、hash 或�
 ### 流程
 
 1. **搜索现有组件**：对每个嵌套子 Prefab，先查找 Figma 文件中是否已有同名 Component。
-   - **必须搜索本地 Component**：`search_design_system` 只搜索已发布到库的组件，不包含文件内的本地 Component。必须由 Figma MCP Relay 插件遍历文件所有页面查找本地 Component：`figma.root.findAll(n => n.type === "COMPONENT" && n.name === "子PrefabName")`。
+   - **必须搜索本地 Component**：`search_design_system` 只搜索已发布到库的组件，不包含文件内的本地 Component。必须由 Figma Relay 插件遍历文件所有页面查找本地 Component：`figma.root.findAll(n => n.type === "COMPONENT" && n.name === "子PrefabName")`。
    - 如果找到匹配的 Component，直接创建 Instance 引用它，不要重复创建。
 2. **创建子 Prefab Component**：如果 Figma 中没有现成组件，先独立创建子 Prefab 的完整层级（按正常导入流程），然后转为 Figma Component。
    - 子 Prefab Component 放在与父 Prefab 同一个 Frame/Page 中（或用户指定的组件库页面）。

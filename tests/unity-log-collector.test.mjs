@@ -26,9 +26,13 @@ test("UnityLogCollector ingests Unity events once and preserves operationId", as
   let fetchCount = 0;
   const collector = new UnityLogCollector(logging, {
     discover: () => ({ found: true, gatewayUrl: "http://localhost:32129", updatedAtUtc: "2026-07-18T12:00:00Z" }),
-    fetcher: async () => {
+    command: async (projectPath, action, body, options) => {
+      assert.equal(projectPath, "E:/Unity");
+      assert.equal(action, "unity.logs");
+      assert.equal(options.query, "limit=1000");
+      assert.match(options.operationId, /^relay-query-/);
       fetchCount += 1;
-      return new Response(JSON.stringify({ events: [unityEvent] }), { status: 200, headers: { "content-type": "application/json" } });
+      return { events: [unityEvent] };
     }
   });
   const registry = {

@@ -1,6 +1,6 @@
 {
-  "name": "LKS Figma MCP Relay",
-  "id": "lks-figma-mcp-relay",
+  "name": "LKS Figma Relay",
+  "id": "lks-figma-relay",
   "api": "1.0.0",
   "editorType": ["figma"],
   "main": "code.js",

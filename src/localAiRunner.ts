@@ -52,9 +52,9 @@ interface AiRun {
 
 const CONFIG_PATH = path.join(LOCAL_DIR, "ai-runner.json");
 const RUNS_ROOT = path.join(PLUGIN_ROOT, ".tmp", "ai-runs");
-const CleanupSkillDirectory = path.join(PLUGIN_ROOT, "ai", "skills", "figma-hierarchy-cleanup-mcp");
+const CleanupSkillDirectory = path.join(PLUGIN_ROOT, "ai", "skills", "figma-hierarchy-cleanup");
 const CleanupSkillFile = path.join(CleanupSkillDirectory, "SKILL.md");
-const CleanupClientScript = path.join(CleanupSkillDirectory, "scripts", "figma_hierarchy_cleanup_mcp_client.py");
+const CleanupClientScript = path.join(CleanupSkillDirectory, "scripts", "figma_hierarchy_cleanup_cli.py");
 const CleanupPipelineScript = path.join(CleanupSkillDirectory, "scripts", "run_cleanup_pipeline.py");
 const runs = new Map<string, AiRun>();
 const MaxOutputEntries = 800;
@@ -197,7 +197,7 @@ function buildInteractiveTerminalTask(
     "",
     "This task was explicitly handed to an interactive local AI terminal by the user.",
     "Read and follow the task prompt below. Keep the conversation in this terminal for any follow-up requests.",
-    "The Figma MCP Relay at http://127.0.0.1:32130 is an externally managed endpoint. You are its client: never launch, restart, stop, reconfigure, probe, bind, or listen on its ports. If a Relay connection fails, report the exact error and do not add retries outside the task workflow.",
+    "The Figma Relay at http://127.0.0.1:32130 is an externally managed endpoint. You are its client: never launch, restart, stop, reconfigure, probe, bind, or listen on its ports. If a Relay connection fails, report the exact error and do not add retries outside the task workflow.",
     "",
     ...(unityProject ? ["## Unity project snapshot", "", "```json", JSON.stringify(unityProject, null, 2), "```", ""] : []),
     "## Task prompt", "", prompt,
@@ -272,7 +272,7 @@ function powerShellLiteral(value: string): string {
 export function cleanupInitialUserRequest(prompt: string): string {
   const normalized = prompt.trim();
   if (normalized.startsWith("# Relay-owned cleanup execution")
-    || normalized.startsWith("使用 Relay 内置整理技能：$figma-hierarchy-cleanup-mcp")) {
+    || normalized.startsWith("使用 Relay 内置整理技能：$figma-hierarchy-cleanup")) {
     return "\u6574\u7406\u5f53\u524d\u9009\u4e2d\u7684 Figma \u8282\u70b9\u3002";
   }
   return normalized;
@@ -287,22 +287,22 @@ export function buildCleanupConversationTask(prompt: string, cleanupSnapshot?: C
   const skillFile = CleanupSkillFile.replaceAll("\\", "/");
   const clientScript = CleanupClientScript.replaceAll("\\", "/");
   const pipelineScript = CleanupPipelineScript.replaceAll("\\", "/");
-  const projectSkillFile = ".figma/plugins/figma-mcp-relay/ai/skills/figma-hierarchy-cleanup-mcp/SKILL.md";
+  const projectSkillFile = ".figma/plugins/figma-relay/ai/skills/figma-hierarchy-cleanup/SKILL.md";
   return [
     "# Figma hierarchy cleanup conversation",
     "",
     "You are speaking directly with the user in the Figma plugin window. Follow the Relay-managed cleanup policy embedded in this task.",
-    "Cleanup skill identifier: $figma-hierarchy-cleanup-mcp.",
+    "Cleanup skill identifier: $figma-hierarchy-cleanup.",
     `Mandatory skill file: ${skillFile}. If this project exposes the plugin-installed path ${projectSkillFile}, read that equivalent file instead. This is a project-defined skill, not a Claude Code built-in skill.`,
     "Do not call Skill() or ToolSearch to discover this skill. Directly read the selected SKILL.md with UTF-8 encoding before analyzing any Figma node, then follow its standard analyze -> plan -> apply workflow.",
-    `Standard script entry points are ${clientScript} and ${pipelineScript}. Do not hand-write Relay HTTP jobs or use generic Figma MCP write tools. The first turn remains read-only; Relay executes the validated hierarchy transaction after planning, so do not invoke an apply command yourself before Relay advances the conversation phase.`,
+    `Standard script entry points are ${clientScript} and ${pipelineScript}. Submit Figma business operations through the project CLI and WebSocket; do not hand-write HTTP jobs or use generic Figma write tools. The first turn remains read-only; Relay executes the validated hierarchy transaction after planning, so do not invoke an apply command yourself before Relay advances the conversation phase.`,
     "所有面向用户的回复、进度摘要和错误说明必须使用简体中文。",
-    "Relay is the only Figma write authority. Use only the Relay-provided cleanup commands and verification evidence; never use an official or generic Figma MCP write tool.",
+    "Relay is the only Figma write authority. Use the project CLI and Relay-provided cleanup commands and verification evidence; never use an official or generic Figma write tool.",
     "",
     "## Relay lifecycle boundary",
-    "The Figma MCP Relay at http://127.0.0.1:32130 is an externally managed MCP endpoint. You are a client of that endpoint, not its service owner.",
+    "The Figma Relay is an externally managed WebSocket endpoint. You are a client of that endpoint, not its service owner.",
     "The task-start preflight is authoritative: this task was accepted by the Relay itself. Do not independently run curl, Invoke-WebRequest, or any direct /health probe, and do not guess another port such as localhost:3000.",
-    "Never launch, restart, stop, kill, or reconfigure the Relay. Never bind or listen on ports 32130 or 32131. Do not run start_mcp_companion, start_mcp_hidden, start_mcp_oneclick, npm run dev, or any equivalent service-management command.",
+    "Never launch, restart, stop, kill, or reconfigure the Relay. Never bind or listen on ports 32130 or 32131. Do not run start_relay.ps1, 启动Relay.bat, npm run dev, or any equivalent service-management command.",
     "If a Relay-provided command or tool reports WinError 10055, ENOBUFS, WinError 10048, EADDRINUSE, timeout, or a connection error, do not attempt a service restart, raw /health probe, or port diagnostic. Report the exact error as local TCP resource pressure that prevented this client from opening a connection; do not claim that the Relay is stopped or ask the user to start it. Stop the current turn without adding connection pressure.",
     "",
     "## Initial-turn safety boundary",
@@ -368,7 +368,7 @@ function startLocalAiTask(
       clientRequestId,
       cleanupPhase: existing.cleanupPhase,
     });
-    return { ok: true, runId: existing.runId, capabilityToken: existing.capabilityToken, runner: existing.config.runner, phase: existing.cleanupPhase, reused: true };
+    return { ok: true, runId: existing.runId, capabilityToken: existing.capabilityToken, runner: existing.config.runner, phase: existing.cleanupPhase, ...(existing.cleanupSnapshot ? { rootNodeId: existing.cleanupSnapshot.rootNodeId } : {}), reused: true };
   }
   if (taskKind === "cleanup") {
     const active = [...runs.values()].find((candidate) => candidate.sessionId === sessionId
@@ -439,7 +439,7 @@ function startLocalAiTask(
     throw error;
   }
   logInfo("Local AI task started", { runId, taskKind, runner: config.runner, inputChars: initialInputChars, taskChars: taskContent.length });
-  return { ok: true, runId, capabilityToken: run.capabilityToken, runner: config.runner, ...(run.cleanupPhase ? { phase: run.cleanupPhase } : {}) };
+  return { ok: true, runId, capabilityToken: run.capabilityToken, runner: config.runner, ...(run.cleanupPhase ? { phase: run.cleanupPhase } : {}), ...(run.cleanupSnapshot ? { rootNodeId: run.cleanupSnapshot.rootNodeId } : {}) };
 }
 
 export function getAiRun(runId: string, capabilityToken: string, afterSequence: number) {
@@ -660,7 +660,7 @@ function commandArgs(run: AiRun, prompt: string, resume: boolean): string[] {
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
     // Cleanup uses the Relay-managed local execution boundary. Loading unrelated
     // global MCP servers (for example codegraph) adds minutes and extra sockets.
-    if (run.taskKind === "cleanup") args.push("--strict-mcp-config");
+    if (run.taskKind === "cleanup") args.push("--strict-ai-config");
     // Unity quick-import has a fixed script pipeline. Claude's automatic Skill routing
     // spends minutes loading the broad skill before it reaches that pipeline.
     if (resume) args.push("--resume", run.cliSessionId!);
@@ -802,7 +802,7 @@ export function formatClaudeStreamEvent(value: unknown): string[] {
   for (const item of value.message.content) {
     if (!isRecord(item)) continue;
     if (item.type === "tool_use" && typeof item.name === "string") {
-      messages.push(`调用工具：${item.name.replace(/^mcp__figmaMcpRelay__/, "")}`);
+      messages.push(`调用工具：${item.name.replace(/^mcp__figmaRelay__/, "")}`);
     } else if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
       messages.push(item.text.trim());
     }

@@ -16,7 +16,7 @@ test("Unity import prompt directly names the project skill and its standard entr
 
   assert.match(unityPrompt, /\$figma-to-prefab/);
   assert.match(unityPrompt, /ai\/skills\/figma-to-prefab\/SKILL\.md/);
-  assert.match(unityPrompt, /figma_to_prefab_mcp_client\.py/);
+  assert.match(unityPrompt, /figma_to_prefab_cli\.py/);
   assert.match(unityPrompt, /Skill\(\)/);
   assert.doesNotMatch(unityPrompt, /`Skill`、`ToolSearch`、`Glob`、`Grep`、`Read`/);
 });
@@ -29,11 +29,11 @@ test("cleanup opens a local AI conversation from the selected target", () => {
   const requestEnd = ui.indexOf("function requestCleanupSnapshot", requestStart);
   const request = ui.slice(requestStart, requestEnd);
 
-  assert.match(startAiRun, /endpoint = "\/ai-runner\/run-prompt"/);
+  assert.match(startAiRun, /postIdempotentAiStartWithRetry\(payload, startOperation\)/);
   assert.match(startAiRun, /cleanupSnapshot: template === "cleanup" \? selection : undefined/);
   assert.match(startAiRun, /runner: template === "cleanup" \? runnerIdForCleanupProvider\(cleanupProviderId\)/);
   assert.match(startAiRun, /clientRequestId:/);
-  assert.match(startAiRun, /postIdempotentAiStartWithRetry\(endpoint, payload, startOperation\)/);
+  assert.match(startAiRun, /postIdempotentAiStartWithRetry\(payload, startOperation\)/);
   assert.doesNotMatch(startAiRun, /autoApprove: true/);
   assert.match(request, /pendingAutoAiTemplate = requestedTemplate/);
   assert.match(request, /if \(requestedTemplate === "cleanup"\) \{[\s\S]*requestCleanupSnapshot\(\);[\s\S]*return;/);
@@ -45,12 +45,8 @@ test("cleanup start waits for WebSocket registration and retries the same idempo
   const retry = ui.slice(retryStart, retryEnd);
 
   assert.ok(retryStart >= 0 && retryEnd > retryStart);
-  assert.match(retry, /await waitForRelaySocketRegistration\(/);
-  assert.match(retry, /payload\.clientRequestId/);
-  assert.match(retry, /start-network-retry/);
-  assert.match(retry, /response\.status === 403/);
-  assert.match(retry, /response\.status === 502/);
-  assert.match(retry, /response\.status === 503/);
+  assert.match(retry, /requestAiControlWithRetry\("ai\.run\.start", payload, "", operation, payload.template === "cleanup"\)/);
+  assert.doesNotMatch(retry, /fetchWithTimeout/);
 });
 
 test("registered WebSocket sessions are the primary AI control path", () => {
@@ -63,15 +59,15 @@ test("registered WebSocket sessions are the primary AI control path", () => {
 
   assert.match(ui, /function sendRelaySocketRequest\(/);
   assert.match(ui, /message\.type === "relay\.response"/);
-  assert.match(start, /sendRelaySocketRequest\("ai\.run\.start"/);
-  assert.match(poll, /getAiRunViewWithSocketFallback/);
-  assert.match(followup, /sendRelaySocketRequest\("ai\.run\.followup"/);
-  assert.match(stop, /sendRelaySocketRequest\(isCleanup \? "cleanup\.run\.cancel" : "ai\.run\.stop"/);
+  assert.match(start, /requestAiControlWithRetry\("ai\.run\.start"/);
+  assert.match(poll, /ai\.run\.subscribe/);
+  assert.match(followup, /requestAiControlWithRetry\("ai\.run\.followup"/);
+  assert.match(stop, /requestAiControlWithRetry\(isCleanup \? "cleanup\.run\.cancel" : "ai\.run\.stop"/);
   assert.match(gateway, /type === "relay\.request"/);
   assert.match(gateway, /relay\.response/);
   assert.match(gateway, /onClientRequest/);
   assert.match(index, /gateway\.onClientRequest/);
-  assert.match(index, /runLocalAiPrompt/);
+  assert.match(index, /createRelayControlHandler/);
 });
 
 test("cleanup polling uses the resumable AI-run view while retaining V2 compatibility only when present", () => {
@@ -80,9 +76,9 @@ test("cleanup polling uses the resumable AI-run view while retaining V2 compatib
   const pollEnd = ui.indexOf("async function continueAiCleanup", pollStart);
   const poll = ui.slice(pollStart, pollEnd);
   assert.match(poll, /isTransactionCleanupRun\(currentRun\)/);
-  assert.match(poll, /\/ai-runner\/runs\//);
+  assert.match(poll, /ai\.run\.subscribe/);
   assert.match(poll, /Object\.assign\(currentRun, \{/);
-  assert.match(poll, /\/cleanup\/runs\//);
+  assert.match(poll, /cleanup\.run\.subscribe/);
   assert.match(poll, /applyCleanupRunView\(currentRun, result\)/);
   assert.doesNotMatch(ui, /\/ai-runner\/run-cleanup/);
 });
@@ -114,7 +110,7 @@ test("stale websocket callbacks and late Figma results cannot clear newer execut
   assert.match(socket, /socket = new WebSocket/);
   assert.match(socket, /if \(relaySocket !== socket\) return/);
 
-  const resultStart = ui.indexOf('// 本地 MCP Companion 的 _RESULT 回传');
+  const resultStart = ui.indexOf('// 本地 Relay 的 _RESULT 回传');
   const resultEnd = ui.indexOf('// Unity 图片导出结果', resultStart);
   const resultHandler = ui.slice(resultStart, resultEnd);
   assert.match(resultHandler, /message\.requestId !== executingRequestId/);
@@ -166,7 +162,7 @@ test("cleanup keeps the generated prompt preview and cleanup action buttons visi
   assert.match(ui, /aiPromptSubAgentRow\.style\.display = template === "cleanup" \? "none" : ""/);
   assert.match(controls, /aiPromptPreviewField\.style\.display = ""/);
   assert.doesNotMatch(controls, /aiPromptPreviewField\.style\.display = template === "cleanup" \? "none" : ""/);
-  assert.match(ui, /\$figma-hierarchy-cleanup-mcp/);
+  assert.match(ui, /\$figma-hierarchy-cleanup/);
 });
 
 test("manual prompt actions can continue with the currently selected AI in a terminal", () => {
@@ -181,7 +177,7 @@ test("manual prompt actions can continue with the currently selected AI in a ter
   assert.match(ui, /openAiTerminalBtn\.addEventListener\("click", openAiTerminal\)/);
   assert.match(controls, /openAiTerminalBtn\.disabled = generatingAiPrompt \|\| aiCleanupBusy \|\| aiTerminalLaunching \|\| !aiPromptPreviewEl\.value\.trim\(\)/);
   assert.match(ui, /function runnerForCurrentAiPromptTemplate\(template\)/);
-  assert.match(terminal, /"\/ai-runner\/open-terminal"/);
+  assert.match(terminal, /"ai\.open-terminal"/);
   assert.match(terminal, /runnerForCurrentAiPromptTemplate\(template\)/);
   assert.match(terminal, /uiLogger\.startOperation\("ai\.terminal"/);
   assert.match(terminal, /任务文件：/);
@@ -218,10 +214,8 @@ test("AI follow-up retries reuse one request id so a lost response cannot execut
 
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   assert.match(helper, /clientRequestId/);
-  assert.match(helper, /followup-network-retry/);
-  assert.match(helper, /maxAttempts/);
-  assert.match(helper, /response\.status === 502/);
-  assert.match(helper, /response\.status === 503/);
+  assert.match(helper, /requestAiControlWithRetry\("ai\.run\.followup"/);
+  assert.match(helper, /operation, true\)/);
 });
 
 test("cleanup adjustment follow-ups capture and send a fresh hierarchy snapshot", () => {
@@ -231,6 +225,24 @@ test("cleanup adjustment follow-ups capture and send a fresh hierarchy snapshot"
   assert.match(ui, /captureCleanupSnapshotForFollowup/);
   assert.match(ui, /cleanupSnapshot:\s*cleanupSnapshot/);
   assert.match(ui, /followup-snapshot-request/);
+  assert.match(ui, /rootNodeId:\s*run\.cleanupSnapshotRootNodeId/);
+  assert.match(ui, /cleanupSnapshotRootNodeId:\s*result\.rootNodeId/);
+});
+
+test("AI follow-up falls back only for WebSocket transport failures", () => {
+  const helperStart = ui.indexOf("async function postIdempotentAiFollowupWithRetry(");
+  const helperEnd = ui.indexOf("async function continueAiCleanup()", helperStart);
+  const helper = ui.slice(helperStart, helperEnd);
+  const socketStart = ui.indexOf("function rejectRelaySocketRequests(");
+  const socketEnd = ui.indexOf("function registerRelaySocket()", socketStart);
+  const socket = ui.slice(socketStart, socketEnd);
+
+  assert.match(ui, /error\.relayTransportFailure !== true/);
+  assert.match(socket, /error\.relayTransportFailure = false/);
+  assert.match(socket, /transportError\.relayTransportFailure = true/);
+  assert.match(socket, /unavailableError\.relayTransportFailure = true/);
+  assert.match(socket, /timeoutError\.relayTransportFailure = true/);
+  assert.match(socket, /sendError\.relayTransportFailure = true/);
 });
 
 test("AI polling uses bounded backoff and aggregates repeated transport failures", () => {
@@ -242,7 +254,8 @@ test("AI polling uses bounded backoff and aggregates repeated transport failures
   const poll = ui.slice(pollStart, pollEnd);
 
   assert.match(schedule, /delayMs/);
-  assert.match(schedule, /Number\(delayMs\) \|\| 4000/);
+  assert.match(schedule, /activeAiCleanupRun\.subscriptionId/);
+  assert.doesNotMatch(schedule, /\|\| 4000/);
   assert.doesNotMatch(schedule, /setTimeout\(pollAiCleanupRun, 700\)/);
   assert.match(ui, /function aiCleanupPollRetryDelayMs\(failures\)/);
   assert.match(ui, /function shouldLogAiPollFailure\(failures\)/);
@@ -250,25 +263,10 @@ test("AI polling uses bounded backoff and aggregates repeated transport failures
   assert.match(poll, /if \(shouldLogAiPollFailure\(currentRun\.pollFailures\)\)/);
 });
 
-test("registered WebSocket sessions keep HTTP job polling as a one-minute fallback", () => {
-  const pollStart = ui.indexOf("async function pollOnce()");
-  const pollEnd = ui.indexOf("function reconnect()", pollStart);
-  const poll = ui.slice(pollStart, pollEnd);
-  const socketStart = ui.indexOf("function connectRelaySocket()");
-  const socketEnd = ui.indexOf("function processRelaySocketQueue()", socketStart);
-  const socket = ui.slice(socketStart, socketEnd);
-
-  assert.match(ui, /function relayFallbackPollDelayMs\(failures\)/);
-  assert.match(ui, /relaySocketRegistered[\s\S]{0,180}return 60000/);
-  assert.match(poll, /scheduleNextPoll\(relayFallbackPollDelayMs\(\)\)/);
-  assert.doesNotMatch(poll, /scheduleNextPoll\(500\)/);
-  assert.match(socket, /message\.type === "plugin\.registered"[\s\S]*scheduleNextPoll\(relayFallbackPollDelayMs\(\)\)/);
-  const openStart = socket.indexOf("socket.onopen = function");
-  const messageStart = socket.indexOf("socket.onmessage = function", openStart);
-  assert.doesNotMatch(socket.slice(openStart, messageStart), /refreshCleanupProviders\(\)/);
-  assert.match(ui, /function relaySocketReconnectDelayMs\(attempts\)/);
-  assert.match(socket, /scheduleRelaySocketReconnect\("socket-closed"\)/);
-  assert.doesNotMatch(socket, /setTimeout\(connectRelaySocket, 1500\)/);
+test("Figma execution uses WebSocket without polling or HTTP result fallback", () => {
+  assert.doesNotMatch(ui, /function pollOnce|scheduleNextPoll|relayFallbackPollDelayMs/);
+  assert.doesNotMatch(ui, /\/figma\/pending|\/figma\/result/);
+  assert.match(ui, /scheduleRelaySocketReconnect\("socket-closed"\)/);
 });
 
 test("background-throttled Figma panels receive a two-minute WebSocket heartbeat lease", () => {
@@ -302,11 +300,11 @@ test("AI runner selection is pinned per request while the explicit config endpoi
   assert.match(sync, /targetRunner = runnerIdForCleanupProvider\(providerId\)/);
   assert.match(sync, /aiRunnerSelect\.value = targetRunner/);
   assert.match(sync, /requestPinning: true/);
-  assert.match(write, /\/ai-runner\/config/);
+  assert.match(write, /ai\.config/);
   assert.match(write, /sessionId: relaySessionId/);
-  assert.match(write, /response\.status !== 403/);
+  assert.match(write, /error\.relayTransportFailure !== true/);
   assert.match(write, /await waitForRelaySocketRegistration\(/);
-  assert.match(write, /config-network-retry/);
+  assert.match(write, /websocket-retry/);
   assert.doesNotMatch(write, /\/health/);
   assert.match(select, /await writeAiRunnerConfigWithLiveSessionRetry\(payload, operation\)/);
   assert.match(select, /return true;/);
@@ -337,7 +335,7 @@ test("cleanup prompt rendering does not reintroduce a health probe or one-step v
   const buildStart = ui.indexOf("function buildAiPrompt(template, selectionInfo)");
   const buildEnd = ui.indexOf("function getAiPromptFigmaKey", buildStart);
   const build = ui.slice(buildStart, buildEnd);
-  assert.doesNotMatch(read, /figma-hierarchy-cleanup-mcp[^\n]*\/health/);
+  assert.doesNotMatch(read, /figma-hierarchy-cleanup[^\n]*\/health/);
   assert.doesNotMatch(build, /单次确认执行规则/);
   assert.doesNotMatch(build, /授权同时覆盖[\s\S]*ComponentSet/);
 });
@@ -363,7 +361,7 @@ test("permanent AI run polling failures stop instead of retrying indefinitely", 
 
   assert.match(terminal, /status === 403/);
   assert.match(terminal, /unknown run or invalid capability/i);
-  assert.match(poll, /error\.status = response\.status/);
+  assert.match(poll, /handleAiRunError\(currentRun, error\)/);
   assert.match(poll, /if \(isTerminalAiRunPollError\(error\)\) \{[\s\S]*?clearAiCleanupPollTimer\(\);[\s\S]*?activeAiCleanupRun = null;[\s\S]*?return;/);
 });
 

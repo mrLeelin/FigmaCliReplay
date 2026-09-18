@@ -35,7 +35,7 @@ test("top bar shows Bridge version immediately after the plugin release version"
 test("Unity gateway address is auto-discovered instead of manually edited", () => {
   assert.match(ui, /<input id="unityUrl"[^>]*\sreadonly(?:\s|\/?>)/);
   assert.match(ui, /<button id="unityConnectBtn">自动连接<\/button>/);
-  assert.match(ui, /for \(var port = unityPortMin; port <= unityPortMax; port \+= 1\)/);
+  assert.doesNotMatch(ui, /unityPortMin|unityPortMax|buildUnityProbeUrls/);
   assert.match(ui, /actualProjectPath !== expectedProjectPath/);
 });
 
@@ -43,32 +43,29 @@ test("settings tab reports every disconnected required service", () => {
   assert.match(ui, /id="settingsTabBtn"[^>]*data-tab="settings-tab"/);
   assert.match(ui, /\.tab-button\.connection-error::after\s*\{/);
   assert.match(ui, /function refreshSettingsConnectionAlert\(\)/);
-  assert.match(ui, /if \(!relayConnected\) missing\.push\("本地 MCP Companion"\)/);
+  assert.match(ui, /if \(!relayConnected\) missing\.push\("本地 Relay"\)/);
   assert.match(ui, /if \(!unityConnected\) missing\.push\("Unity 网关"\)/);
   assert.match(ui, /settingsTabBtn\.title = message/);
   assert.match(ui, /function setAiBadge\(online\)[\s\S]*?refreshSettingsConnectionAlert\(\)/);
   assert.match(ui, /function setUnityBadge\(online\)[\s\S]*?refreshSettingsConnectionAlert\(\)/);
 });
 
-test("Unity connection reads the selected project gateway before scanning ports", () => {
+test("Unity connection uses only the selected project discovery and WebSocket", () => {
   assert.match(ui, /async function readSelectedUnityGatewayConfig\(\)/);
-  assert.match(ui, /relayEndpoint\("\/unity-projects\/" \+ encodeURIComponent\(selectedUnityProject\.id\) \+ "\/gateway"\)/);
+  assert.match(ui, /sendRelaySocketRequest\("unity\.gateway\.get", \{ id: selectedUnityProject\.id \}/);
   assert.match(ui, /async function probeUnityUrl\(url\)/);
-  assert.match(ui, /async function scanUnityGateways\(preferredUrl\)[\s\S]*?buildUnityProbeUrls\(preferredUrl\)/);
+  assert.doesNotMatch(ui, /scanUnityGateways/);
 
   const connectStart = ui.indexOf("async function connectUnity()");
   const connectEnd = ui.indexOf("function disconnectUnity()", connectStart);
   const connectSource = ui.slice(connectStart, connectEnd);
   const readIndex = connectSource.indexOf("readSelectedUnityGatewayConfig()");
   const configuredProbeIndex = connectSource.indexOf("probeUnityUrl(configuredUrl)");
-  const fallbackLogIndex = connectSource.indexOf("项目配置不可用，开始兜底扫描");
-  const scanIndex = connectSource.indexOf("scanUnityGateways(");
 
   assert.match(connectSource, /正在读取 Unity 网关配置/);
-  assert.match(connectSource, /已从项目配置连接/);
+  assert.match(connectSource, /if \(!configuredUrl\) throw/);
   assert.ok(readIndex >= 0 && readIndex < configuredProbeIndex);
-  assert.ok(configuredProbeIndex < fallbackLogIndex && fallbackLogIndex < scanIndex);
-  assert.doesNotMatch(connectSource.slice(0, configuredProbeIndex), /buildUnityProbeUrls/);
+  assert.match(ui, /requestUnityCommand\("unity\.health"\)/);
 });
 
 test("Bridge version mismatch is surfaced in settings with an explicit sync action", () => {
@@ -79,7 +76,7 @@ test("Bridge version mismatch is surfaced in settings with an explicit sync acti
   assert.match(ui, /Bridge 已同步到 " \+ pluginReleaseVersion \+ "，等待 Unity 编译后重新连接。/);
 
   const installStart = ui.indexOf("async function installSelectedUnityBridge()");
-  const installEnd = ui.indexOf("function unityEndpoint(path)", installStart);
+  const installEnd = ui.indexOf("async function requestUnityCommand(", installStart);
   const installSource = ui.slice(installStart, installEnd);
   assert.doesNotMatch(installSource, /unityBridgeVersionMismatch\s*=\s*null/);
 });

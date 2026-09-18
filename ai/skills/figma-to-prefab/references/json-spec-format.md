@@ -1,6 +1,6 @@
 # JSON Spec 格式规范
 
-本文件定义脚本生成的 JSON Spec 与 `FigmaPrefabGenerator.cs` 之间的契约。阶段一由 `gen_spec.py` 从 MCP Relay manifest 生成此 JSON，阶段二中 C# 脚本读取并创建 Prefab。LLM 只审核脚本输出的结构化报告，不手写或手改 Spec。
+本文件定义脚本生成的 JSON Spec 与 `FigmaPrefabGenerator.cs` 之间的契约。阶段一由 `gen_spec.py` 从 Relay manifest 生成此 JSON，阶段二中 C# 脚本读取并创建 Prefab。LLM 只审核脚本输出的结构化报告，不手写或手改 Spec。
 
 ## 整体结构
 
@@ -74,7 +74,7 @@ FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")
 
 ### 图片下载清单（AI 侧契约）
 
-`ImageSpec` 不包含下载 URL。`gen_spec.py` 必须在阶段一额外生成 `<unity-project>/.tmp/image_download_plan.json` 和 `<unity-project>/.tmp/spec_audit_report.json`。阶段二由 `process_images.py` 按 MCP Relay manifest/base64 和下载计划写入图片，确认文件存在后再调用 `FigmaPrefabGenerator.Generate()`。
+`ImageSpec` 不包含下载 URL。`gen_spec.py` 必须在阶段一额外生成 `<unity-project>/.tmp/image_download_plan.json` 和 `<unity-project>/.tmp/spec_audit_report.json`。阶段二由 `process_images.py` 按 Relay manifest/base64 和下载计划写入图片，确认文件存在后再调用 `FigmaPrefabGenerator.Generate()`。
 
 推荐结构：
 
@@ -184,7 +184,7 @@ FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")
 
 当前生成器的 Text 节点负责静态 `TextMeshProUGUI` 视觉还原；文本字体统一绑定 `CommonFont.asset`。当 `textMaterial` 存在时，生成器会优先扫描现有 `CommonFont*.mat` 是否近似匹配描边/投影参数，匹配则复用；找不到时才基于 `CommonFont.mat` 在 `Assets/MagicWarrior/_Resources/Font/Package/FigmaGenerated/` 下创建新材质。它仍不表达 `CustomLanguageText`、`CustomText` 或多语言 Key；涉及业务绑定时，必须复用现有 Prefab 或列为生成后处理计划。
 
-Text 节点的 `rect.w/h` 必须来自 MCP Relay manifest 中该 Figma 文本节点自身的 `bounds.width/height`。生成后对应 `TextMeshProUGUI` 所在 `RectTransform.sizeDelta.x/y` 必须与 Spec 宽高一致，容差 0.5px；任何宽高不一致都视为阻塞失败。
+Text 节点的 `rect.w/h` 必须来自 Relay manifest 中该 Figma 文本节点自身的 `bounds.width/height`。生成后对应 `TextMeshProUGUI` 所在 `RectTransform.sizeDelta.x/y` 必须与 Spec 宽高一致，容差 0.5px；任何宽高不一致都视为阻塞失败。
 
 ### TextMaterialSpec — TMP 描边/投影材质需求
 
@@ -301,8 +301,8 @@ rect.h = sizeDelta.y
 ```
 
 **注意**：
-- 必须使用 MCP Relay manifest 中目标节点自身的 bounds/relativeBounds，不能使用父节点 metadata 的子节点 bounds。
-- 必须使用 MCP Relay manifest 中目标节点自身的 `constraints`；缺失时才回退中心锚点，并在审核报告中记录。
+- 必须使用 Relay manifest 中目标节点自身的 bounds/relativeBounds，不能使用父节点 metadata 的子节点 bounds。
+- 必须使用 Relay manifest 中目标节点自身的 `constraints`；缺失时才回退中心锚点，并在审核报告中记录。
 - INSTANCE 子节点的内部子坐标不可用于计算父节点头寸。
 - Figma 远程工具返回的非直接子节点坐标不可用；标准流程禁止使用它们生成 Spec。
 
@@ -384,7 +384,7 @@ rect.h = sizeDelta.y
 
 1. **nodes 是扁平数组**，通过 `childIndices` 建立父子关系。第一个节点必须是 `Root`。
 2. **坐标必须预转换**，`FigmaPrefabGenerator` 不进行 Figma→Unity 坐标转换。`rect.x/y` 直接作为 `anchoredPosition`。
-3. **图片处理**：阶段二中 `process_images.py` 从 MCP Relay manifest/base64 写入图片到 `targetDir`，然后 `uloop execute-dynamic-code` 调用 `AssetDatabase.Refresh`。
+3. **图片处理**：阶段二中 `process_images.py` 从 Relay manifest/base64 写入图片到 `targetDir`，然后 `uloop execute-dynamic-code` 调用 `AssetDatabase.Refresh`。
 4. **没有对应类型的 Figma 节点**：跳过该节点，或降级为 `Panel`。
 5. **spriteSettingJson 必须是合法 JSON 字符串**（注意转义引号）。
 6. **九宫格图片必须设置 spriteBorder**，非九宫格 border 全部为 0。

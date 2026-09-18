@@ -81,64 +81,12 @@ async function withServer(callback) {
   }
 }
 
-test("HTTP exposes provider discovery and dedicated cleanup actions", async () => {
+test("retired cleanup HTTP routes cannot invoke the controller", async () => {
   await withServer(async (baseUrl, calls) => {
-    const providers = await fetch(`${baseUrl}/ai-runner/providers`);
-    assert.equal(providers.status, 200);
-    assert.deepEqual((await providers.json()).providers.map((item) => item.id), ["codex", "claude-code"]);
-
-    const started = await fetch(`${baseUrl}/cleanup/runs`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: "figma-1", providerId: "codex", snapshot: { schemaVersion: 1, rootNodeId: "R", nodes: [] } }),
-    });
-    assert.equal(started.status, 200);
-    assert.equal((await started.json()).capabilityToken, "secret");
-
-    const status = await fetch(`${baseUrl}/cleanup/runs/cleanup-1?afterSequence=4`, {
-      headers: { "x-ai-run-capability": "secret" },
-    });
-    assert.equal(status.status, 200);
-    assert.equal((await status.json()).state, "review");
-
-    const approved = await fetch(`${baseUrl}/cleanup/runs/cleanup-1/approve`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-ai-run-capability": "secret" },
-      body: JSON.stringify({ approval: true, snapshotHash: "a".repeat(64) }),
-    });
-    assert.equal(approved.status, 200);
-    assert.equal((await approved.json()).state, "applying");
-
-    const confirmed = await fetch(`${baseUrl}/cleanup/runs/cleanup-1/confirm-component-sets`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-ai-run-capability": "secret" },
-      body: JSON.stringify({ satisfied: true }),
-    });
-    assert.equal(confirmed.status, 200);
-    assert.equal((await confirmed.json()).state, "applying");
-
-    const cancelled = await fetch(`${baseUrl}/cleanup/runs/cleanup-1/cancel`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-ai-run-capability": "secret" },
-      body: "{}",
-    });
-    assert.equal(cancelled.status, 200);
-    assert.equal((await cancelled.json()).state, "cancelled");
-    assert.deepEqual(calls.map((call) => call[0]), ["start", "get", "approve", "confirmComponentSets", "cancel"]);
-  });
-});
-
-test("cleanup routes return stable authorization and conflict status codes", async () => {
-  await withServer(async (baseUrl) => {
-    const unauthorized = await fetch(`${baseUrl}/cleanup/runs/cleanup-1`);
-    assert.equal(unauthorized.status, 403);
-
-    const duplicate = await fetch(`${baseUrl}/cleanup/runs`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: "figma-1", providerId: "claude-code", snapshot: { schemaVersion: 1, rootNodeId: "R", nodes: [] } }),
-    });
-    assert.equal(duplicate.status, 409);
-    assert.match((await duplicate.json()).error, /CLEANUP_ALREADY_RUNNING/);
+    for (const route of ["/ai-runner/providers", "/cleanup/runs", "/cleanup/runs/cleanup-1/approve", "/cleanup/runs/cleanup-1/cancel"]) {
+      const response = await fetch(baseUrl + route, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      assert.equal(response.status, 410);
+    }
+    assert.equal(calls.length, 0);
   });
 });

@@ -1,4 +1,4 @@
-// Figma MCP Relay build #248
+// Figma Relay build #282
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma MCP Relay build #248
+// Figma Relay build #282
 figma.showUI(__html__, {
   width: 460,
   height: 620,
   themeColors: true
 });
-// DIAG: 插件启动标记 (248 由 build.py 替换)
-figma.notify("Figma MCP Relay 插件已加载 (build 248)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "248" });
+// DIAG: 插件启动标记 (282 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 282)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "282" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -430,7 +430,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "248",
+        build: "282",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -596,7 +596,12 @@ async function handleCollectComponents(message) {
 /** 一次性读取当前选中根节点的紧凑层级快照；此命令严格只读。 */
 async function handleQueryCleanupSnapshot(message) {
   try {
-    const selection = figma.currentPage.selection || [];
+    const requestedRootId = typeof message.rootNodeId === "string" ? message.rootNodeId.trim() : "";
+    const requestedRoot = requestedRootId ? await figma.getNodeByIdAsync(requestedRootId) : null;
+    if (requestedRootId && !requestedRoot) {
+      throw new Error("AI 整理原始根节点已不存在，请重新开始一次整理会话。");
+    }
+    const selection = requestedRoot ? [requestedRoot] : (figma.currentPage.selection || []);
     if (selection.length !== 1) {
       throw new Error("AI 层级整理需要且只能选择 1 个根节点。");
     }
@@ -835,7 +840,7 @@ async function handleFigmaToPrefabExport(message) {
   }
 }
 
-/** 执行 Figma 节点层级整理只读分析，供本地 MCP Relay 客户端生成计划。 */
+/** 执行 Figma 节点层级整理只读分析，供本地 Relay 客户端生成计划。 */
 async function handleFigmaHierarchyCleanupAnalyze(message) {
   try {
     const result = await analyzeFigmaHierarchyCleanupJob(message.job || {});
@@ -1096,7 +1101,7 @@ async function handleFigmaCreateComponentSetFromNodeGroups(message) {
   }
 }
 
-/** 调整指定节点的宽高尺寸，通过 MCP Relay 提供给外部客户端调用。 */
+/** 调整指定节点的宽高尺寸，通过 Relay 提供给外部客户端调用。 */
 async function handleResizeNode(message) {
   try {
     const job = message.job || {};
@@ -1167,7 +1172,7 @@ async function handleResizeNode(message) {
   }
 }
 
-/** 执行 Unity Prefab 导出包写入 Figma，供 prefab-to-figma HTTP MCP Relay 客户端调用。 */
+/** 执行 Unity Prefab 导出包写入 Figma，供 prefab-to-figma HTTP Relay 客户端调用。 */
 /** 鍒犻櫎鎸囧畾鑺傜偣 ID锛屼粎鐢ㄤ簬娓呯悊鏄庣‘澶辫触鐨勮嚜鍔ㄥ鍏ヨ妭鐐广€?*/
 async function handleDeleteNodeById(message) {
   try {
@@ -2059,7 +2064,7 @@ if (!key) {
   }
   const asset = context.assetBytes.get(key);
   if (!asset || !asset.bytes || asset.bytes.length === 0) {
-    addPrefabBlockingError(context, "missingImageAssetBytes", "MCP Relay did not receive image bytes, cannot write Figma image.", {
+    addPrefabBlockingError(context, "missingImageAssetBytes", "Relay did not receive image bytes, cannot write Figma image.", {
       assetId: key,
       nodePath: sourceNode.path || sourceNode.name || ""
     });
@@ -2212,7 +2217,7 @@ function positionPrefabFixedText(textNode, underlay) {
  *   3. 褰撳墠椤甸潰鍑虹幇娆℃暟鏈€澶氱殑瀛椾綋
  *   4. 鍏ㄦ枃浠跺嚭鐜版鏁版渶澶氱殑瀛椾綋
  */
-/** Update imported text node fonts through MCP Relay. */
+/** Update imported text node fonts through Relay. */
 async function handleChangeTextFonts(message) {
   try {
     const job = message.job || {};
@@ -2923,10 +2928,10 @@ function prefabRectObject(value) {
   };
 }
 
-/** Export top-level imported node screenshot as MCP Relay verification evidence. */
+/** Export top-level imported node screenshot as Relay verification evidence. */
 async function exportPrefabWriteScreenshot(root, context) {
   if (!context || !context.screenshotPolicy || context.screenshotPolicy.export !== true) {
-    context.warnings.push("Prefab 写入阶段已跳过 MCP Relay 截图导出，避免大节点导出阻塞；请使用 Figma 截图工具做最终视觉验收。");
+    context.warnings.push("Prefab 写入阶段已跳过 Relay 截图导出，避免大节点导出阻塞；请使用 Figma 截图工具做最终视觉验收。");
     return null;
   }
   try {
@@ -4005,7 +4010,7 @@ async function postPrefabWriteResultDirectly(message, result) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Figma-Mcp-Relay-Internal": "plugin-runtime"
+        "X-Figma-Relay-Internal": "plugin-runtime"
       },
       body: JSON.stringify({ requestId, result })
     }), 5000, "Prefab result direct post timeout");
@@ -4531,7 +4536,7 @@ async function exportFigmaToPrefabJob(job) {
   const screenshot = includeScreenshot ? await exportNodePngScreenshot(root) : null;
   const figmaNodeManifest = {
     schemaVersion: 1,
-    source: "figma-mcp-relay",
+    source: "figma-relay",
     fileKey: figma.fileKey || "",
     documentName: figma.root && figma.root.name ? figma.root.name : "",
     pageName: figma.currentPage.name,
@@ -5119,7 +5124,7 @@ function readFigmaStrokeWeight(node) {
   return roundNumber(node.strokeWeight);
 }
 
-/** 构建层级整理错误结果，保持 MCP Relay 返回结构稳定。 */
+/** 构建层级整理错误结果，保持 Relay 返回结构稳定。 */
 function buildHierarchyCleanupErrorResult(error, stage) {
   const message = error instanceof Error ? error.message : String(error);
   return {
@@ -11636,7 +11641,7 @@ function normalizeLayer(layer) {
   return normalized;
 }
 
-// 兼容导出端把九宫和文字数据放在嵌套对象中的 manifest，统一提升为 MCP Relay 创建节点时读取的顶层字段。
+// 兼容导出端把九宫和文字数据放在嵌套对象中的 manifest，统一提升为 Relay 创建节点时读取的顶层字段。
 function applyNestedManifestCompatibility(normalized, layer, mode, width, height) {
   if (mode === "nine-slice") {
     const nineSlice = layer.nineSlice && typeof layer.nineSlice === "object" ? layer.nineSlice : {};
@@ -11816,7 +11821,7 @@ async function createLayerNode(root, layer, context) {
   return await createImageLayer(root, layer, context);
 }
 
-// 尝试按 manifest 离线匹配结果或 MCP Relay 内组件索引创建通用组件实例。
+// 尝试按 manifest 离线匹配结果或 Relay 内组件索引创建通用组件实例。
 async function tryCreateCommonInstance(root, layer, context) {
   const match = resolveCommonMatch(layer, context);
   if (!match || !match.componentId) {
@@ -12289,7 +12294,7 @@ async function ensurePsdIndexOrder(root, orderedLayers, context) {
   }
 }
 
-// 导入后做关键门禁校验，结果会回传给 MCP Relay。
+// 导入后做关键门禁校验，结果会回传给 Relay。
 async function validateImportedRoot(root, orderedLayers, context) {
   const validation = {
     directChildCount: root.children.length,
@@ -12474,7 +12479,7 @@ function roundDelta(value) {
   return Math.round(numericOr(value, 0) * 1000) / 1000;
 }
 
-// 在 MCP Relay 内扫描通用组件库和通用图片库，避免标准流程依赖官方/通用 Figma MCP。
+// 在 Relay 内扫描通用组件库和通用图片库，避免标准流程依赖官方/通用 Figma MCP。
 async function buildComponentIndexes(job) {
   const config = Object.assign({ commonRootId: "62:115", imageRootId: "2896:32" }, job && job.componentLibrary || {});
   return {
@@ -12543,7 +12548,7 @@ async function findNodeAcrossPages(nodeId) {
   return foundNode;
 }
 
-// 解析 common 匹配：优先 manifest 离线结果，其次 MCP Relay 内组件库索引。
+// 解析 common 匹配：优先 manifest 离线结果，其次 Relay 内组件库索引。
 function resolveCommonMatch(layer, context) {
   const offline = layer.match || {};
   const offlineId = offline.matchedComponentId || layer.matchedComponentId;
@@ -12697,7 +12702,7 @@ function stripImportBoundsSuffix(value) {
   return String(value || "").replace(/__ImportBounds$/i, "");
 }
 
-// 导出根节点截图，作为 MCP Relay 标准交付证据。
+// 导出根节点截图，作为 Relay 标准交付证据。
 async function exportRootScreenshot(root, context) {
   try {
     const bytes = await promiseWithTimeout(root.exportAsync({ format: "PNG" }), 45000, "root screenshot export timeout");
@@ -12936,7 +12941,7 @@ async function suggestNineSliceFromCurrentSelection() {
   };
 }
 
-// 自动识别九宫边框：优先复用已有切片和 PSD/MCP Relay 元数据，最后才按尺寸比例兜底。
+// 自动识别九宫边框：优先复用已有切片和 PSD/Relay 元数据，最后才按尺寸比例兜底。
 function inferManualNineSliceBorderForSuggestion(source) {
   const existing = readExistingSliceBorderFromNode(source);
   if (existing) {
@@ -13043,7 +13048,7 @@ function adjustManualExistingNineSliceBorder(border, bounds, sliceKind) {
   };
 }
 
-// 读取 PSD/MCP Relay 写入的 Unity spriteBorder 元数据，格式为 left,bottom,right,top。
+// 读取 PSD/Relay 写入的 Unity spriteBorder 元数据，格式为 left,bottom,right,top。
 function readSharedSpriteBorder(node) {
   if (!node || typeof node.getSharedPluginData !== "function") {
     return null;
@@ -13307,7 +13312,7 @@ function decideManualNineSliceKind(width, height, border) {
   return "9-slice";
 }
 
-// 生成 PSD/MCP Relay 兼容的 slices 数据：source 和 target 都使用 [x,y,w,h]。
+// 生成 PSD/Relay 兼容的 slices 数据：source 和 target 都使用 [x,y,w,h]。
 function buildManualNineSlicePlan(width, height, border, sliceKind) {
   const w = Math.round(positiveOr(width, 1));
   const h = Math.round(positiveOr(height, 1));
@@ -13710,7 +13715,7 @@ function clamp01(value) {
 
 /**
  * 处理 EXPORT_IMAGES_TO_UNITY 消息。
- * 九宫：父节点 exportAsync + 读 pluginData spriteBorder → UI 发 MCP Relay Python cutter 切图
+ * 九宫：父节点 exportAsync + 读 pluginData spriteBorder → UI 发 Relay Python cutter 切图
  * 普通：直接 exportAsync → UI 发 Unity Gateway
  */
 async function handleExportImagesToUnity(message) {
@@ -13732,7 +13737,7 @@ async function handleExportImagesToUnity(message) {
 
   const images = [];
   for (const item of imageNodes) {
-    // 九宫：读取完整源图 bytes，并附带 border 元数据交给 MCP Relay Python cutter 合成最小 Sprite。
+    // 九宫：读取完整源图 bytes，并附带 border 元数据交给 Relay Python cutter 合成最小 Sprite。
     if (item.nineSlice) {
       // 九宫图必须使用完整源图，不能导出父节点渲染图后再裁剪，否则会把已裁过的切片再次裁成十字形。
       var parentHash = findFirstImageHash(item.node, true);

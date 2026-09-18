@@ -16,7 +16,7 @@
 
 ## 判定规则
 
-写入阶段（MCP Relay 或 use_figma）对以下条件的节点应搜索 Figma 文件中的已有 Component：
+写入阶段（Relay 或 use_figma）对以下条件的节点应搜索 Figma 文件中的已有 Component：
 
 1. 节点名称以 `[Common_Prefab_` 开头
 2. 或节点名称匹配 Figma 文件中某个 Component 的名称（忽略大小写）
@@ -30,12 +30,12 @@
 
 ## 适用范围
 
-- Figma MCP Relay 插件的 `prefabInstanceHandler` 或图片写入阶段
+- Figma Relay 插件的 `prefabInstanceHandler` 或图片写入阶段
 - 所有 non-PrefabInstance 但名称暗示通用组件的节点
 - 特别是 `Common_Prefab_`、`Common_`、`KaTong`、`KaTone` 等前缀
 
 ## 预防
 
-1. Figma MCP Relay 插件在创建 `__image` 节点前，先用节点名称搜索 Figma 文件中所有 Component
+1. Figma Relay 插件在创建 `__image` 节点前，先用节点名称搜索 Figma 文件中所有 Component
 2. 如果找到同名 Component，直接创建 INSTANCE 替代 FRAME+`__image`
-3. `build_figma_write_plan.py` 也可在 `imageUploads` 中标记这些节点为 `candidateComponentRef: true`，供 MCP Relay 特殊处理
+3. `build_figma_write_plan.py` 也可在 `imageUploads` 中标记这些节点为 `candidateComponentRef: true`，供 Relay 特殊处理

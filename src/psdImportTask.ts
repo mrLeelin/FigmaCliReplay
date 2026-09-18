@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -21,6 +22,8 @@ type PsdPreviewStatus =
   | "preview-no-changes"
   | "preview-baseline-required";
 type PsdImportTaskStatus =
+  | "cancel_requested"
+  | "cancelled"
   | "queued"
   | "running"
   | PsdPreviewStatus
@@ -64,6 +67,7 @@ export interface PsdImportTask {
 }
 
 const tasks = new Map<string, PsdImportTask>();
+const requests = new Map<string, Record<string, unknown>>();
 const taskOperations = new Map<string, OperationScope>();
 const logging = getLoggingRuntime();
 const taskLogger = logging.logger("psd-import-task");
@@ -79,6 +83,16 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
   if (!isRecord(payload)) {
     throw new Error("json body must be object");
   }
+  const requestId = stringValue(payload.clientRequestId);
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(requestId)) throw new Error("A stable clientRequestId is required for PSD import");
+  const identity = { ...payload, fileBase64: createHash("sha256").update(stringValue(payload.fileBase64)).digest("hex") };
+  const original = requests.get(requestId);
+  if (original) {
+    if (!isDeepStrictEqual(original, identity)) throw new Error("PSD request id conflicts with its original payload");
+    taskLogger.info("PSD import request deduplicated", { taskId: requestId });
+    return serializePsdImportTask(tasks.get(requestId)!);
+  }
+  if (tasks.size >= 100) throw new Error("PSD task capacity reached");
   const fileName = sanitizeFileName(stringValue(payload.fileName) || "source.psd");
   if (!/\.psd$/i.test(fileName)) {
     throw new Error("fileName must end with .psd");
@@ -102,16 +116,17 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
   if (mode === "incremental-preview" && (!targetNodeId || (targetType !== "FRAME" && targetType !== "COMPONENT"))) {
     throw new Error("incremental PSD import requires one FRAME or COMPONENT target");
   }
-  if (!fileKey && !sessionId) {
-    throw new Error("target.fileKey or target.sessionId is required");
+  if (!fileKey || !sessionId) {
+    throw new Error("target.fileKey and target.sessionId are required");
   }
 
-  const taskId = `psd-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const taskId = requestId;
   const importsRoot = path.join(PLUGIN_ROOT, ".tmp", "psd-to-figma");
   const taskDir = path.join(importsRoot, taskId);
+  if (fs.existsSync(taskDir)) throw new Error("PSD task artifacts already exist; execution status is unknown. Do not replay.");
   const sourcePsdPath = path.join(taskDir, fileName);
   const artifactDir = path.join(taskDir, "layers");
-  const resultPath = path.join(taskDir, "figma_mcp_result.json");
+  const resultPath = path.join(taskDir, "figma_relay_result.json");
   const timelinePath = path.join(taskDir, "timeline.json");
   const manifestSummaryPath = path.join(artifactDir, "manifest_summary.json");
 
@@ -146,6 +161,7 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
     logs: []
   };
   tasks.set(taskId, task);
+  requests.set(taskId, structuredClone(identity));
   startTaskOperation(task, "psd.import", "开始 PSD 导入任务");
   void runPsdImportTask(config, task, { reuseExportArtifacts: false });
   return serializePsdImportTask(task);
@@ -200,10 +216,36 @@ export function adoptPsdImportBaseline(config: GatewayConfig, taskId: string, pa
 }
 
 function serializePsdImportTask(task: PsdImportTask): PsdImportTask {
-  return {
+  return structuredClone({
     ...task,
     logs: task.logs.slice(-40)
-  };
+  });
+}
+
+export function cancelPsdImportTask(taskId: string): { ok: true; accepted: boolean; task: PsdImportTask } {
+  const task = tasks.get(taskId);
+  if (!task) throw new Error("Unknown PSD task; do not replay an uncertain write");
+  if (task.status === "cancel_requested" || task.status === "cancelled") {
+    taskLogger.info("Repeated PSD cancellation request", { taskId, status: task.status });
+    return { ok: true, accepted: true, task: serializePsdImportTask(task) };
+  }
+  if (PSD_PREVIEW_STATUSES.has(task.status as PsdPreviewStatus)) {
+    task.status = "cancelled";
+    task.stage = "cancelled";
+    task.updatedAt = task.completedAt = Date.now();
+    const operation = taskLogger.startOperation("psd.cancel", "Cancel PSD preview", { operationId: taskId });
+    operation.step("validate", "Preview is idle; no write is executing");
+    operation.cancel("PSD preview cancelled");
+    return { ok: true, accepted: true, task: serializePsdImportTask(task) };
+  }
+  if (task.status === "queued" || (task.status === "running" && task.stage === "exporting_psd_layers")) {
+    task.status = "cancel_requested";
+    task.updatedAt = Date.now();
+    taskOperations.get(taskId)?.step("cancel.requested", "Cancel after the current export returns; do not submit to Figma");
+    return { ok: true, accepted: true, task: serializePsdImportTask(task) };
+  }
+  taskLogger.warn("PSD cancellation rejected; retain actual execution outcome", { taskId, status: task.status, stage: task.stage });
+  return { ok: true, accepted: false, task: serializePsdImportTask(task) };
 }
 
 async function runPsdImportTask(
@@ -222,6 +264,7 @@ async function runPsdImportTask(
         "--summary"
       ]);
     }
+    if (task.status === "cancel_requested") throw new Error("PSD export cancellation requested");
     if (!fs.existsSync(task.manifestSummaryPath)) {
       throw new Error(`manifest_summary.json was not created: ${task.manifestSummaryPath}`);
     }
@@ -313,6 +356,15 @@ async function runPsdImportTask(
     taskOperations.get(task.taskId)?.succeed("PSD 导入任务完成", { mode: task.mode });
     taskOperations.delete(task.taskId);
   } catch (error) {
+    if (task.status === "cancel_requested") {
+      task.status = "cancelled";
+      task.stage = "cancelled";
+      task.updatedAt = task.completedAt = Date.now();
+      task.logs.push(formatTaskLog(task, "Cancelled before Figma submission"));
+      taskOperations.get(task.taskId)?.cancel("Export finished; Figma submission skipped");
+      taskOperations.delete(task.taskId);
+      return;
+    }
     task.status = "error";
     task.stage = "error";
     task.percent = 100;

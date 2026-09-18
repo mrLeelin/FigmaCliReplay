@@ -33,7 +33,7 @@ from prefab_to_figma import (  # noqa: E402
 from build_figma_write_plan import build_figma_write_plan, build_write_plan_audit_report  # noqa: E402
 from compare_unity_truth import compare_package  # noqa: E402
 from rect_transform import extract_rotation_z  # noqa: E402
-from prefab_to_figma_mcp_client import build_asset_entries, build_verify_report  # noqa: E402
+from prefab_to_figma_cli import build_asset_entries, build_verify_report  # noqa: E402
 from unity_yaml import parse_unity_documents  # noqa: E402
 from unity_project_paths import resolve_unity_project  # noqa: E402
 
@@ -751,9 +751,9 @@ def _check_rect_transform_constraints_export_fixture() -> None:
 
 
 def _check_mcp_client_fixture() -> None:
-    """验证 MCP wrapper 的资源映射和统一审核报告归一化。"""
+    """验证 CLI wrapper 的资源映射和统一审核报告归一化。"""
 
-    with tempfile.TemporaryDirectory(prefix="prefab-to-figma-mcp-relay-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="prefab-to-figma-relay-") as temp_dir:
         temp_path = Path(temp_dir)
         asset_path = temp_path / "sprite.png"
         asset_path.write_bytes(b"\x89PNG\r\n\x1a\n")

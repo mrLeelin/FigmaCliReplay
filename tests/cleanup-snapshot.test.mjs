@@ -178,6 +178,8 @@ test("plugin exposes one read-only cleanup snapshot command", () => {
 
   assert.match(handlers, /message\.type === "QUERY_CLEANUP_SNAPSHOT"/);
   assert.match(handlers, /async function handleQueryCleanupSnapshot/);
+  assert.match(handlers, /message\.rootNodeId/);
+  assert.match(handlers, /figma\.getNodeByIdAsync\(requestedRootId\)/);
   assert.match(handlers, /buildCleanupSnapshot\(selection\[0\]\)/);
   assert.match(handlers, /type: "QUERY_CLEANUP_SNAPSHOT_RESULT"/);
   assert.match(buildScript, /"07_cleanup_snapshot\.mjs"/);

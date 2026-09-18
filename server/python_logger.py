@@ -1,4 +1,4 @@
-"""Structured logging shared by every Python entrypoint in Figma MCP Relay."""
+"""Structured logging shared by every Python entrypoint in Figma Relay."""
 
 from __future__ import annotations
 

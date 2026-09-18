@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using UnityEditor;
@@ -10,7 +11,7 @@ using UnityEngine.UI;
 namespace MagicWarrior.Editor.FigmaBridge
 {
     /// <summary>
-    /// Figma Bridge HTTP 服务器。
+    /// Figma Bridge WebSocket 服务器，HTTP 仅负责协议升级与旧端拒绝。
     /// 监听 localhost:32129，为 LKS Figma 插件提供远程网关接口。
     /// 使用 [InitializeOnLoad] 在编辑器启动时自动初始化。
     /// </summary>
@@ -45,12 +46,13 @@ namespace MagicWarrior.Editor.FigmaBridge
         // ─────────────────────── 状态 ───────────────────────
 
         private static HttpListener _listener;
+        private static BridgeWebSocketTransport _webSocketTransport;
         private static bool _running;
         private static int _currentPort;
 
         /// <summary>待处理的请求队列（后台线程写入，主线程消费）</summary>
-        private static readonly Queue<HttpListenerContext> PendingContexts =
-            new Queue<HttpListenerContext>();
+        private static readonly Queue<BridgeCommand> PendingContexts =
+            new Queue<BridgeCommand>();
 
         private static readonly object QueueLock = new object();
 
@@ -129,6 +131,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                 _listener.Start();
                 _running = true;
                 _currentPort = port;
+                _webSocketTransport = new BridgeWebSocketTransport(Version, Path.GetDirectoryName(Application.dataPath));
 
                 // 注册主线程 Update 回调
                 EditorApplication.update -= ProcessPendingRequests;
@@ -140,7 +143,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                 AddLog($"[FigmaBridge] 服务器已启动，监听 {listenPrefix}");
                 if (port != PreferredPort)
                     AddLog($"[FigmaBridge] 首选端口被占用，已自动切换到 {port}");
-                FigmaBridgeGatewayDiscovery.Publish(CurrentGatewayUrl);
+                FigmaBridgeGatewayDiscovery.Publish(CurrentGatewayUrl, _webSocketTransport.Token);
 
                 error = "";
                 return true;
@@ -150,6 +153,9 @@ namespace MagicWarrior.Editor.FigmaBridge
                 error = ex.Message;
                 _running = false;
                 _currentPort = 0;
+                EditorApplication.update -= ProcessPendingRequests;
+                _webSocketTransport?.Dispose();
+                _webSocketTransport = null;
 
                 try
                 {
@@ -176,6 +182,13 @@ namespace MagicWarrior.Editor.FigmaBridge
             FigmaBridgeGatewayDiscovery.RemoveOwned(CurrentGatewayUrl);
             _running = false;
             EditorApplication.update -= ProcessPendingRequests;
+            _webSocketTransport?.Dispose();
+            _webSocketTransport = null;
+            lock (QueueLock)
+            {
+                while (PendingContexts.Count > 0)
+                    PendingContexts.Dequeue().Response.Complete(503, "application/json", Encoding.UTF8.GetBytes("{\"error\":\"Bridge stopped before execution\"}"));
+            }
 
             try
             {
@@ -252,7 +265,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         /// <summary>
         /// 后台线程回调：收到请求后放入队列，由主线程处理。
-        /// /ping 路径直接在后台线程响应，不经过 EditorApplication.update，避免抢夺焦点。
+        /// 只接收 /bridge WebSocket 升级，旧 HTTP 业务请求一律拒绝。
         /// </summary>
         private static void OnContextReceived(IAsyncResult ar)
         {
@@ -272,31 +285,14 @@ namespace MagicWarrior.Editor.FigmaBridge
             if (ctx != null)
             {
                 string path = ctx.Request.Url.AbsolutePath.TrimEnd('/');
-                if (path == "/ping")
+                if (path == "/bridge" && _webSocketTransport != null)
                 {
-                    // /ping 直接在后台线程响应，不进入主线程队列，避免 Unity 抢夺焦点
-                    var pingOperation = BridgeLogger.StartOperation(
-                        "unity.http-request",
-                        ctx.Request.Headers["X-Operation-Id"]);
-                    try
-                    {
-                        pingOperation.Step("route", "处理 Unity /ping 请求");
-                        RespondJson(ctx.Response, 200, "{\"connected\":true}");
-                        pingOperation.Succeed("Unity /ping 请求完成");
-                    }
-                    catch (Exception ex)
-                    {
-                        pingOperation.Fail(ex, "Unity /ping 请求失败");
-                        throw;
-                    }
+                    _ = _webSocketTransport.Accept(ctx);
+                    BeginAccept();
+                    return;
                 }
-                else
-                {
-                    lock (QueueLock)
-                    {
-                        PendingContexts.Enqueue(ctx);
-                    }
-                }
+                BridgeLogger.Warn("Legacy Unity HTTP request rejected; use CLI/WebSocket");
+                RespondJson(ctx.Response, 410, "{\"error\":\"Upgrade required: use CLI/WebSocket\"}");
             }
 
             // 继续接收下一个请求
@@ -305,16 +301,25 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         // ─────────────────────── 主线程处理 ───────────────────────
 
-        /// <summary>
-        /// EditorApplication.update 回调，在主线程中处理排队的 HTTP 请求。
-        /// 每帧最多处理 4 个请求，避免卡顿。
-        /// </summary>
+        internal static void EnqueueCommand(BridgeCommand command, BridgeWebSocketTransport transport = null)
+        {
+            lock (QueueLock)
+            {
+                if (!_running || (transport != null && transport != _webSocketTransport))
+                {
+                    command.Response.Complete(503, "application/json", Encoding.UTF8.GetBytes("{\"error\":\"Bridge instance stopped before execution\"}"));
+                    return;
+                }
+                PendingContexts.Enqueue(command);
+            }
+        }
+
         private static void ProcessPendingRequests()
         {
             int processed = 0;
             while (processed < 4)
             {
-                HttpListenerContext ctx;
+                BridgeCommand ctx;
                 lock (QueueLock)
                 {
                     if (PendingContexts.Count == 0) break;
@@ -323,6 +328,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
                 try
                 {
+                    ctx.Started?.Invoke();
                     DispatchRequest(ctx);
                 }
                 catch (Exception ex)
@@ -338,42 +344,36 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// 根据请求路径和方法分发到对应的处理函数。
         /// </summary>
-        private static void DispatchRequest(HttpListenerContext ctx)
+        private static void DispatchRequest(BridgeCommand ctx)
         {
             var operation = BridgeLogger.StartOperation(
-                "unity.http-request",
-                ctx.Request.Headers["X-Operation-Id"]);
-            ctx.Response.Headers.Set("X-Operation-Id", operation.OperationId);
+                "unity.command",
+                ctx.OperationId);
             try
             {
-                operation.Step("route", $"分发 Unity HTTP 请求：{ctx.Request.HttpMethod} {ctx.Request.Url.AbsolutePath}");
+                operation.Step("route", $"Dispatch Unity command: {ctx.Action}");
                 DispatchRequestCore(ctx);
-                operation.Succeed("Unity HTTP 请求完成");
+                if (ctx.Response.StatusCode >= 400)
+                    operation.Fail(new InvalidOperationException("Unity command returned " + ctx.Response.StatusCode), "Unity command rejected");
+                else operation.Succeed("Unity command completed");
             }
             catch (Exception ex)
             {
-                operation.Fail(ex, "Unity HTTP 请求失败");
+                operation.Fail(ex, "Unity command failed");
                 throw;
             }
         }
 
-        private static void DispatchRequestCore(HttpListenerContext ctx)
+        private static void DispatchRequestCore(BridgeCommand ctx)
         {
-            var req = ctx.Request;
             var resp = ctx.Response;
-
-            // 所有响应都加 CORS 头
-            SetCorsHeaders(resp);
-
-            // OPTIONS 预检请求
-            if (req.HttpMethod == "OPTIONS")
+            if (ctx.Method == "OPTIONS")
             {
-                resp.StatusCode = 204;
-                resp.Close();
+                resp.Complete(204, "application/json", new byte[0]);
                 return;
             }
 
-            string path = req.Url.AbsolutePath.TrimEnd('/');
+            string path = ctx.Action;
 
             switch (path)
             {
@@ -405,6 +405,9 @@ namespace MagicWarrior.Editor.FigmaBridge
                 case "/prefab-import-canvas":
                     HandlePrefabImportCanvas(ctx);
                     break;
+                case "/figma-to-prefab-import":
+                    HandleFigmaToPrefabImport(ctx);
+                    break;
                 case "/logs":
                     HandleLogs(ctx);
                     break;
@@ -416,15 +419,15 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         // ─────────────────────── API 端点 ───────────────────────
 
-        private static void HandleLogs(HttpListenerContext ctx)
+        private static void HandleLogs(BridgeCommand ctx)
         {
-            RespondJson(ctx.Response, 200, BridgeLogger.QueryJson(ctx.Request.QueryString));
+            RespondJson(ctx.Response, 200, BridgeLogger.QueryJson(ctx.Query));
         }
 
         /// <summary>
         /// GET /health → 返回连接状态和项目信息。
         /// </summary>
-        private static void HandleHealth(HttpListenerContext ctx)
+        private static void HandleHealth(BridgeCommand ctx)
         {
             List<string> currentPrefabPaths = GetSelectedPrefabPaths();
             List<string> currentPrefabNames = GetSelectedPrefabNames(currentPrefabPaths);
@@ -454,6 +457,8 @@ namespace MagicWarrior.Editor.FigmaBridge
             sb.AppendFormat("\"selectedFolder\":\"{0}\",", EscapeJsonValue(selectedFolder));
             sb.AppendFormat("\"imageTargetMode\":\"{0}\",", EscapeJsonValue(imageTarget.mode));
             sb.AppendFormat("\"replaceAssetPath\":\"{0}\",", EscapeJsonValue(imageTarget.replaceAssetPath));
+            sb.AppendFormat("\"selectedObjectIsFolder\":{0},", imageTarget.selectedObjectIsFolder ? "true" : "false");
+            sb.AppendFormat("\"selectedFolderIsEmpty\":{0},", imageTarget.selectedFolderIsEmpty ? "true" : "false");
             sb.AppendFormat("\"imageTargetDisplay\":\"{0}\",", EscapeJsonValue(BuildImageTargetDisplay(imageTarget)));
             sb.AppendFormat("\"selectedTextTargetName\":\"{0}\",", EscapeJsonValue(textTarget.name));
             sb.AppendFormat("\"selectedTextTargetType\":\"{0}\",", EscapeJsonValue(textTarget.type));
@@ -466,7 +471,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// GET /selected-folder → 返回 Project 窗口当前选中的 Assets 文件夹路径。
         /// </summary>
-        private static void HandleSelectedFolder(HttpListenerContext ctx)
+        private static void HandleSelectedFolder(BridgeCommand ctx)
         {
             ImageImportTarget imageTarget = ResolveImageImportTarget();
             if (!imageTarget.ok)
@@ -481,6 +486,8 @@ namespace MagicWarrior.Editor.FigmaBridge
                 $"\"selectedFolder\":\"{EscapeJsonValue(imageTarget.targetFolder)}\"," +
                 $"\"imageTargetMode\":\"{EscapeJsonValue(imageTarget.mode)}\"," +
                 $"\"replaceAssetPath\":\"{EscapeJsonValue(imageTarget.replaceAssetPath)}\"," +
+                $"\"selectedObjectIsFolder\":{(imageTarget.selectedObjectIsFolder ? "true" : "false")}," +
+                $"\"selectedFolderIsEmpty\":{(imageTarget.selectedFolderIsEmpty ? "true" : "false")}," +
                 $"\"imageTargetDisplay\":\"{EscapeJsonValue(BuildImageTargetDisplay(imageTarget))}\"" +
                 "}";
             AddLog($"[FigmaBridge] 当前图片导入目标：mode={imageTarget.mode}, folder={imageTarget.targetFolder}, replace={imageTarget.replaceAssetPath}");
@@ -490,7 +497,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// POST /export-selected → 解析当前选中 Prefab 并返回 LKS 格式文档。
         /// </summary>
-        private static void HandleExportSelected(HttpListenerContext ctx)
+        private static void HandleExportSelected(BridgeCommand ctx)
         {
             // 获取当前选中的 Prefab 路径
             string prefabPath = GetSelectedPrefabPath();
@@ -550,16 +557,14 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// GET /pull-latest?afterToken=xxx → 如果有新推送返回文档，否则 204。
         /// </summary>
-        private static void HandlePullLatest(HttpListenerContext ctx)
+        private static void HandlePullLatest(BridgeCommand ctx)
         {
-            string afterToken = ctx.Request.QueryString["afterToken"] ?? "";
+            string afterToken = ctx.Query["afterToken"] ?? "";
 
             // 没有缓存的文档，或 token 相同表示没有新推送
             if (string.IsNullOrEmpty(_latestDocumentJson) || afterToken == LatestPushToken)
             {
-                ctx.Response.StatusCode = 204;
-                SetCorsHeaders(ctx.Response);
-                ctx.Response.Close();
+                ctx.Response.Complete(204, "application/json", new byte[0]);
                 return;
             }
 
@@ -573,17 +578,13 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// POST /resolve-image → 根据请求中的路径返回图片原始字节。
+        /// unity.resolve-image 返回图片路径与 MIME 类型，供 Relay 登记受控资源。
         /// 请求体格式：{"path":"assets/ui_bg_00.png"} 或 {"sourceAssetPath":"Assets/..."}
         /// </summary>
-        private static void HandleResolveImage(HttpListenerContext ctx)
+        private static void HandleResolveImage(BridgeCommand ctx)
         {
             // 读取请求体
-            string body;
-            using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
-            {
-                body = reader.ReadToEnd();
-            }
+            string body = ReadRequestBody(ctx);
 
             // 简单提取 path 和 sourceAssetPath
             string requestedPath = ExtractSimpleJsonValue(body, "path");
@@ -599,15 +600,11 @@ namespace MagicWarrior.Editor.FigmaBridge
                 return;
             }
 
-            // 返回图片原始字节
+            // 二进制内容由 Relay 的受控资源下载链路提供。
             try
             {
-                byte[] imageBytes = File.ReadAllBytes(absolutePath);
-                ctx.Response.StatusCode = 200;
-                ctx.Response.ContentType = GuessMimeType(absolutePath);
-                ctx.Response.ContentLength64 = imageBytes.Length;
-                ctx.Response.OutputStream.Write(imageBytes, 0, imageBytes.Length);
-                ctx.Response.Close();
+                RespondJson(ctx.Response, 200, "{\"ok\":true,\"assetPath\":\"" + EscapeJsonValue(absolutePath)
+                    + "\",\"mimeType\":\"" + EscapeJsonValue(GuessMimeType(absolutePath)) + "\"}");
             }
             catch (Exception ex)
             {
@@ -619,7 +616,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// POST /import-selected-images → 将 Figma 当前选区导出的图片写入 Unity 当前选中的文件夹。
         /// </summary>
-        private static void HandleImportSelectedImages(HttpListenerContext ctx)
+        private static void HandleImportSelectedImages(BridgeCommand ctx)
         {
             string body = ReadRequestBody(ctx);
             ImportImagesRequest request = ParseImportImagesRequest(body);
@@ -658,7 +655,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// POST /sync-selected-text-style → 将 Figma 当前文本样式同步到 Unity 当前选中的 TMP 文本或材质。
         /// </summary>
-        private static void HandleSyncSelectedTextStyle(HttpListenerContext ctx)
+        private static void HandleSyncSelectedTextStyle(BridgeCommand ctx)
         {
             string body = ReadRequestBody(ctx);
             TextStyleSyncRequest request = ParseTextStyleSyncRequest(body);
@@ -690,7 +687,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// 按 Figma 单选根节点同步当前选中 Prefab 的层级、坐标、尺寸和字号。
         /// </summary>
-        private static void HandleSyncPrefabHierarchy(HttpListenerContext ctx)
+        private static void HandleSyncPrefabHierarchy(BridgeCommand ctx)
         {
             string body = ReadRequestBody(ctx);
             FigmaPrefabHierarchySyncRequest request = ParsePrefabHierarchySyncRequest(body);
@@ -737,9 +734,9 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// GET /prefab-import-canvas → 返回当前选中 Prefab 导入 Figma 时应使用的 Canvas 尺寸。
         /// POST /prefab-import-canvas → 按请求中的 prefabPaths 返回对应 Canvas 尺寸。
         /// </summary>
-        private static void HandlePrefabImportCanvas(HttpListenerContext ctx)
+        private static void HandlePrefabImportCanvas(BridgeCommand ctx)
         {
-            List<string> prefabPaths = ctx.Request.HttpMethod == "POST"
+            List<string> prefabPaths = ctx.Method == "POST"
                 ? ParsePrefabImportCanvasRequest(ReadRequestBody(ctx))
                 : GetSelectedPrefabPaths();
             if (prefabPaths.Count == 0)
@@ -757,12 +754,207 @@ namespace MagicWarrior.Editor.FigmaBridge
             RespondJson(ctx.Response, 200, BuildPrefabImportCanvasResponse(items));
         }
 
-        private static string ReadRequestBody(HttpListenerContext ctx)
+        /// <summary>
+        /// POST /figma-to-prefab-import -> refreshes generated PNGs and invokes the deterministic Prefab generator.
+        /// This is the direct Unity Bridge path used by the standalone Relay; it does not require uLoop.
+        /// </summary>
+        private static void HandleFigmaToPrefabImport(BridgeCommand ctx)
         {
-            using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+            if (ctx.Method != "POST")
             {
-                return reader.ReadToEnd();
+                RespondJson(ctx.Response, 405, "{\"ok\":false,\"error\":\"POST required\"}");
+                return;
             }
+
+            FigmaToPrefabImportRequest request;
+            try
+            {
+                request = JsonUtility.FromJson<FigmaToPrefabImportRequest>(ReadRequestBody(ctx));
+            }
+            catch (Exception ex)
+            {
+                RespondJson(ctx.Response, 400, $"{{\"ok\":false,\"error\":\"{EscapeJsonValue(ex.Message)}\"}}");
+                return;
+            }
+
+            if (request == null || string.IsNullOrWhiteSpace(request.imageDir) ||
+                string.IsNullOrWhiteSpace(request.atlasDir) || string.IsNullOrWhiteSpace(request.atlasName) ||
+                request.specPaths == null || request.specPaths.Count == 0)
+            {
+                RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"imageDir, atlasDir, atlasName, and specPaths are required\"}");
+                return;
+            }
+
+            string imageDir = NormalizeUnityPath(request.imageDir).TrimEnd('/');
+            if (!IsSafeUnityAssetPath(imageDir) || !imageDir.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"imageDir must be under Assets\"}");
+                return;
+            }
+            string atlasDir = NormalizeUnityPath(request.atlasDir).TrimEnd('/');
+            if (!IsSafeUnityAssetPath(atlasDir) || !atlasDir.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"atlasDir must be under Assets\"}");
+                return;
+            }
+
+            var specPaths = new List<string>();
+            foreach (string rawSpecPath in request.specPaths)
+            {
+                string specPath = NormalizeUnityPath(rawSpecPath).TrimStart('/');
+                if (!IsSafeUnityRelativePath(specPath))
+                {
+                    RespondJson(ctx.Response, 400, $"{{\"ok\":false,\"error\":\"invalid spec path: {EscapeJsonValue(rawSpecPath)}\"}}");
+                    return;
+                }
+                string fullSpecPath = Path.Combine(Path.GetDirectoryName(Application.dataPath) ?? string.Empty,
+                    specPath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(fullSpecPath))
+                {
+                    RespondJson(ctx.Response, 400, $"{{\"ok\":false,\"error\":\"spec file does not exist: {EscapeJsonValue(specPath)}\"}}");
+                    return;
+                }
+                specPaths.Add(specPath);
+            }
+
+            try
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                if (!AssetDatabase.IsValidFolder(imageDir))
+                    throw new InvalidOperationException("Image directory does not exist in AssetDatabase: " + imageDir);
+
+                int reimportedPngCount = ConfigureFigmaImportSprites(imageDir);
+                Type generatorType = FindType("MagicWarrior.Editor.FigmaBridge.PrefabImport.FigmaPrefabGenerator");
+                if (generatorType == null)
+                    throw new InvalidOperationException("FigmaPrefabGenerator type not found.");
+                System.Reflection.MethodInfo generateMethod = generatorType.GetMethod(
+                    "Generate", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null, new[] { typeof(string) }, null);
+                if (generateMethod == null)
+                    throw new InvalidOperationException("FigmaPrefabGenerator.Generate(string) method not found.");
+
+                foreach (string specPath in specPaths)
+                {
+                    try
+                    {
+                        generateMethod.Invoke(null, new object[] { specPath });
+                    }
+                    catch (System.Reflection.TargetInvocationException ex)
+                    {
+                        throw ex.InnerException ?? ex;
+                    }
+                }
+
+                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                string atlasPath = CreateSpriteAtlasV2(atlasDir, request.atlasName, imageDir);
+                string response = "{\"ok\":true,\"reimportedPngCount\":" + reimportedPngCount +
+                    ",\"specCount\":" + specPaths.Count +
+                    ",\"atlasPath\":\"" + EscapeJsonValue(atlasPath) + "\"}";
+                RespondJson(ctx.Response, 200, response);
+                AddLog($"[FigmaBridge] Figma Prefab direct import completed: {specPaths.Count} spec(s), {reimportedPngCount} PNG(s), atlas={atlasPath}.");
+            }
+            catch (Exception ex)
+            {
+                RespondJson(ctx.Response, 400, $"{{\"ok\":false,\"error\":\"{EscapeJsonValue(ex.Message)}\"}}");
+                AddLog($"[FigmaBridge] Figma Prefab direct import failed: {ex.Message}");
+            }
+        }
+
+        private static int ConfigureFigmaImportSprites(string imageDir)
+        {
+            int reimportedCount = 0;
+            string[] guids = AssetDatabase.FindAssets("t:Texture2D", new[] { imageDir });
+            foreach (string guid in guids)
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (!assetPath.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) continue;
+                var importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+                if (importer == null) throw new InvalidOperationException("TextureImporter missing: " + assetPath);
+                bool changed = false;
+                if (importer.textureType != TextureImporterType.Sprite) { importer.textureType = TextureImporterType.Sprite; changed = true; }
+                if (importer.spriteImportMode != SpriteImportMode.Single) { importer.spriteImportMode = SpriteImportMode.Single; changed = true; }
+                if (importer.mipmapEnabled) { importer.mipmapEnabled = false; changed = true; }
+                if (!importer.alphaIsTransparency) { importer.alphaIsTransparency = true; changed = true; }
+                if (changed) { importer.SaveAndReimport(); reimportedCount++; }
+            }
+            return reimportedCount;
+        }
+
+        private static string CreateSpriteAtlasV2(string atlasDir, string atlasName, string imageDir)
+        {
+            // Unity 6 exposes SpriteAtlasAsset.Add/Save for the project's native V2 format.
+            if (!AssetDatabase.IsValidFolder(atlasDir))
+                throw new InvalidOperationException("SpriteAtlas directory does not exist in AssetDatabase: " + atlasDir);
+
+            string safeName = Path.GetFileNameWithoutExtension(SanitizeImageFileName(atlasName, "FigmaPrefab"));
+            string atlasPath = atlasDir.TrimEnd('/') + "/" + safeName + ".spriteatlasv2";
+            string projectRoot = Path.GetDirectoryName(Application.dataPath) ?? string.Empty;
+            string fullAtlasPath = Path.Combine(projectRoot, atlasPath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(fullAtlasPath) || AssetDatabase.LoadMainAssetAtPath(atlasPath) != null)
+                throw new InvalidOperationException("SpriteAtlas output already exists: " + atlasPath);
+
+            DefaultAsset textureFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(imageDir);
+            if (textureFolder == null)
+                throw new InvalidOperationException("Texture directory could not be loaded as a Unity folder: " + imageDir);
+
+            Type atlasAssetType = FindType("UnityEditor.U2D.SpriteAtlasAsset");
+            if (atlasAssetType == null)
+                throw new InvalidOperationException("Unity SpriteAtlas v2 editor type is unavailable.");
+
+            UnityEngine.Object atlasAsset = null;
+            try
+            {
+                // SpriteAtlasAsset derives from UnityEngine.Object (not ScriptableObject),
+                // so invoke its public native constructor through reflection.
+                atlasAsset = (UnityEngine.Object)System.Activator.CreateInstance(atlasAssetType);
+                System.Reflection.MethodInfo addMethod = atlasAssetType.GetMethod(
+                    "Add", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                    null, new[] { typeof(UnityEngine.Object[]) }, null);
+                System.Reflection.MethodInfo saveMethod = atlasAssetType.GetMethod(
+                    "Save", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null, new[] { atlasAssetType, typeof(string) }, null);
+                if (addMethod == null || saveMethod == null)
+                    throw new InvalidOperationException("Unity SpriteAtlas v2 Add/Save API is unavailable.");
+
+                addMethod.Invoke(atlasAsset, new object[] { new UnityEngine.Object[] { textureFolder } });
+                saveMethod.Invoke(null, new object[] { atlasAsset, fullAtlasPath });
+            }
+            finally
+            {
+                if (atlasAsset != null)
+                    UnityEngine.Object.DestroyImmediate(atlasAsset);
+            }
+
+            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+            if (!File.Exists(fullAtlasPath))
+                throw new InvalidOperationException("Unity SpriteAtlas v2 asset was not written: " + atlasPath);
+            return atlasPath;
+        }
+
+        private static Type FindType(string qualifiedName)
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type type = assembly.GetType(qualifiedName);
+                if (type != null) return type;
+            }
+            return null;
+        }
+
+        private static bool IsSafeUnityAssetPath(string value)
+        {
+            return IsSafeUnityRelativePath(value) && value.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSafeUnityRelativePath(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value)) return false;
+            string[] segments = value.Replace('\\', '/').Split('/');
+            return segments.All(segment => !string.IsNullOrEmpty(segment) && segment != "." && segment != "..");
+        }
+
+        private static string ReadRequestBody(BridgeCommand ctx)
+        {
+            return ctx.Body ?? "";
         }
 
         /// <summary>
@@ -1140,7 +1332,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
             if (AssetDatabase.IsValidFolder(selectedPath))
             {
-                return ImageImportTarget.Folder(selectedPath);
+                return ImageImportTarget.Folder(selectedPath, true, IsAssetFolderEmpty(selectedPath));
             }
 
             if (!IsAssetsPath(selectedPath))
@@ -1157,10 +1349,22 @@ namespace MagicWarrior.Editor.FigmaBridge
             string targetFolder = NormalizeUnityPath(Path.GetDirectoryName(selectedPath) ?? "");
             if (IsAssetsPath(targetFolder))
             {
-                return ImageImportTarget.Folder(targetFolder);
+                return ImageImportTarget.Folder(targetFolder, false, IsAssetFolderEmpty(targetFolder));
             }
 
             return ImageImportTarget.Error($"无法解析当前资源所在文件夹：{selectedPath}");
+        }
+
+        private static bool IsAssetFolderEmpty(string assetPath)
+        {
+            if (!AssetDatabase.IsValidFolder(assetPath))
+            {
+                return false;
+            }
+
+            string projectRoot = Path.GetDirectoryName(Application.dataPath) ?? string.Empty;
+            string absolutePath = Path.Combine(projectRoot, assetPath.Replace('/', Path.DirectorySeparatorChar));
+            return Directory.Exists(absolutePath) && !Directory.EnumerateFileSystemEntries(absolutePath).Any();
         }
 
         /// <summary>
@@ -1795,19 +1999,13 @@ namespace MagicWarrior.Editor.FigmaBridge
         }
 
         /// <summary>
-        /// 设置 CORS 响应头。
-        /// </summary>
-        private static void SetCorsHeaders(HttpListenerResponse resp)
-        {
-            resp.Headers.Set("Access-Control-Allow-Origin", "*");
-            resp.Headers.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            resp.Headers.Set("Access-Control-Allow-Headers", "Content-Type, X-Operation-Id");
-            resp.Headers.Set("Access-Control-Expose-Headers", "X-Operation-Id");
-        }
-
-        /// <summary>
         /// 发送 JSON 响应。
         /// </summary>
+        private static void RespondJson(BridgeCommandResponse resp, int statusCode, string json)
+        {
+            resp.Complete(statusCode, "application/json; charset=utf-8", Encoding.UTF8.GetBytes(json));
+        }
+
         private static void RespondJson(HttpListenerResponse resp, int statusCode, string json)
         {
             try
@@ -1828,7 +2026,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>
         /// 尝试发送错误响应（不抛出异常）。
         /// </summary>
-        private static void TryRespondError(HttpListenerContext ctx, int statusCode, string message)
+        private static void TryRespondError(BridgeCommand ctx, int statusCode, string message)
         {
             try
             {
@@ -1917,6 +2115,18 @@ namespace MagicWarrior.Editor.FigmaBridge
 
             /// <summary>待写入 Unity 的图片列表。</summary>
             public List<ImportImageItem> images;
+        }
+
+        /// <summary>
+        /// Deterministic Figma-to-Prefab editor import request.
+        /// </summary>
+        [Serializable]
+        private sealed class FigmaToPrefabImportRequest
+        {
+            public string imageDir;
+            public string atlasDir;
+            public string atlasName;
+            public List<string> specPaths;
         }
 
         /// <summary>
@@ -2023,9 +2233,11 @@ namespace MagicWarrior.Editor.FigmaBridge
             public string targetFolder;
             public string replaceAssetPath;
             public string error;
+            public bool selectedObjectIsFolder;
+            public bool selectedFolderIsEmpty;
 
             /// <summary>创建文件夹导入目标。</summary>
-            public static ImageImportTarget Folder(string targetFolder)
+            public static ImageImportTarget Folder(string targetFolder, bool selectedObjectIsFolder, bool selectedFolderIsEmpty)
             {
                 return new ImageImportTarget
                 {
@@ -2033,6 +2245,8 @@ namespace MagicWarrior.Editor.FigmaBridge
                     mode = ImageImportTargetModeFolder,
                     targetFolder = targetFolder ?? string.Empty,
                     replaceAssetPath = string.Empty,
+                    selectedObjectIsFolder = selectedObjectIsFolder,
+                    selectedFolderIsEmpty = selectedFolderIsEmpty,
                     error = string.Empty
                 };
             }
