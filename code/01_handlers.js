@@ -177,6 +177,22 @@ await handleFigmaHierarchyCleanupAnalyze(message);
     return;
   }
 
+  if (message.type === "RESIZE_PLUGIN_UI") {
+    const width = Math.round(Number(message.width));
+    const height = Math.round(Number(message.height));
+    const minW = 420;
+    const minH = 480;
+    const maxW = 1600;
+    const maxH = 1200;
+    if (Number.isFinite(width) && Number.isFinite(height)) {
+      figma.ui.resize(
+        Math.max(minW, Math.min(maxW, width)),
+        Math.max(minH, Math.min(maxH, height))
+      );
+    }
+    return;
+  }
+
   if (message.type === "SUGGEST_NINE_SLICE_FROM_SELECTION") {
     await handleSuggestNineSliceFromSelection(message);
     return;

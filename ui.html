@@ -19,13 +19,36 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      width: 100%;
+      min-height: 100vh;
       font: 13px/1.45 "Segoe UI", "PingFang SC", sans-serif;
       color: var(--text);
       background:
         radial-gradient(circle at top right, rgba(100,210,255,0.16), transparent 32%),
         radial-gradient(circle at bottom left, rgba(158,255,181,0.1), transparent 28%),
         var(--bg);
-      padding: 14px;
+      padding: 16px 18px 28px;
+    }
+    .plugin-resize-handle {
+      position: fixed;
+      right: 0;
+      bottom: 0;
+      width: 18px;
+      height: 18px;
+      z-index: 10050;
+      cursor: nwse-resize;
+      touch-action: none;
+      background:
+        linear-gradient(135deg, transparent 0 45%, rgba(238,244,251,0.35) 45% 55%, transparent 55% 65%, rgba(238,244,251,0.35) 65% 75%, transparent 75%);
+    }
+    .plugin-resize-handle:hover,
+    .plugin-resize-handle.dragging {
+      background:
+        linear-gradient(135deg, transparent 0 45%, rgba(100,210,255,0.85) 45% 55%, transparent 55% 65%, rgba(100,210,255,0.85) 65% 75%, transparent 75%);
+    }
+    body.is-resizing-plugin {
+      user-select: none;
+      cursor: nwse-resize;
     }
     .app-title-row {
       display: flex;
@@ -387,7 +410,7 @@
     }
     .modal-backdrop[hidden] { display: none; }
     .modal-card {
-      width: min(460px, 100%);
+      width: min(860px, 96%);
       max-height: calc(100vh - 36px);
       overflow: auto;
       padding: 16px;
@@ -760,6 +783,7 @@
 </head>
 <body>
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
+  <div class="plugin-resize-handle" id="pluginResizeHandle" title="拖动缩放插件窗口" aria-label="拖动缩放插件窗口"></div>
   <div class="app-title-row">
     <h1>LKS Figma Relay</h1>
     <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.48<!-- END_RELEASE_VERSION --></span>
@@ -2898,10 +2922,6 @@
       var cancelled = 0;
       var selection = await querySelectionForPsdImport();
       var dropMode = resolvePsdDropMode(selection);
-      if (dropMode.mode === "incremental-preview" && total !== 1) {
-        psdImportQueueActive = false;
-        throw new Error("选择增量更新目标后只能拖入一个 PSD 文件");
-      }
       appendLog("PSD 批量导入开始：共 " + total + " 个文件");
       for (var i = 0; i < total; i++) {
         try {
@@ -3053,23 +3073,8 @@
     }
 
     function resolvePsdDropMode(selection) {
-      var nodes = Array.isArray(selection && selection.nodes) ? selection.nodes : [];
-      if (nodes.length === 0) {
-        return { mode: "initial", targetNodeId: "", targetName: "", targetType: "" };
-      }
-      if (nodes.length !== 1) {
-        throw new Error("PSD 增量更新只能选择一个 FRAME 或 COMPONENT");
-      }
-      var node = nodes[0] || {};
-      if (!(node.type === "FRAME" || node.type === "COMPONENT")) {
-        throw new Error("PSD 增量更新目标必须是 FRAME 或 COMPONENT");
-      }
-      return {
-        mode: "incremental-preview",
-        targetNodeId: String(node.id || ""),
-        targetName: String(node.name || ""),
-        targetType: String(node.type || "")
-      };
+      // 拖入 PSD 统一走全新导入，不再因为选中 FRAME/COMPONENT 自动切换到增量更新。
+      return { mode: "initial", targetNodeId: "", targetName: "", targetType: "" };
     }
 
     function buildPsdImportTarget(selection, dropMode) {
@@ -6983,6 +6988,92 @@
         refreshAiPromptControls();
       });
     });
+
+    // ─── 插件窗口拖拽缩放 ───
+    (function setupPluginWindowResize() {
+      var handle = document.getElementById("pluginResizeHandle");
+      if (!handle) return;
+      var MIN_W = 420;
+      var MIN_H = 480;
+      var MAX_W = 1600;
+      var MAX_H = 1200;
+      var dragging = false;
+      var startX = 0;
+      var startY = 0;
+      var startW = 0;
+      var startH = 0;
+      var pending = null;
+      var rafId = 0;
+
+      function clampSize(w, h) {
+        return {
+          width: Math.max(MIN_W, Math.min(MAX_W, Math.round(w))),
+          height: Math.max(MIN_H, Math.min(MAX_H, Math.round(h)))
+        };
+      }
+
+      function flushResize() {
+        rafId = 0;
+        if (!pending) return;
+        parent.postMessage({
+          pluginMessage: {
+            type: "RESIZE_PLUGIN_UI",
+            width: pending.width,
+            height: pending.height
+          }
+        }, "*");
+        pending = null;
+      }
+
+      function queueResize(width, height) {
+        pending = clampSize(width, height);
+        if (!rafId) rafId = requestAnimationFrame(flushResize);
+      }
+
+      function onMove(event) {
+        if (!dragging) return;
+        var nextW = startW + (event.clientX - startX);
+        var nextH = startH + (event.clientY - startY);
+        queueResize(nextW, nextH);
+      }
+
+      function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove("dragging");
+        document.body.classList.remove("is-resizing-plugin");
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+        if (pending) {
+          parent.postMessage({
+            pluginMessage: {
+              type: "RESIZE_PLUGIN_UI",
+              width: pending.width,
+              height: pending.height
+            }
+          }, "*");
+          pending = null;
+        }
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      }
+
+      handle.addEventListener("mousedown", function (event) {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        dragging = true;
+        startX = event.clientX;
+        startY = event.clientY;
+        startW = window.innerWidth;
+        startH = window.innerHeight;
+        handle.classList.add("dragging");
+        document.body.classList.add("is-resizing-plugin");
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      });
+    })();
 
     // ─── 启动 ───
     appendLog("AI 提示词模板已加载：" + Object.keys(AiPromptTemplates).map(function (key) {

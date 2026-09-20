@@ -1,4 +1,4 @@
-// Figma Relay build #283
+// Figma Relay build #285
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #283
+// Figma Relay build #285
 figma.showUI(__html__, {
-  width: 460,
-  height: 620,
+  width: 1080,
+  height: 760,
   themeColors: true
 });
-// DIAG: 插件启动标记 (283 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 283)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "283" });
+// DIAG: 插件启动标记 (285 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 285)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "285" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -430,7 +430,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "283",
+        build: "285",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -450,6 +450,22 @@ await handleFigmaHierarchyCleanupAnalyze(message);
 
   if (message.type === "RESIZE_NODE") {
     await handleResizeNode(message);
+    return;
+  }
+
+  if (message.type === "RESIZE_PLUGIN_UI") {
+    const width = Math.round(Number(message.width));
+    const height = Math.round(Number(message.height));
+    const minW = 420;
+    const minH = 480;
+    const maxW = 1600;
+    const maxH = 1200;
+    if (Number.isFinite(width) && Number.isFinite(height)) {
+      figma.ui.resize(
+        Math.max(minW, Math.min(maxW, width)),
+        Math.max(minH, Math.min(maxH, height))
+      );
+    }
     return;
   }
 
