@@ -7,14 +7,14 @@ using MagicWarrior.Editor.FigmaBridge;
 /// <summary>
 /// 出站客户端宿主：跑真实的 BridgeWebSocketTransport（client 模式）连真实中继。
 /// 既可用 dotnet 运行，也可用 Unity 自带的 mono.exe 运行，从而覆盖两套运行时。
-/// 用法：BridgeClientHost &lt;version&gt; &lt;projectPath&gt; &lt;relayUrl&gt;
+/// 用法：BridgeClientHost &lt;version&gt; &lt;projectPath&gt; &lt;bridgeToken&gt; &lt;relayUrl&gt;
 /// </summary>
 internal static class Program
 {
     static async Task Main(string[] args)
     {
-        var transport = new BridgeWebSocketTransport(args[0], args[1]);
-        transport.StartRelayClient(args[2]);
+        var transport = new BridgeWebSocketTransport(args[0], args[1], args[2]);
+        transport.StartRelayClient(args[3]);
         Console.WriteLine(JsonSerializer.Serialize(new { relayUrl = args[2], projectPath = args[1], version = args[0] }));
         Console.Out.Flush();
         await Task.Delay(Timeout.Infinite);

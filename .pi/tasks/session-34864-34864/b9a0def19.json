@@ -1,0 +1,20 @@
+{
+  "id": "b9a0def19",
+  "name": "Python 回归重跑",
+  "command": "python -m unittest discover -s tests -p \"test_*.py\"",
+  "description": "修正 Windows 后台命令的通配符引号，重新运行 Python 回归",
+  "status": "completed",
+  "outputPath": ".pi\\tasks\\session-34864-34864\\b9a0def19.output",
+  "cwd": "E:\\Project\\Tools\\FigmaMcpRelay",
+  "startTime": 1789876785937,
+  "endTime": 1789876786605,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 4596,
+  "bytesWritten": 4503,
+  "isAgent": false,
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 180
+}

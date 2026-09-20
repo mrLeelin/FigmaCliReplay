@@ -24,6 +24,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             public string role;
             public int protocolVersion;
             public string clientVersion;
+            public string bridgeToken;
             public string projectPath;
             public string requestId;
             public string operationId;
@@ -39,6 +40,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             public string status;
             public string serverVersion;
             public string clientVersion;
+            public string bridgeToken;
             public string role;
             public string[] capabilities;
             public int protocolVersion = 1;
@@ -57,6 +59,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         private readonly string _version;
         private readonly string _projectPath;
+        private readonly string _bridgeToken;
         private readonly bool _windows;
         private readonly object _sync = new object();
         private readonly Dictionary<string, Record> _records = new Dictionary<string, Record>();
@@ -65,9 +68,10 @@ namespace MagicWarrior.Editor.FigmaBridge
         private volatile bool _relayClientRegistered;
         private volatile bool _relayClientStarted;
 
-        internal BridgeWebSocketTransport(string version, string projectPath)
+        internal BridgeWebSocketTransport(string version, string projectPath, string bridgeToken)
         {
             _version = version;
+            _bridgeToken = bridgeToken ?? string.Empty;
             _windows = Application.platform == RuntimePlatform.WindowsEditor;
             _projectPath = Path.GetFullPath(projectPath).TrimEnd('/', '\\');
         }
@@ -104,6 +108,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                                 role = "unity",
                                 protocolVersion = 1,
                                 clientVersion = _version,
+                                bridgeToken = _bridgeToken,
                                 projectPath = _projectPath,
                                 capabilities = new[] { "unity.command" }
                             });

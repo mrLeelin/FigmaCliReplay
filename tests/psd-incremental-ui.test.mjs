@@ -4,10 +4,10 @@ import test from "node:test";
 
 const ui = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
 
-test("single FRAME or COMPONENT routes PSD drop to incremental preview", () => {
+test("PSD drop always routes to initial import regardless of selection", () => {
   assert.match(ui, /function resolvePsdDropMode/);
-  assert.match(ui, /node\.type === "FRAME" \|\| node\.type === "COMPONENT"/);
-  assert.match(ui, /mode: dropMode\.mode/);
+  assert.match(ui, /mode: "initial"/);
+  assert.doesNotMatch(ui, /node\.type === "FRAME" \|\| node\.type === "COMPONENT"/);
 });
 
 test("incremental apply is gated by an explicit modal confirmation", () => {

@@ -23,6 +23,7 @@ export interface GatewayConfig {
   verbose: boolean;
   pythonWorker: boolean;
   adminToken: string;
+  bridgeToken: string;
   assetRoots: string[];
 }
 
@@ -43,6 +44,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): GatewayConfig
     verbose: false,
     pythonWorker: true,
     adminToken: process.env.FIGMA_RELAY_TOKEN || "",
+    bridgeToken: process.env.FIGMA_RELAY_BRIDGE_TOKEN || process.env.FIGMA_RELAY_TOKEN || "",
     assetRoots: defaultAssetRoots()
   };
 
@@ -66,6 +68,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): GatewayConfig
       index += 1;
     } else if (arg === "--admin-token" && next) {
       config.adminToken = next;
+      index += 1;
+    } else if (arg === "--bridge-token" && next) {
+      config.bridgeToken = next;
       index += 1;
     } else if (arg === "--asset-root" && next) {
       config.assetRoots.push(path.resolve(next));
@@ -102,6 +107,7 @@ Options:
   --port <port>              HTTP/WebSocket port. Default: ${DEFAULT_PORT}
   --transport <mode>         websocket. Default: ${DEFAULT_TRANSPORT}
   --admin-token <token>      Token required by CLI WebSocket connections.
+  --bridge-token <token>     Token required by Unity Bridge WebSocket connections.
   --asset-root <path>        Additional local root allowed for /assets files.
   --no-python-worker         Disable optional Python worker probing.
   --verbose                  Enable verbose logging.

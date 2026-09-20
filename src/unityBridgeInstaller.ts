@@ -25,7 +25,8 @@ export interface UnityBridgeInstallResult {
 
 export function installUnityBridge(
   projectPath: string,
-  sourceEditorPath = path.join(PLUGIN_ROOT, "unity", "Assets", "Editor")
+  sourceEditorPath = path.join(PLUGIN_ROOT, "unity", "Assets", "Editor"),
+  bridgeToken = ""
 ): UnityBridgeInstallResult {
   const operation = logger.startOperation("unity.bridge-install", "开始安装 Unity Bridge", {
     data: { projectName: path.basename(projectPath) }
@@ -52,6 +53,7 @@ export function installUnityBridge(
     copyDirectoryContents(sourceBridge, targetBridge, guidIndex);
     installMetaFile(sourceMeta, path.join(targetEditor, "FigmaBridge.meta"), guidIndex);
     const removed = removeRetiredFiles(targetBridge);
+    if (bridgeToken) writeBridgeToken(projectSettingsPath, bridgeToken);
 
     if (guidIndex.regeneratedGuids.length > 0) {
       operation.step("meta-guid", "已为与工程内既有资产冲突的 .meta 分配新 GUID", {
@@ -137,8 +139,8 @@ class ProjectMetaGuidIndex {
       let entries: fs.Dirent[];
       try {
         entries = fs.readdirSync(current, { withFileTypes: true });
-      } catch {
-        continue;
+      } catch (error) {
+        throw new Error(`Unable to scan Unity Assets directory ${current}: ${error instanceof Error ? error.message : String(error)}`);
       }
       for (const entry of entries) {
         if (entry.isSymbolicLink()) continue;
@@ -151,8 +153,8 @@ class ProjectMetaGuidIndex {
         try {
           const guid = readMetaGuid(fs.readFileSync(fullPath, "utf8"));
           if (guid) found.add(guid);
-        } catch {
-          // 单个不可读的 .meta 不应中断安装
+        } catch (error) {
+          throw new Error(`Unable to inspect Unity meta file ${fullPath}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     }
@@ -190,11 +192,30 @@ function removeRetiredFiles(targetBridge: string): string[] {
       if (!fs.existsSync(target)) continue;
       fs.rmSync(target, { force: true });
       removed.push(name);
-    } catch {
-      // 删除失败不应让安装整体失败：残留文件不会被任何代码引用。
+    } catch (error) {
+      throw new Error(`Unable to remove retired Unity Bridge file ${target}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   return removed;
+}
+
+function writeBridgeToken(projectSettingsPath: string, bridgeToken: string): void {
+  const settingsPath = path.join(projectSettingsPath, "FigmaBridgeImportSettings.json");
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    } catch (error) {
+      throw new Error(`FigmaBridgeImportSettings.json is invalid JSON; refusing to overwrite it: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("FigmaBridgeImportSettings.json must contain a JSON object");
+    }
+    settings = parsed as Record<string, unknown>;
+  }
+  settings.relayToken = bridgeToken;
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
 }
 
 function isDirectory(value: string): boolean {

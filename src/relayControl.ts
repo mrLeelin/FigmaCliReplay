@@ -19,18 +19,32 @@ export function createRelayControlHandler(
   cleanup: CleanupRuntime,
   ai = localAi,
   unityProjects = new UnityProjectRegistry(),
+  bridgeToken = "",
 ) {
-  return async (action: string, payload: Record<string, unknown>): Promise<unknown> => {
+  return async (action: string, payload: Record<string, unknown>, parentOperationId?: string): Promise<unknown> => {
     const runId = typeof payload.runId === "string" ? payload.runId.trim() : "";
     const token = typeof payload.capabilityToken === "string" ? payload.capabilityToken : "";
     const afterSequence = typeof payload.afterSequence === "number" && Number.isFinite(payload.afterSequence)
       ? Math.max(0, Math.trunc(payload.afterSequence)) : 0;
     const operation = getLoggingRuntime().logger("relay-control").startOperation("relay.control", "Execute Relay control", {
+      operationId: parentOperationId,
       data: { action, runId },
     });
     try {
       operation.step("validate", "Validate control target and capability", { action, runId });
-      if (action.startsWith("psd.import.") || action.startsWith("figma.prefab.") || ["ai.run.start", "ai.config", "ai.open-terminal", "cleanup.run.start", "prefab.import.start", "prefab.import.get", "image.crop"].includes(action)) {
+      const requiresLiveFigmaSession = [
+        "psd.import.start",
+        "psd.import.apply",
+        "psd.import.adopt-baseline",
+        "figma.prefab.start",
+        "prefab.import.start",
+        "image.crop",
+        "ai.run.start",
+        "ai.config",
+        "ai.open-terminal",
+        "cleanup.run.start",
+      ].includes(action);
+      if (requiresLiveFigmaSession) {
         const sessions = relay.status().plugin.sessions.filter((session) => session.authenticated
           && (!payload.sessionId || session.sessionId === payload.sessionId)
           && (!payload.fileKey || session.fileKey === payload.fileKey));
@@ -126,7 +140,7 @@ export function createRelayControlHandler(
             result = { ok: true, project, ...unityProjects.list() };
           } else {
             const selected = unityProjects.snapshot(id);
-            const installResult = installUnityBridge(selected.path);
+            const installResult = installUnityBridge(selected.path, undefined, bridgeToken);
             const project = unityProjects.add(selected.path);
             result = { ok: true, installResult, project, ...unityProjects.list() };
           }

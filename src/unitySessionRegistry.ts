@@ -5,7 +5,7 @@ import { WebSocket } from "ws";
 import { SERVER_VERSION } from "./config.js";
 import { RELAY_PROTOCOL_VERSION } from "./relayProtocol.js";
 import { logInfo, logWarn } from "./utils/logger.js";
-import { isRecord } from "./utils.js";
+import { constantTimeEqual, isRecord } from "./utils.js";
 
 /**
  * Unity 主动连入的会话注册表（出站倒置的接收侧）。
@@ -58,13 +58,17 @@ export interface UnityRegisterResult {
   projectPath?: string;
 }
 
-/** 处理 bridge.register：校验协议与版本，登记会话，回 bridge.registered。 */
-export function registerUnitySession(socket: WebSocket, message: Record<string, unknown>): UnityRegisterResult {
+/** 处理 bridge.register：校验认证、协议与版本，登记会话，回 bridge.registered。 */
+export function registerUnitySession(socket: WebSocket, message: Record<string, unknown>, expectedToken: string): UnityRegisterResult {
   const projectPath = typeof message.projectPath === "string" ? message.projectPath.trim() : "";
   const clientVersion = typeof message.clientVersion === "string" ? message.clientVersion : "";
   const protocolVersion = typeof message.protocolVersion === "number" ? message.protocolVersion : 0;
+  const bridgeToken = typeof message.bridgeToken === "string" ? message.bridgeToken : "";
 
   if (!projectPath) return failUnityRegister(socket, "Unity Bridge register is missing projectPath.");
+  if (!expectedToken || !constantTimeEqual(bridgeToken, expectedToken)) {
+    return failUnityRegister(socket, "Unity Bridge authentication failed.");
+  }
   if (protocolVersion !== RELAY_PROTOCOL_VERSION) {
     return failUnityRegister(socket, `Unity Bridge protocol mismatch: expected ${RELAY_PROTOCOL_VERSION}, got ${protocolVersion}.`);
   }
@@ -126,10 +130,10 @@ export function unregisterUnitySession(socket: WebSocket, reason: string): void 
   }
 }
 
-export function handleUnityMessage(socket: WebSocket, message: Record<string, unknown>): void {
+export function handleUnityMessage(socket: WebSocket, message: Record<string, unknown>, expectedToken: string): void {
   const type = message.type;
   if (type === "bridge.register") {
-    registerUnitySession(socket, message);
+    registerUnitySession(socket, message, expectedToken);
     return;
   }
   const session = sessionFor(socket);

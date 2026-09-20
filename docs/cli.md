@@ -15,7 +15,7 @@ node dist/cli.js control --job-type unity.command --payload '{"id":"<projectId>"
 node dist/cli.js control --job-type unity.command-status --payload '{"id":"<projectId>","requestId":"health-001"}'
 ```
 
-Unity Bridge 由 Unity **主动出站**连接 Relay 的 `/unity`：一条长连接，不需要发现文件、端口级联或每命令一次握手，断线按退避重连。中继侧不再有"读取本地发现文件并拨入 `/bridge`"的兼容路径——升级后必须重启 Relay，否则 Unity 侧只会记录"未连接"。握手校验协议版本、精确产品版本与项目路径；公开 `unity.gateway.get` 不返回令牌，会话在线时返回 `transport: "inbound"` 与会话心跳时间，离线时返回 `{"found": false}`。
+Unity Bridge 由 Unity **主动出站**连接 Relay 的 `/unity`：一条长连接，不需要发现文件、端口级联或每命令一次握手，断线按退避重连。中继侧不再有"读取本地发现文件并拨入 `/bridge`"的兼容路径——升级后必须重启 Relay，否则 Unity 侧只会记录"未连接"。握手校验 Bridge token、协议版本、精确产品版本与项目路径；Relay 使用 `FIGMA_RELAY_BRIDGE_TOKEN`（未设置时回退 `FIGMA_RELAY_TOKEN`），`unity.bridge.install` 会把该 token 写入目标工程的 `ProjectSettings/FigmaBridgeImportSettings.json`，不会写入日志或公开状态。公开 `unity.gateway.get` 不返回令牌，会话在线时返回 `transport: "inbound"` 与会话心跳时间，离线时返回 `{"found": false}`。
 
 ## 长驻模式（消除每命令一次进程启动与握手）
 
@@ -76,7 +76,7 @@ node dist/cli.js task-wait --task-id <taskId> --timeout 120
 
 - 结果为 stdout 上单行 JSON；诊断日志输出到 stderr，并通过现有日志系统记录。
 - 退出码：0 成功、1 连接或业务失败、2 命令行参数错误。
-- 认证令牌优先读取 FIGMA_RELAY_TOKEN，其次读取本项目 .local/admin-token.txt；FIGMA_RELAY_TOKEN_FILE 可覆盖令牌文件位置。
+- CLI 认证令牌优先读取 FIGMA_RELAY_TOKEN，其次读取本项目 .local/admin-token.txt；FIGMA_RELAY_TOKEN_FILE 可覆盖令牌文件位置。Unity Bridge 使用独立的 FIGMA_RELAY_BRIDGE_TOKEN；未设置时复用 FIGMA_RELAY_TOKEN。
 - 服务端复用当前 adminToken 配置校验令牌；/relay 不接受带浏览器 Origin 的连接。
 - CLI 产品版本须与 Relay 一致，消息协议版本独立为 1。
 

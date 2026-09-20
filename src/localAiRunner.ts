@@ -661,7 +661,7 @@ function commandArgs(run: AiRun, prompt: string, resume: boolean): string[] {
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
     // Cleanup uses the Relay-managed local execution boundary. Loading unrelated
     // global MCP servers (for example codegraph) adds minutes and extra sockets.
-    if (run.taskKind === "cleanup") args.push("--strict-ai-config");
+    if (run.taskKind === "cleanup") args.push("--strict-mcp-config");
     // Unity quick-import has a fixed script pipeline. Claude's automatic Skill routing
     // spends minutes loading the broad skill before it reaches that pipeline.
     if (resume) args.push("--resume", run.cliSessionId!);

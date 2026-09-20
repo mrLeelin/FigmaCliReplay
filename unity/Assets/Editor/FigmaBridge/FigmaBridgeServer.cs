@@ -103,7 +103,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         {
             if (_running) return;
 
-            _webSocketTransport = new BridgeWebSocketTransport(Version, Path.GetDirectoryName(Application.dataPath));
+            _webSocketTransport = new BridgeWebSocketTransport(Version, Path.GetDirectoryName(Application.dataPath), FigmaBridgeImportSettings.RelayToken);
             _webSocketTransport.StartRelayClient(RelayClientUrl);
             _running = true;
 

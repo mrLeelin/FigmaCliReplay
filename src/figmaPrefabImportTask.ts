@@ -305,8 +305,14 @@ async function runFigmaPrefabImportTask(
     let summary: FigmaPrefabImportSummary | undefined;
     let summaryError: Error | undefined;
     try {
+      // Parse once without throwing on verification so failed processes retain their
+      // structured summary for diagnostics; successful processes still enforce every
+      // verification gate immediately below.
       summary = parseFigmaPrefabImportSummary(result.stdout, prepared.targetFolder, { requireVerified: false });
       task.summary = summary;
+      if (result.exitCode === 0 && (summary.status !== "completed" || summary.verifyAllPass !== true)) {
+        throw new Error("deterministic import summary did not pass Unity verification");
+      }
     } catch (error) {
       summaryError = error instanceof Error ? error : new Error(String(error));
       if (result.exitCode === 0) throw summaryError;

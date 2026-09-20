@@ -23,7 +23,11 @@ async function main(): Promise<void> {
     port: config.port,
     transport: config.transport,
   });
-  const gateway = new WebSocketGateway((events) => logging.store.ingest(events));
+  if (!config.bridgeToken) {
+    startup.fail(new Error("FIGMA_RELAY_BRIDGE_TOKEN or FIGMA_RELAY_TOKEN is required for Unity Bridge authentication"), "Relay 启动失败");
+    throw new Error("Unity Bridge authentication token is not configured.");
+  }
+  const gateway = new WebSocketGateway((events) => logging.store.ingest(events), config.bridgeToken);
   const disconnectGraceTimers = new Map<string, NodeJS.Timeout>();
   gateway.onDisconnected((sessionId, reason) => {
     const existingTimer = disconnectGraceTimers.get(sessionId);
@@ -52,13 +56,13 @@ async function main(): Promise<void> {
   const cleanupRuntime = getCleanupRuntime();
   configureLocalAiCleanupDispatcher(createConversationCleanupDispatcher(new CleanupExecutor()));
   const unityProjects = new UnityProjectRegistry();
-  const cliControlHandler = createRelayControlHandler(relay, cleanupRuntime, undefined, unityProjects);
+  const cliControlHandler = createRelayControlHandler(relay, cleanupRuntime, undefined, unityProjects, config.bridgeToken);
   gateway.onClientRequest((request) => cliControlHandler(request.action, {
     ...request.payload,
     sessionId: request.sessionId,
     fileKey: request.fileKey,
     capabilityToken: request.capabilityToken,
-  }));
+  }, request.operationId));
   const finalServer = createRelayHttpServer(config, relay, unityProjects, cleanupRuntime, logging);
   gateway.attachServer(finalServer, new RelayCliEndpoint(config, relay, logging, cliControlHandler));
 

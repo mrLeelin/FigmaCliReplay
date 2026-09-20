@@ -1,0 +1,21 @@
+{
+  "id": "b807bac85",
+  "name": "编译和 Node 回归",
+  "command": "npx tsc -p tsconfig.json && node --test tests/*.test.mjs",
+  "description": "编译当前 TypeScript 并运行 Node 回归测试，收集本次审查验证证据",
+  "status": "failed",
+  "outputPath": ".pi\\tasks\\session-34864-34864\\b807bac85.output",
+  "cwd": "E:\\Project\\Tools\\FigmaMcpRelay",
+  "startTime": 1789876322016,
+  "endTime": 1789876338288,
+  "exitCode": 1,
+  "signal": null,
+  "pid": 27220,
+  "bytesWritten": 578673,
+  "isAgent": false,
+  "error": "Exited with code 1",
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 300
+}

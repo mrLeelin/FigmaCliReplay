@@ -379,7 +379,9 @@ export class RuntimeRelay {
     if (action === "figma.prefab.get") {
       const task = getFigmaPrefabImportTask(String(payload.taskId || ""));
       if (!task) throw new Error("Unknown import task; do not replay an uncertain write");
-      if (task.sessionId !== payload.sessionId || task.fileKey !== payload.fileKey) throw new Error("Import belongs to a different Figma session");
+      const sessionId = typeof payload.sessionId === "string" && payload.sessionId ? payload.sessionId : task.sessionId;
+      const fileKey = typeof payload.fileKey === "string" && payload.fileKey ? payload.fileKey : task.fileKey;
+      if (task.sessionId !== sessionId || task.fileKey !== fileKey) throw new Error("Import belongs to a different Figma session");
       return { ok: true, task };
     }
     if (action.startsWith("psd.import.")) {
@@ -393,7 +395,9 @@ export class RuntimeRelay {
       const taskId = String(payload.taskId || "");
       const task = getPsdImportTask(taskId);
       if (!task) throw new Error("Unknown PSD task; do not replay an uncertain write");
-      if (task.target.sessionId !== payload.sessionId || task.target.fileKey !== payload.fileKey) throw new Error("PSD task belongs to a different Figma session");
+      const sessionId = typeof payload.sessionId === "string" && payload.sessionId ? payload.sessionId : task.target.sessionId;
+      const fileKey = typeof payload.fileKey === "string" && payload.fileKey ? payload.fileKey : task.target.fileKey;
+      if (task.target.sessionId !== sessionId || task.target.fileKey !== fileKey) throw new Error("PSD task belongs to a different Figma session");
       if (action === "psd.import.get") return { ok: true, task };
       if (action === "psd.import.cancel") return cancelPsdImportTask(taskId);
       if (action === "psd.import.apply") return { ok: true, task: applyPsdImportTask(this.config, taskId, payload) };

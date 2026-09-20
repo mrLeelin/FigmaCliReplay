@@ -9,11 +9,12 @@ import { WebSocketGateway } from "../dist/websocketGateway.js";
 import { callUnityBridge } from "../dist/unityBridgeClient.js";
 
 const projectPath = "E:\\Project\\Test\\JellybeanUnity";
+const bridgeToken = "test-bridge-token";
 // 拨入路径必然失败：命令还能成功，就说明它确实走了 Unity 连入的会话。
 const noDiscovery = () => ({ found: false });
 
 async function startGateway(t) {
-  const gateway = new WebSocketGateway();
+  const gateway = new WebSocketGateway(undefined, bridgeToken);
   const server = createServer();
   gateway.attachServer(server);
   const clients = [];
@@ -52,6 +53,7 @@ function connectUnity(port, clients, options = {}) {
     socket.on("open", () => socket.send(JSON.stringify({
       type: "bridge.register", role: "unity", projectPath: options.projectPath ?? projectPath,
       clientVersion: options.clientVersion ?? SERVER_VERSION, protocolVersion: options.protocolVersion ?? 1,
+      bridgeToken: options.bridgeToken ?? bridgeToken,
       capabilities: ["unity.command"],
     })));
   });
@@ -84,6 +86,13 @@ test("commands route over an outbound Unity session instead of dialing the disco
   assert.equal(request.action, "unity.health");
   assert.equal(request.body, JSON.stringify({ probe: 1 }), "负载仍保持二次编码，Unity 侧协议不变");
   assert.ok(request.requestId, "requestId 用于关联响应");
+});
+
+test("an unauthenticated Unity Bridge cannot register a session", { timeout: 10000 }, async (t) => {
+  const { port, clients } = await startGateway(t);
+  const rejected = connectUnity(port, clients, { bridgeToken: "wrong-token" });
+  await assert.rejects(rejected.ready, /authentication failed/);
+  await assert.rejects(callUnityBridge(projectPath, "unity.health", {}, {}, noDiscovery), /Unity is not connected/);
 });
 
 test("a stale Unity version is rejected and never becomes a session", { timeout: 10000 }, async (t) => {

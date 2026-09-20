@@ -31,6 +31,7 @@ interface PluginSession {
 
 export interface RelayClientRequest {
   requestId: string;
+  operationId?: string;
   action: string;
   payload: Record<string, unknown>;
   capabilityToken: string;
@@ -74,7 +75,10 @@ export class WebSocketGateway {
   private readonly psdSubscriptionEpochs = new WeakMap<WebSocket, number>();
   private readonly importSubscriptionEpochs = new WeakMap<WebSocket, number>();
 
-  constructor(private readonly ingestLogEvents?: (events: unknown[]) => unknown) {
+  constructor(
+    private readonly ingestLogEvents?: (events: unknown[]) => unknown,
+    private readonly bridgeToken = "",
+  ) {
     this.server = new WebSocketServer({ noServer: true });
     this.server.on("connection", (socket) => this.attach(socket));
     this.unityServer = new WebSocketServer({ noServer: true });
@@ -286,7 +290,7 @@ export class WebSocketGateway {
         return;
       }
       if (!isRecord(message)) return;
-      handleUnityMessage(socket, message);
+      handleUnityMessage(socket, message, this.bridgeToken);
     });
     socket.on("close", () => unregisterUnitySession(socket, "unity bridge disconnected"));
     socket.on("error", () => unregisterUnitySession(socket, "unity bridge error"));
@@ -412,6 +416,7 @@ export class WebSocketGateway {
 
   private async handleRelayClientRequest(socket: WebSocket, message: Record<string, unknown>): Promise<void> {
     const requestId = typeof message.requestId === "string" ? message.requestId.trim() : "";
+    const operationId = typeof message.operationId === "string" ? message.operationId.trim() : undefined;
     const action = typeof message.action === "string" ? message.action.trim() : "";
     const payload = isRecord(message.payload) ? message.payload : {};
     const capabilityToken = typeof message.capabilityToken === "string" ? message.capabilityToken : "";
@@ -467,6 +472,7 @@ export class WebSocketGateway {
     }
     const request: RelayClientRequest = {
       requestId,
+      operationId,
       action,
       payload,
       capabilityToken,

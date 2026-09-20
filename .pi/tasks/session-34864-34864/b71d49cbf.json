@@ -1,0 +1,21 @@
+{
+  "id": "b71d49cbf",
+  "name": "完整回归验证",
+  "command": "npx tsc -p tsconfig.json && node --test tests/*.test.mjs",
+  "description": "运行完整 TypeScript 编译和 Node 测试套件",
+  "status": "failed",
+  "outputPath": ".pi\\tasks\\session-34864-34864\\b71d49cbf.output",
+  "cwd": "E:\\Project\\Tools\\FigmaMcpRelay",
+  "startTime": 1789879806992,
+  "endTime": 1789879822632,
+  "exitCode": 1,
+  "signal": null,
+  "pid": 48444,
+  "bytesWritten": 582078,
+  "isAgent": false,
+  "error": "Exited with code 1",
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 300
+}

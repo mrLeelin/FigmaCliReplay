@@ -17,11 +17,12 @@ const runner = process.env.UNITY_BRIDGE_CLIENT_RUNNER === "mono" ? "mono" : "dot
 const monoExe = process.env.UNITY_MONO_EXE;
 
 const projectPath = "E:\\Project\\Test\\JellybeanUnity";
+const bridgeToken = "test-bridge-token";
 // 拨入回退必须失败：命令还能成功，就证明走的是 Unity 主动连入的那条会话。
 const noDiscovery = () => ({ found: false });
 
 async function startGateway(t) {
-  const gateway = new WebSocketGateway();
+  const gateway = new WebSocketGateway(undefined, bridgeToken);
   const server = createServer();
   gateway.attachServer(server);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -49,8 +50,8 @@ test("the outbound Unity client registers, serves commands, and survives a dropp
 }, async (t) => {
   const { port } = await startGateway(t);
   const relayUrl = `ws://127.0.0.1:${port}/unity`;
-  const command = runner === "mono" ? [monoExe, hostPath, SERVER_VERSION, projectPath, relayUrl]
-    : ["dotnet", hostPath, SERVER_VERSION, projectPath, relayUrl];
+  const command = runner === "mono" ? [monoExe, hostPath, SERVER_VERSION, projectPath, bridgeToken, relayUrl]
+    : ["dotnet", hostPath, SERVER_VERSION, projectPath, bridgeToken, relayUrl];
   const host = spawn(command[0], command.slice(1), { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let diagnostics = "";
   host.stderr.on("data", (chunk) => { diagnostics += String(chunk); });

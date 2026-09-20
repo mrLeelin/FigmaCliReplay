@@ -1,0 +1,20 @@
+{
+  "id": "b705cc0dd",
+  "name": "Python 全量回归",
+  "command": "python -m unittest discover -s tests -p \"test_*.py\"",
+  "description": "运行完整 Python 单元测试套件",
+  "status": "completed",
+  "outputPath": ".pi\\tasks\\session-34864-34864\\b705cc0dd.output",
+  "cwd": "E:\\Project\\Tools\\FigmaMcpRelay",
+  "startTime": 1789879818603,
+  "endTime": 1789879819280,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 55196,
+  "bytesWritten": 4503,
+  "isAgent": false,
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 180
+}

@@ -9,7 +9,7 @@ import { cliHelloSchema, cliRequestSchema, RELAY_PROTOCOL_VERSION, RelayProtocol
 import { isFailedJobResult, type RuntimeRelay } from "./runtimeRelay.js";
 import { bearerToken, constantTimeEqual, isAllowedLocalRequest, isRecord, validOperationId } from "./utils.js";
 
-export type RelayCliControlHandler = (action: string, payload: Record<string, unknown>) => Promise<unknown> | unknown;
+export type RelayCliControlHandler = (action: string, payload: Record<string, unknown>, operationId?: string) => Promise<unknown> | unknown;
 
 export class RelayCliEndpoint {
   private readonly server = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
@@ -121,7 +121,7 @@ export class RelayCliEndpoint {
           let previous = "";
           let sequence = 0;
           while (socket.readyState === socket.OPEN) {
-            const result = await this.controlHandler("psd.import.get", controlPayload);
+            const result = await this.controlHandler("psd.import.get", controlPayload, operation.operationId);
             if (!isRecord(result) || !isRecord(result.task)) throw new RelayProtocolError("INVALID_RESULT", "PSD task status is unavailable");
             const snapshot = JSON.stringify(result);
             if (snapshot !== previous) {
@@ -140,7 +140,7 @@ export class RelayCliEndpoint {
           operation.cancel("CLI disconnected from PSD subscription", { taskId: controlPayload.taskId });
           return;
         }
-        const result = await this.controlHandler(request.payload.controlAction, controlPayload);
+        const result = await this.controlHandler(request.payload.controlAction, controlPayload, operation.operationId);
         this.send(socket, { ...envelope, ok: true, result });
         operation.succeed("Relay control action completed", { action: request.payload.controlAction });
         return;

@@ -29,6 +29,27 @@ test("bridge installer copies editor files and preserves project settings", () =
   assert.equal(fs.readFileSync(settingsPath, "utf8"), "keep-me");
 });
 
+test("bridge installer writes the Relay Bridge token without dropping import settings", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-bridge-token-"));
+  const sourceEditor = path.join(root, "source", "Assets", "Editor");
+  const sourceBridge = path.join(sourceEditor, "FigmaBridge");
+  fs.mkdirSync(sourceBridge, { recursive: true });
+  fs.writeFileSync(path.join(sourceBridge, "Bridge.cs"), "source", "utf8");
+  fs.writeFileSync(path.join(sourceEditor, "FigmaBridge.meta"), "guid: source", "utf8");
+
+  const projectPath = path.join(root, "UnityProject");
+  scaffoldProject(projectPath);
+  const settingsPath = path.join(projectPath, "ProjectSettings", "FigmaBridgeImportSettings.json");
+  fs.writeFileSync(settingsPath, JSON.stringify({ commonFontAsset: "Assets/Fonts/CommonFont.asset" }));
+
+  installUnityBridge(projectPath, sourceEditor, "bridge-secret");
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), {
+    commonFontAsset: "Assets/Fonts/CommonFont.asset",
+    relayToken: "bridge-secret",
+  });
+});
+
 test("bridge installer removes the retired gateway discovery writer", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-bridge-retired-"));
   const sourceEditor = path.join(root, "source", "Assets", "Editor");

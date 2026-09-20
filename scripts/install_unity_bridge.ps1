@@ -1,10 +1,17 @@
 ﻿param(
-    [string]$ProjectPath
+    [string]$ProjectPath,
+    [string]$BridgeToken = $env:FIGMA_RELAY_BRIDGE_TOKEN
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $BridgeToken) { $BridgeToken = $env:FIGMA_RELAY_BRIDGE_TOKEN }
+if (-not $BridgeToken) { $BridgeToken = $env:FIGMA_RELAY_TOKEN }
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PluginRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $ScriptDir)).Path
+
+if (-not $BridgeToken) {
+    throw "必须提供 Bridge token：设置 FIGMA_RELAY_BRIDGE_TOKEN/FIGMA_RELAY_TOKEN，或使用 -BridgeToken。"
+}
 
 if (-not $ProjectPath) {
     Add-Type -AssemblyName System.Windows.Forms
@@ -42,6 +49,23 @@ Get-ChildItem -LiteralPath $sourceBridge -Force | ForEach-Object {
 }
 Copy-Item -LiteralPath $sourceMeta -Destination $targetMeta -Force
 
+$settingsFile = Join-Path $projectSettingsPath "FigmaBridgeImportSettings.json"
+if (Test-Path -LiteralPath $settingsFile -PathType Leaf) {
+    try {
+        $settings = Get-Content -LiteralPath $settingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        throw "ProjectSettings/FigmaBridgeImportSettings.json 不是有效 JSON，拒绝覆盖：$($_.Exception.Message)"
+    }
+} else {
+    $settings = [pscustomobject]@{}
+}
+if ($settings.PSObject.Properties.Name -contains "relayToken") {
+    $settings.relayToken = $BridgeToken
+} else {
+    $settings | Add-Member -NotePropertyName relayToken -NotePropertyValue $BridgeToken
+}
+$settings | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $settingsFile -Encoding UTF8
+
 Write-Host "FigmaBridge 已安装/更新：$targetBridge" -ForegroundColor Green
-Write-Host "ProjectSettings/FigmaBridgeImportSettings.json 未被修改。" -ForegroundColor Green
+Write-Host "Relay Bridge token 已写入：$settingsFile" -ForegroundColor Green
 

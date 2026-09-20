@@ -45,6 +45,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>服务器首选监听端口输入值</summary>
         private int _serverPort = FigmaBridgeServer.RelayPort;
         private TMP_FontAsset _importFont;
+        private string _relayToken = "";
 
         /// <summary>最近一次推送的 Prefab 名称</summary>
         private string _lastPushPrefabName = "";
@@ -76,6 +77,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             _figmaFileUrl = EditorPrefs.GetString(PrefsFigmaUrlKey, "");
             _serverPort = FigmaBridgeServer.RelayPort;
             _importFont = FigmaBridgeImportSettings.Font;
+            _relayToken = FigmaBridgeImportSettings.RelayToken;
         }
 
         /// <summary>
@@ -114,6 +116,8 @@ namespace MagicWarrior.Editor.FigmaBridge
             if (EditorGUI.EndChangeCheck() && _importFont != null) FigmaBridgeImportSettings.SetFont(_importFont);
             EditorGUILayout.Space(4);
             DrawServerPortConfig();
+            EditorGUILayout.Space(4);
+            DrawRelayTokenConfig();
             EditorGUILayout.Space(4);
             DrawConnectionStatus();
             EditorGUILayout.Space(4);
@@ -198,6 +202,18 @@ namespace MagicWarrior.Editor.FigmaBridge
                     + "Bridge 不再监听本地端口，也不再写发现文件。",
                     MessageType.Warning);
             }
+        }
+
+        /// <summary>
+        /// 配置 Relay Bridge 认证 token。
+        /// </summary>
+        private void DrawRelayTokenConfig()
+        {
+            EditorGUILayout.LabelField("Relay Bridge 认证", EditorStyles.boldLabel);
+            EditorGUI.BeginChangeCheck();
+            _relayToken = EditorGUILayout.PasswordField("Bridge Token", _relayToken);
+            if (EditorGUI.EndChangeCheck()) FigmaBridgeImportSettings.SetRelayToken(_relayToken);
+            EditorGUILayout.HelpBox("必须与 Relay 的 FIGMA_RELAY_BRIDGE_TOKEN（或 FIGMA_RELAY_TOKEN）一致。", MessageType.Info);
         }
 
         /// <summary>

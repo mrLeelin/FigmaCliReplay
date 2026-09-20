@@ -1,0 +1,21 @@
+{
+  "id": "ba43e1cc1",
+  "name": "CSharp 传输互通验证",
+  "command": "python - <<'PY'\nimport os, pathlib, shutil, subprocess, tempfile\nroot=pathlib.Path.cwd()\nwith tempfile.TemporaryDirectory(prefix='relay-review-csharp-') as directory:\n    temp=pathlib.Path(directory)\n    files=['tests/fixtures/unity-bridge-client-host/BridgeClientHost.csproj','tests/fixtures/unity-bridge-client-host/Program.cs','unity/Assets/Editor/FigmaBridge/BridgeCommand.cs','unity/Assets/Editor/FigmaBridge/BridgeWebSocketTransport.cs']\n    for name in files:\n        dest=temp/name\n        dest.parent.mkdir(parents=True,exist_ok=True)\n        shutil.copy2(root/name,dest)\n    host=temp/'tests/fixtures/unity-bridge-client-host'\n    subprocess.run(['dotnet','build',str(host/'BridgeClientHost.csproj'),'--nologo','--verbosity','quiet'],check=True)\n    env={**os.environ,'UNITY_BRIDGE_CLIENT_HOST':str(host/'bin/Debug/net8.0/BridgeClientHost.dll'),'UNITY_BRIDGE_CLIENT_RUNNER':'dotnet'}\n    subprocess.run(['node','--test','tests/unity-outbound-client.test.mjs'],env=env,check=True)\nPY",
+  "description": "在系统临时目录编译实际 C# 传输源码并运行与 Relay 的互通/断线重连测试",
+  "status": "failed",
+  "outputPath": ".pi\\tasks\\session-34864-34864\\ba43e1cc1.output",
+  "cwd": "E:\\Project\\Tools\\FigmaMcpRelay",
+  "startTime": 1789876471729,
+  "endTime": 1789876471758,
+  "exitCode": 1,
+  "signal": null,
+  "pid": 56600,
+  "bytesWritten": 17,
+  "isAgent": false,
+  "error": "Exited with code 1",
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 180
+}

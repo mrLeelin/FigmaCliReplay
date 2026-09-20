@@ -152,7 +152,8 @@ test("Claude cleanup turns isolate unrelated global MCP servers", () => {
   const end = source.indexOf("export function codexExecArgs", start);
   const commandArgs = source.slice(start, end);
 
-  assert.match(commandArgs, /run\.taskKind === "cleanup"[\s\S]*--strict-ai-config/);
+  assert.match(commandArgs, /run\.taskKind === "cleanup"[\s\S]*--strict-mcp-config/);
+  assert.doesNotMatch(commandArgs, /--strict-ai-config/);
 });
 
 test("Claude result events end the current turn immediately", () => {
