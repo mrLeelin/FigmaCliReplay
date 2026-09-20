@@ -1,4 +1,4 @@
-// Figma Relay build #285
+// Figma Relay build #289
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #285
+// Figma Relay build #289
 figma.showUI(__html__, {
-  width: 1080,
-  height: 760,
+  width: 1120,
+  height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (285 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 285)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "285" });
+// DIAG: 插件启动标记 (289 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 289)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "289" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -430,7 +430,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "285",
+        build: "289",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }

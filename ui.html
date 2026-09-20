@@ -21,14 +21,105 @@
       margin: 0;
       width: 100%;
       min-height: 100vh;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
       font: 13px/1.45 "Segoe UI", "PingFang SC", sans-serif;
       color: var(--text);
       background:
         radial-gradient(circle at top right, rgba(100,210,255,0.16), transparent 32%),
         radial-gradient(circle at bottom left, rgba(158,255,181,0.1), transparent 28%),
         var(--bg);
-      padding: 16px 18px 28px;
     }
+    .app-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(8, 14, 22, 0.55);
+      backdrop-filter: blur(8px);
+      z-index: 20;
+    }
+    .app-header .app-title-row { margin: 0; flex: 0 0 auto; }
+    .app-header h1 { font-size: 15px; letter-spacing: 0.02em; }
+    .header-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-left: auto;
+      align-items: center;
+    }
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .status-chip .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .status-chip.online { color: var(--accent-2); border-color: rgba(158,255,181,0.28); }
+    .status-chip.online .dot { background: var(--accent-2); }
+    .status-chip.offline { color: var(--danger); border-color: rgba(255,143,143,0.28); }
+    .status-chip.offline .dot { background: var(--danger); }
+    .app-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 12px 16px 0;
+      overflow: hidden;
+    }
+    .app-content {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding-bottom: 10px;
+    }
+    .app-dock {
+      flex: 0 0 auto;
+      border-top: 1px solid var(--border);
+      background: rgba(6, 10, 16, 0.45);
+      padding: 8px 16px 28px;
+      max-height: 34vh;
+      overflow: auto;
+    }
+    .app-dock.collapsed .dock-body { display: none; }
+    .dock-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 0;
+    }
+    .dock-head h2 { margin: 0; flex: 1; }
+    .dock-toggle {
+      padding: 4px 10px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+    .app-dock #log-section {
+      margin: 0;
+      border: 0;
+      background: transparent;
+      padding: 0;
+    }
+    .app-dock .log {
+      max-height: none;
+      min-height: 96px;
+    }
+    .app-dock:not(.collapsed) .log { max-height: 28vh; }
     .plugin-resize-handle {
       position: fixed;
       right: 0;
@@ -57,6 +148,60 @@
       margin: 0 0 8px;
     }
     h1 { margin: 0; font-size: 16px; }
+    .tabs {
+      position: sticky;
+      top: 0;
+      z-index: 15;
+      display: flex;
+      gap: 4px;
+      margin: 0 0 12px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(8, 14, 22, 0.88);
+      backdrop-filter: blur(8px);
+    }
+    .tab-button {
+      flex: 1;
+      padding: 9px 10px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tab-button.active {
+      color: #081018;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 4px 14px rgba(100,210,255,0.22);
+    }
+    .section {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel);
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    .section > h2:first-child {
+      margin-bottom: 10px;
+      font-size: 13px;
+      letter-spacing: 0.01em;
+    }
+    .sync-tabs {
+      position: sticky;
+      top: 52px;
+      z-index: 12;
+      display: flex;
+      gap: 4px;
+      margin: 0 0 12px;
+      padding: 3px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      background: rgba(8, 14, 22, 0.86);
+      backdrop-filter: blur(8px);
+    }
     .release-version {
       border: 1px solid var(--border);
       border-radius: 999px;
@@ -77,13 +222,6 @@
       background: rgba(255,143,143,0.08);
     }
     h2 { margin: 0 0 6px; font-size: 13px; color: var(--accent); }
-    .section {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--panel);
-      padding: 12px;
-      margin-bottom: 10px;
-    }
     .section.unity {
       border-color: rgba(158,255,181,0.25);
       background: rgba(158,255,181,0.04);
@@ -144,8 +282,8 @@
     .control-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      margin-bottom: 8px;
+      gap: 10px;
+      margin-bottom: 10px;
     }
     .control-card {
       padding: 8px;
@@ -188,10 +326,19 @@
     select:disabled,
     textarea:disabled { opacity: 0.5; }
     textarea {
-      min-height: 180px;
+      min-height: 160px;
       resize: vertical;
       line-height: 1.5;
       white-space: pre-wrap;
+    }
+    #nineSlicePreviewCanvas {
+      display: block;
+      margin: 0 auto;
+      max-width: min(100%, 520px);
+      max-height: 420px;
+      border-radius: 6px;
+      background: #ffffff;
+      border: 1px solid rgba(255,255,255,0.1);
     }
     button {
       padding: 7px 12px;
@@ -252,13 +399,6 @@
       color: var(--muted);
       margin-bottom: 6px;
       font-weight: 500;
-    }
-    #nineSlicePreviewCanvas {
-      display: block;
-      margin: 0 auto;
-      border-radius: 4px;
-      background: #ffffff;
-      border: 1px solid rgba(255,255,255,0.1);
     }
     .nine-slice-preview-info {
       margin-top: 6px;
@@ -489,9 +629,49 @@
     }
     .log-filter-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 6px;
       margin-top: 6px;
+    }
+    /* 宽窗口：主内容双栏 */
+    @media (min-width: 900px) {
+      .app-body { padding-left: 18px; padding-right: 18px; }
+      #nine-slice-section {
+        display: grid;
+        grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+        gap: 16px 20px;
+        align-items: start;
+      }
+      #nine-slice-section > h2 { grid-column: 1 / -1; margin-bottom: 0; }
+      #nine-slice-section > .grid,
+      #nine-slice-section > .row,
+      #nine-slice-section > .status-box { grid-column: 1; }
+      #nine-slice-section > .nine-slice-preview-container { grid-column: 2; grid-row: 2 / span 4; margin-top: 0; }
+      #nine-slice-section > .nine-slice-preview-container[style*="display:none"] { display: none !important; }
+      #ai-prompt-section {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        gap: 12px 18px;
+        align-items: start;
+      }
+      #ai-prompt-section > h2 { grid-column: 1 / -1; margin-bottom: 0; }
+      #ai-prompt-section > .field:first-of-type,
+      #ai-prompt-section > .folder-box,
+      #ai-prompt-section > .option-row,
+      #ai-prompt-section > #aiPromptPsdFileSection,
+      #ai-prompt-section > #aiPromptManualActions,
+      #ai-prompt-section > .ai-config-panel,
+      #ai-prompt-section > #ai-prompt-status,
+      #ai-prompt-section > #aiPromptNodeList { grid-column: 1; }
+      #ai-prompt-section > #aiPromptPreviewField {
+        grid-column: 2;
+        grid-row: 2 / span 8;
+        margin-top: 0;
+      }
+      #ai-prompt-section > #aiPromptPreviewField textarea { min-height: 360px; }
+      #ai-execution-section .ai-execution-log { min-height: 280px; max-height: 42vh; }
+      .template-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .app-dock { max-height: 30vh; }
     }
     .log-filter-grid input,
     .log-filter-grid select {
@@ -534,28 +714,6 @@
     .badge.offline { background: rgba(255,143,143,0.1); color: var(--danger); }
     .flex { display: flex; align-items: center; gap: 8px; }
     .error { color: var(--danger); }
-    .tabs {
-      display: flex;
-      gap: 4px;
-      margin: 8px 0 10px;
-      padding: 3px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: rgba(0,0,0,0.16);
-    }
-    .tab-button {
-      flex: 1;
-      padding: 7px 6px;
-      color: var(--muted);
-      background: transparent;
-      border: 0;
-      border-radius: 9px;
-      font-size: 12px;
-    }
-    .tab-button.active {
-      color: #081018;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    }
     .tab-button.connection-error {
       position: relative;
       color: var(--danger);
@@ -579,15 +737,6 @@
     .tab-button.connection-error.active { color: #081018; }
     .tab-page { display: none; }
     .tab-page.active { display: block; }
-    .sync-tabs {
-      display: flex;
-      gap: 4px;
-      margin: 0 0 10px;
-      padding: 3px;
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 10px;
-      background: rgba(255,255,255,0.04);
-    }
     .sync-tab-button {
       flex: 1;
       padding: 7px 6px;
@@ -780,42 +929,940 @@
       background: #fff;
     }
   </style>
+  <style>
+    /* ── Product chrome ── */
+    :root {
+      --bg: #0a0d12;
+      --sidebar: #0d1117;
+      --surface: #12171f;
+      --surface-2: #171e28;
+      --surface-3: #1c2430;
+      --line: #242c38;
+      --line-soft: rgba(255,255,255,0.06);
+      --text: #edf1f7;
+      --text-2: #c5cedb;
+      --muted: #8b96a8;
+      --accent: #6e9bff;
+      --accent-soft: rgba(110,155,255,0.14);
+      --accent-line: rgba(110,155,255,0.35);
+      --ok: #3dce8b;
+      --ok-soft: rgba(61,206,139,0.12);
+      --danger: #ff7b82;
+      --danger-soft: rgba(255,123,130,0.12);
+      --warn: #e8b44c;
+      --radius: 14px;
+      --radius-sm: 9px;
+      --sidebar-w: 228px;
+      --font: "Segoe UI", "PingFang SC", system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    body {
+      font: 13px/1.5 var(--font);
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    ::selection { background: rgba(110,155,255,0.28); }
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    .tab-button:focus-visible {
+      outline: 2px solid rgba(110,155,255,0.65);
+      outline-offset: 2px;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+      height: 100vh;
+      background: var(--bg);
+    }
+
+    /* Sidebar */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      min-height: 0;
+      padding: 18px 14px 16px;
+      border-right: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), transparent 120px),
+        var(--sidebar);
+      overflow: auto;
+    }
+    .brand { padding: 2px 4px 0; }
+    .brand-title.app-title-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      flex-wrap: wrap;
+    }
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: #0a0d12;
+      background: linear-gradient(145deg, #8eb4ff, #6e9bff 55%, #5b8cff);
+      box-shadow: 0 6px 16px rgba(110,155,255,0.22);
+    }
+    .brand-title h1 {
+      margin: 0;
+      font-size: 13.5px;
+      font-weight: 650;
+      letter-spacing: 0.01em;
+      color: var(--text);
+      line-height: 1.2;
+    }
+    .brand .release-version {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.03);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 16px;
+      padding: 0 7px;
+      border-radius: 999px;
+    }
+    .brand .bridge-version.online {
+      color: var(--ok);
+      border-color: rgba(61,206,139,0.35);
+      background: var(--ok-soft);
+    }
+    .brand .bridge-version.error {
+      color: var(--danger);
+      border-color: rgba(255,123,130,0.35);
+      background: var(--danger-soft);
+    }
+    .brand-meta {
+      margin: 8px 2px 0;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .sidebar .section#figma-location-section {
+      margin: 0;
+      padding: 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .sidebar #figma-location-section h2 {
+      margin: 0 0 10px;
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .sidebar #figma-location-section .field label {
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .sidebar #figma-location-section .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 0;
+    }
+    .sidebar #figma-location-section .row input {
+      grid-column: 1 / -1;
+    }
+    .sidebar #figma-location-section input,
+    .sidebar #figma-location-section button {
+      min-height: 32px;
+      border-radius: 8px;
+    }
+    .sidebar #figma-location-section input {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,0.28);
+      color: var(--text);
+    }
+    .sidebar #figma-location-section input::placeholder { color: #667386; }
+    .sidebar #figma-location-section button {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 11.5px;
+      font-weight: 550;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text-2);
+      cursor: pointer;
+    }
+    .sidebar #figma-location-section button:hover {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+    .sidebar .key-context {
+      margin-top: 8px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+      word-break: break-all;
+    }
+
+    .sidebar .tabs {
+      position: static;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      backdrop-filter: none;
+    }
+    .sidebar .tab-button {
+      position: relative;
+      flex: none;
+      width: 100%;
+      text-align: left;
+      min-height: 36px;
+      padding: 8px 12px;
+      border: 0;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .sidebar .tab-button:hover {
+      color: var(--text-2);
+      background: rgba(255,255,255,0.035);
+    }
+    .sidebar .tab-button.active {
+      color: var(--text);
+      background: var(--accent-soft);
+    }
+    .sidebar .tab-button.active::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      border-radius: 2px;
+      background: var(--accent);
+    }
+    .sidebar .tab-button.connection-error::after {
+      top: 50%;
+      right: 10px;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      line-height: 16px;
+      font-size: 10px;
+      box-shadow: none;
+      background: var(--danger);
+      color: #1a0a0c;
+    }
+    .sidebar .tab-button.connection-error.active { color: var(--text); }
+
+    .sidebar-status {
+      margin-top: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line-soft);
+    }
+    .sidebar-status .status-label {
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #667386;
+      padding: 0 4px 2px;
+    }
+    .sidebar .header-status {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 0;
+    }
+    .status-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 34px;
+      padding: 7px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .status-chip .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #5c6778;
+      box-shadow: 0 0 0 3px rgba(92,103,120,0.12);
+      flex: 0 0 auto;
+    }
+    .status-chip.online {
+      color: var(--ok);
+      border-color: rgba(61,206,139,0.28);
+      background: var(--ok-soft);
+    }
+    .status-chip.online .dot {
+      background: var(--ok);
+      box-shadow: 0 0 0 3px rgba(61,206,139,0.14);
+    }
+    .status-chip.offline {
+      color: var(--danger);
+      border-color: rgba(255,123,130,0.22);
+      background: var(--danger-soft);
+    }
+    .status-chip.offline .dot {
+      background: var(--danger);
+      box-shadow: 0 0 0 3px rgba(255,123,130,0.12);
+    }
+
+    /* Workspace */
+    .workspace {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      background:
+        radial-gradient(1200px 400px at 20% -10%, rgba(110,155,255,0.07), transparent 55%),
+        var(--bg);
+    }
+    .workspace-header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 22px 28px 10px;
+      border-bottom: 1px solid transparent;
+    }
+    .workspace-title-block { min-width: 0; }
+    .workspace-eyebrow {
+      margin: 0 0 4px;
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .workspace-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }
+    .workspace-header .header-status { display: none; }
+
+    .main {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding: 10px 28px 24px;
+    }
+    .main .tab-page.active > .section,
+    .main .tab-page.active > .sync-sub-page.active > .section,
+    .main .tab-page.active > .sync-sub-page > .section {
+      max-width: 920px;
+    }
+
+    .main .section,
+    .main .global-section,
+    .main .section.unity {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 20px 22px;
+      margin: 0 0 14px;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset;
+    }
+    .main .section > h2:first-child,
+    .main .section h2 {
+      margin: 0 0 14px;
+      font-size: 14px;
+      font-weight: 650;
+      color: var(--text);
+      letter-spacing: 0.01em;
+    }
+    .main .section .flex h2 { margin: 0; }
+    .main .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      gap: 4px;
+    }
+    .main .badge.online { background: var(--ok-soft); color: var(--ok); }
+    .main .badge.offline { background: var(--danger-soft); color: var(--danger); }
+
+    .main .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 0;
+    }
+    .main .row input,
+    .main .row select { flex: 1 1 160px; min-width: 0; }
+    .main .field { margin: 0 0 12px; }
+    .main .field label,
+    .main .control-card label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--muted);
+    }
+    .main input,
+    .main select,
+    .main textarea {
+      width: 100%;
+      min-height: 36px;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: #0b0f15;
+      color: var(--text);
+    }
+    .main input::placeholder,
+    .main textarea::placeholder { color: #667386; }
+    .main input:hover,
+    .main select:hover,
+    .main textarea:hover { border-color: #314055; }
+    .main input:focus,
+    .main select:focus,
+    .main textarea:focus {
+      border-color: var(--accent-line);
+      box-shadow: 0 0 0 3px rgba(110,155,255,0.12);
+      outline: none;
+    }
+    .main input:disabled,
+    .main select:disabled,
+    .main textarea:disabled { opacity: 0.45; }
+    .main textarea {
+      min-height: 160px;
+      resize: vertical;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+    .main select {
+      appearance: none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position:
+        calc(100% - 14px) 50%,
+        calc(100% - 9px) 50%;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+      padding-right: 28px;
+    }
+
+    .main button {
+      min-height: 36px;
+      padding: 8px 14px;
+      border: 0;
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      font-size: 12.5px;
+      cursor: pointer;
+      color: #0a0d12;
+      background: linear-gradient(180deg, #8eb4ff, #6e9bff);
+      box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset;
+    }
+    .main button:hover { filter: brightness(1.05); }
+    .main button:active { transform: translateY(0.5px); }
+    .main button.secondary {
+      color: var(--text-2);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+    .main button.secondary:hover {
+      color: var(--text);
+      background: var(--surface-3);
+    }
+    .main button.danger {
+      color: var(--danger);
+      background: var(--danger-soft);
+      border: 1px solid rgba(255,123,130,0.28);
+      box-shadow: none;
+    }
+    .main button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      filter: none;
+      transform: none;
+    }
+    .main button.export-btn {
+      width: 100%;
+      min-height: 40px;
+      margin-top: 14px;
+      padding: 10px 16px;
+      font-size: 13px;
+    }
+    .main button.export-btn.secondary {
+      color: var(--text);
+      background: linear-gradient(180deg, #7aa8ff, #5f92f0);
+      border: 0;
+    }
+    .main .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .main .button-row button { flex: 1 1 auto; min-width: 120px; }
+    .main .button-row .export-btn { margin-top: 0; }
+
+    .main .status-box,
+    .main .folder-box,
+    .main .node-list {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line-soft);
+      background: rgba(0,0,0,0.22);
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+    .main .folder-box {
+      color: var(--ok);
+      border-color: rgba(61,206,139,0.2);
+      background: var(--ok-soft);
+    }
+    .main .folder-box.missing {
+      color: var(--danger);
+      border-color: rgba(255,123,130,0.22);
+      background: var(--danger-soft);
+    }
+    .main .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 4px 0 0;
+    }
+    .main .option-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin: 10px 0 0;
+    }
+    .main .option {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-2);
+      font-size: 12.5px;
+    }
+    .main .option input { width: auto; min-height: 0; margin: 0; }
+    .main .control-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin: 0 0 14px;
+    }
+    .main .control-card {
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+
+    .main .sync-tabs {
+      position: static;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: 920px;
+      margin: 0 0 14px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      backdrop-filter: none;
+    }
+    .main .sync-tab-button {
+      flex: 1 1 auto;
+      min-width: 120px;
+      min-height: 34px;
+      padding: 8px 12px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 550;
+    }
+    .main .sync-tab-button:hover { color: var(--text-2); background: rgba(255,255,255,0.03); }
+    .main .sync-tab-button.active {
+      color: var(--text);
+      background: var(--surface-3);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .main .template-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .main .template-card {
+      position: relative;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      cursor: pointer;
+    }
+    .main .template-card:hover { border-color: #314055; }
+    .main .template-card.selected {
+      border-color: var(--accent-line);
+      background: var(--accent-soft);
+    }
+    .main .template-card.selected::after {
+      top: 8px;
+      right: 10px;
+      color: var(--accent);
+    }
+    .main .template-icon { font-size: 20px; margin-bottom: 8px; }
+    .main .template-name { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .main .template-desc { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+    .main .progress {
+      margin-top: 12px;
+      height: 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,0.28);
+    }
+    .main .progress-bar {
+      background: linear-gradient(90deg, var(--accent), #8eb4ff);
+    }
+    .main .log,
+    .main .ai-execution-log {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: #0b0f15;
+      color: var(--text-2);
+      font-family: "Cascadia Code", Consolas, "SF Mono", monospace;
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+    .main .ai-execution-log { min-height: 220px; max-height: 36vh; }
+    .main .nine-slice-preview-container {
+      margin-top: 16px;
+      padding: 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+    .main .nine-slice-preview-label {
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    #nineSlicePreviewCanvas {
+      display: block;
+      margin: 0 auto;
+      max-width: min(100%, 560px);
+      max-height: 420px;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .main .psd-drop-zone {
+      margin-top: 8px;
+      padding: 16px;
+      border-radius: var(--radius-sm);
+      border: 1px dashed #3a4658;
+      background: rgba(110,155,255,0.04);
+      color: var(--muted);
+      text-align: center;
+    }
+    .main .ai-config-panel {
+      margin-top: 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      overflow: hidden;
+    }
+    .main .ai-config-head {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .main .ai-title { font-size: 12px; font-weight: 650; color: var(--text-2); }
+    .main .ai-config-body { padding: 12px 14px; }
+
+    /* Log dock */
+    .app-dock {
+      flex: 0 0 auto;
+      border-top: 1px solid var(--line);
+      background: rgba(13, 17, 23, 0.92);
+      padding: 0 28px 24px;
+      max-height: none;
+    }
+    .app-dock #log-section {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .app-dock .dock-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0 2px;
+    }
+    .app-dock .dock-head h2 {
+      margin: 0;
+      flex: 1;
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .app-dock .dock-toggle {
+      min-height: 28px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 550;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text-2);
+      cursor: pointer;
+    }
+    .app-dock .dock-toggle:hover { color: var(--text); background: var(--surface-3); }
+    .app-dock .log {
+      margin-top: 8px;
+      max-height: 150px;
+      min-height: 72px;
+    }
+    .app-dock .log-filter-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .app-dock .log-filter-grid input,
+    .app-dock .log-filter-grid select {
+      min-height: 32px;
+      min-width: 0;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #0b0f15;
+      color: var(--text-2);
+    }
+    .app-dock .button-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .app-dock .button-row button {
+      min-height: 32px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 550;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text-2);
+      cursor: pointer;
+    }
+    .app-dock .button-row button:hover { color: var(--text); background: var(--surface-3); }
+    .app-dock .log-viewer-meta {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .app-dock.collapsed { padding-bottom: 12px; }
+    .app-dock.collapsed .dock-body { display: none; }
+
+    .plugin-resize-handle {
+      position: fixed;
+      right: 0;
+      bottom: 0;
+      width: 16px;
+      height: 16px;
+      z-index: 10050;
+      cursor: nwse-resize;
+      touch-action: none;
+      background:
+        linear-gradient(135deg, transparent 0 42%, rgba(237,241,247,0.28) 42% 52%, transparent 52% 62%, rgba(237,241,247,0.28) 62% 72%, transparent 72%);
+    }
+    .plugin-resize-handle:hover,
+    .plugin-resize-handle.dragging {
+      background:
+        linear-gradient(135deg, transparent 0 42%, rgba(110,155,255,0.85) 42% 52%, transparent 52% 62%, rgba(110,155,255,0.85) 62% 72%, transparent 72%);
+    }
+    body.is-resizing-plugin { user-select: none; cursor: nwse-resize; }
+
+    .modal-card {
+      width: min(560px, 94%);
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+    }
+
+    @media (max-width: 760px) {
+      .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .sidebar {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        padding: 12px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .brand { flex: 1 1 auto; }
+      .sidebar .section#figma-location-section { display: none; }
+      .sidebar .tabs { width: 100%; flex-direction: row; flex-wrap: wrap; }
+      .sidebar .tab-button { width: auto; min-height: 34px; }
+      .sidebar-status { width: 100%; margin-top: 0; border-top: 0; padding-top: 0; flex-direction: row; }
+      .sidebar-status .status-label { display: none; }
+      .sidebar .header-status { flex-direction: row; }
+      .status-chip { width: auto; min-height: 30px; }
+      .workspace-header, .main, .app-dock { padding-left: 16px; padding-right: 16px; }
+      .main .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .main .template-grid { grid-template-columns: 1fr; }
+      .app-dock .log-filter-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (min-width: 980px) {
+      #nine-slice-section {
+        display: grid;
+        grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+        gap: 18px 24px;
+        align-items: start;
+      }
+      #nine-slice-section > h2 { grid-column: 1 / -1; margin-bottom: 0; }
+      #nine-slice-section > .grid,
+      #nine-slice-section > .row,
+      #nine-slice-section > .status-box { grid-column: 1; }
+      #nine-slice-section > .nine-slice-preview-container {
+        grid-column: 2;
+        grid-row: 2 / span 4;
+        margin-top: 0;
+      }
+      #nine-slice-section > .nine-slice-preview-container[style*="display:none"] { display: none !important; }
+      #ai-prompt-section {
+        display: grid;
+        grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+        gap: 14px 22px;
+        align-items: start;
+      }
+      #ai-prompt-section > h2 { grid-column: 1 / -1; margin-bottom: 0; }
+      #ai-prompt-section > #aiPromptPreviewField {
+        grid-column: 2;
+        grid-row: 2 / span 8;
+        margin-top: 0;
+      }
+      #ai-prompt-section > #aiPromptPreviewField textarea { min-height: 380px; }
+    }
+  </style>
 </head>
 <body>
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
   <div class="plugin-resize-handle" id="pluginResizeHandle" title="拖动缩放插件窗口" aria-label="拖动缩放插件窗口"></div>
-  <div class="app-title-row">
-    <h1>LKS Figma Relay</h1>
-    <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.48<!-- END_RELEASE_VERSION --></span>
-    <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
-  </div>
 
-  <!-- ========== Figma 定位全局区域 ========== -->
-  <div class="section global-section" id="figma-location-section">
-    <h2>Figma 定位</h2>
-    <div class="field">
-      <label for="aiPromptFigmaKeyInput">Figma Key</label>
-      <div class="row">
-        <input id="aiPromptFigmaKeyInput" placeholder="自动读取当前文件 key，也可粘贴覆盖" />
-        <button id="readFigmaKeyBtn" class="secondary" type="button">读取 Key</button>
-        <button id="copyFigmaLinkBtn" class="secondary" type="button">复制链接</button>
-        <button id="copyFigmaAiContextBtn" class="secondary" type="button">复制给 AI</button>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-title app-title-row">
+          <div class="brand-mark" aria-hidden="true">LR</div>
+          <div>
+            <h1>LKS Figma Relay</h1>
+          </div>
+          <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.48<!-- END_RELEASE_VERSION --></span>
+          <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
+        </div>
+        <div class="brand-meta">Figma ↔ Unity 工作台</div>
       </div>
-      <div class="key-context" id="aiPromptFigmaKeyContext">当前定位：未读取</div>
-    </div>
-  </div>
 
-  <div class="tabs" role="tablist">
-    <button class="tab-button active" data-tab="sync-unity-tab" type="button">同步Unity</button>
-    <button class="tab-button" data-tab="nine-slice-tab" type="button">切九宫</button>
-    <button class="tab-button" data-tab="ai-prompt-tab" type="button">AI 提示词</button>
-    <button class="tab-button" data-tab="ai-execution-tab" type="button">AI 执行</button>
-    <button class="tab-button" id="settingsTabBtn" data-tab="settings-tab" type="button" aria-label="设置">设置</button>
-  </div>
+      <div class="section global-section" id="figma-location-section">
+        <h2>Figma 定位</h2>
+        <div class="field">
+          <label for="aiPromptFigmaKeyInput">Figma Key</label>
+          <div class="row">
+            <input id="aiPromptFigmaKeyInput" placeholder="自动读取或粘贴 Key" />
+            <button id="readFigmaKeyBtn" class="secondary" type="button">读取 Key</button>
+            <button id="copyFigmaLinkBtn" class="secondary" type="button">复制链接</button>
+            <button id="copyFigmaAiContextBtn" class="secondary" type="button">复制给 AI</button>
+          </div>
+          <div class="key-context" id="aiPromptFigmaKeyContext">当前定位：未读取</div>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button class="tab-button active" data-tab="sync-unity-tab" type="button">同步 Unity</button>
+        <button class="tab-button" data-tab="nine-slice-tab" type="button">切九宫</button>
+        <button class="tab-button" data-tab="ai-prompt-tab" type="button">AI 提示词</button>
+        <button class="tab-button" data-tab="ai-execution-tab" type="button">AI 执行</button>
+        <button class="tab-button" id="settingsTabBtn" data-tab="settings-tab" type="button" aria-label="设置">设置</button>
+      </div>
+
+      <div class="sidebar-status">
+        <div class="status-label">连接状态</div>
+        <div class="header-status" aria-label="连接状态">
+          <span class="status-chip offline" id="headerRelayChip" title="本地 Relay"><span class="dot"></span>Relay 未连接</span>
+          <span class="status-chip offline" id="headerUnityChip" title="Unity 网关"><span class="dot"></span>Unity 未连接</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="workspace-header">
+        <div class="workspace-title-block">
+          <div class="workspace-eyebrow">Workspace</div>
+          <h2 class="workspace-title" id="workspaceTitle">同步 Unity</h2>
+        </div>
+      </header>
+
+      <main class="main">
 
   <!-- ========== 设置区域 ========== -->
   <div class="tab-page" id="settings-tab">
-    <!-- ========== 本地 Relay / 插件 Runtime Relay 区域 ========== -->
     <div class="section global-section" id="ai-section">
       <div class="flex">
         <h2>本地 Relay</h2>
@@ -829,7 +1876,6 @@
       <div class="status-box" id="ai-status">等待连接本地 Relay...</div>
     </div>
 
-    <!-- ========== Unity 网关区域 ========== -->
     <div class="section unity global-section" id="unity-section">
       <div class="flex">
         <h2>Unity 网关</h2>
@@ -840,7 +1886,7 @@
         <select id="unityProjectSelect"></select>
       </div>
       <div class="row">
-        <input id="unityProjectPathInput" placeholder="输入 Unity 工程根目录，例如 <unity-project>" />
+        <input id="unityProjectPathInput" placeholder="输入 Unity 工程根目录" />
         <button id="addUnityProjectBtn" type="button">添加工程</button>
       </div>
       <div class="row">
@@ -859,16 +1905,14 @@
   </div>
   <!-- SETTINGS_TAB_END -->
 
-  <!-- ========== 同步 Unity 区域 ========== -->
   <div class="tab-page active" id="sync-unity-tab">
     <div class="sync-tabs" role="tablist" aria-label="同步 Unity">
       <button class="sync-tab-button active" data-sync-tab="unity-tab" type="button">图片导出</button>
-      <button class="sync-tab-button" data-sync-tab="hierarchy-export-tab" type="button">Figma导入Prefab</button>
-      <button class="sync-tab-button" data-sync-tab="prefab-import-tab" type="button">Prefab导入Figma</button>
+      <button class="sync-tab-button" data-sync-tab="hierarchy-export-tab" type="button">Figma 导入 Prefab</button>
+      <button class="sync-tab-button" data-sync-tab="prefab-import-tab" type="button">Prefab 导入 Figma</button>
       <button class="sync-tab-button" data-sync-tab="text-style-tab" type="button">字体同步</button>
     </div>
 
-    <!-- ========== 图片导出区域 ========== -->
     <div class="sync-sub-page active" id="unity-tab">
       <div class="section" id="image-export-section">
         <h2>图片导出</h2>
@@ -877,10 +1921,9 @@
       </div>
     </div>
 
-    <!-- ========== Figma导入Prefab 区域 ========== -->
     <div class="sync-sub-page" id="hierarchy-export-tab">
       <div class="section" id="hierarchy-export-section">
-        <h2>Figma导入Prefab</h2>
+        <h2>Figma 导入 Prefab</h2>
         <div class="folder-box missing" id="hierarchyImageTargetBox">Unity 导入目标：未连接</div>
         <div class="status-box" id="hierarchy-export-status">选择 Unity Project 中的空文件夹后，当前 Figma 根节点会直接导入；输出自动分为 Prefab、Texture、UiAtlas。</div>
         <div class="button-row">
@@ -890,7 +1933,6 @@
       </div>
     </div>
 
-    <!-- ========== 无大模型 Prefab 导入 ========== -->
     <div class="sync-sub-page" id="prefab-import-tab">
       <div class="section unity">
         <h2>Unity Prefab → Figma</h2>
@@ -918,7 +1960,6 @@
       </div>
     </div>
 
-    <!-- ========== 字体同步 ========== -->
     <div class="sync-sub-page" id="text-style-tab">
       <div class="section" id="text-style-section">
         <h2>字体同步</h2>
@@ -933,7 +1974,6 @@
     </div>
   </div>
 
-  <!-- ========== 手动九宫切片 ========== -->
   <div class="tab-page" id="nine-slice-tab">
     <div class="section" id="nine-slice-section">
       <h2>切九宫</h2>
@@ -959,24 +1999,21 @@
         <button id="suggestNineSliceBtn" class="secondary">自动识别</button>
         <button id="createNineSliceBtn">切九宫</button>
       </div>
-      <!-- 九宫格预览图 -->
       <div class="nine-slice-preview-container" id="nineSlicePreviewContainer" style="display:none;">
         <div class="nine-slice-preview-label">预览</div>
         <canvas id="nineSlicePreviewCanvas"></canvas>
         <div class="nine-slice-preview-info" id="nineSlicePreviewInfo"></div>
       </div>
-      <div class="status-box" id="nine-slice-status">选择 1 个带图片填充的节点，可自动识别或手动输入 Unity spriteBorder。Frame/Group 会在原节点内生成 __slice_*；Rectangle 这类叶子节点会原地转换为同名 Frame，并把旧图隐藏在该 Frame 下。</div>
+      <div class="status-box" id="nine-slice-status">选择 1 个带图片填充的节点，可自动识别或手动输入 Unity spriteBorder。Frame/Group 会在原节点内生成 __slice_*；Rectangle 这类叶子节点会原地转换为同名 Frame。</div>
     </div>
   </div>
 
-  <!-- ========== AI 提示词 ========== -->
   <div class="tab-page" id="ai-prompt-tab">
     <div class="section" id="ai-prompt-section">
       <h2>AI 提示词</h2>
       <div class="field">
         <label>选择模板</label>
         <div class="template-grid" id="templateGrid">
-
           <div class="template-card selected" data-value="cleanup">
             <span class="template-icon">🗂️</span>
             <div class="template-name">整理节点</div>
@@ -995,16 +2032,11 @@
             <div class="template-desc">Figma → UGUI Prefab</div>
             <div class="template-status neutral"></div>
           </div>
-
-
         </div>
         <select id="aiPromptTemplateSelect" style="display:none;">
-
           <option value="cleanup">整理 Figma 节点</option>
           <option value="componentVariants">多选模板生成组件变体</option>
           <option value="unity">导入到 Unity</option>
-
-
         </select>
       </div>
       <div class="folder-box" id="aiPromptUnityFolderBox" style="display:none;">Unity 目标：未连接</div>
@@ -1016,7 +2048,7 @@
         <label>PSD 文件</label>
         <div class="psd-drop-zone" id="aiPromptPsdDropZone">
           <div class="psd-drop-title">拖入 PSD 文件</div>
-          <div class="psd-drop-hint">不再提供系统文件选择器；直接把 .psd 文件拖到这里记录来源。</div>
+          <div class="psd-drop-hint">把 .psd 文件拖到这里记录来源。</div>
         </div>
         <div class="folder-box" id="aiPromptPsdFileBox">PSD 文件名：未拖入</div>
       </div>
@@ -1030,8 +2062,8 @@
         <div class="ai-config-head"><div class="ai-title">AI</div></div>
         <div class="ai-config-body">
           <div class="control-grid ai-config-controls">
-          <div class="control-card" id="cleanupProviderField"><label for="cleanupProviderSelect">AI</label><select id="cleanupProviderSelect"><option value="codex">Codex CLI</option><option value="claude-code">Claude Code</option></select></div>
-          <div class="control-card" hidden><label for="aiRunnerSelect" hidden>AI runner</label><select id="aiRunnerSelect" hidden><option value="codex">Codex CLI</option><option value="claude">Claude Code</option></select></div>
+            <div class="control-card" id="cleanupProviderField"><label for="cleanupProviderSelect">AI</label><select id="cleanupProviderSelect"><option value="codex">Codex CLI</option><option value="claude-code">Claude Code</option></select></div>
+            <div class="control-card" hidden><label for="aiRunnerSelect" hidden>AI runner</label><select id="aiRunnerSelect" hidden><option value="codex">Codex CLI</option><option value="claude">Claude Code</option></select></div>
           </div>
           <div class="status-box" id="ai-runner-status" hidden>等待读取本机 AI 设置...</div>
           <div class="status-box" id="cleanup-provider-status">正在检查可用 AI...</div>
@@ -1046,7 +2078,6 @@
     </div>
   </div>
 
-  <!-- ========== AI 执行中心 ========== -->
   <div class="tab-page" id="ai-execution-tab">
     <div class="section" id="ai-execution-section">
       <h2>AI 执行</h2>
@@ -1082,36 +2113,46 @@
     </div>
   </div>
 
-  <!-- ========== 底部日志面板 ========== -->
-  <div class="section" id="log-section">
-    <h2>日志查询</h2>
-    <div class="log-filter-grid">
-      <select id="logSourceFilter" aria-label="日志来源">
-        <option value="">全部来源</option>
-        <option value="relay">Relay</option>
-        <option value="ui">Figma UI</option>
-        <option value="plugin">Figma Plugin</option>
-        <option value="python">Python</option>
-        <option value="unity">Unity</option>
-      </select>
-      <select id="logLevelFilter" aria-label="日志级别">
-        <option value="">全部级别</option>
-        <option value="trace">Trace</option>
-        <option value="debug">Debug</option>
-        <option value="info">Info</option>
-        <option value="warn">Warn</option>
-        <option value="error">Error</option>
-        <option value="fatal">Fatal</option>
-      </select>
-      <input id="logOperationFilter" type="text" placeholder="operationId" aria-label="操作 ID" />
-      <input id="logKeywordFilter" type="search" placeholder="关键词" aria-label="日志关键词" />
+      </main>
+
+      <div class="app-dock collapsed" id="logDock">
+        <div class="section" id="log-section">
+          <div class="dock-head">
+            <h2>日志</h2>
+            <button class="secondary dock-toggle" id="logDockToggle" type="button">展开</button>
+          </div>
+          <div class="dock-body">
+            <div class="log-filter-grid">
+              <select id="logSourceFilter" aria-label="日志来源">
+                <option value="">全部来源</option>
+                <option value="relay">Relay</option>
+                <option value="ui">Figma UI</option>
+                <option value="plugin">Figma Plugin</option>
+                <option value="python">Python</option>
+                <option value="unity">Unity</option>
+              </select>
+              <select id="logLevelFilter" aria-label="日志级别">
+                <option value="">全部级别</option>
+                <option value="trace">Trace</option>
+                <option value="debug">Debug</option>
+                <option value="info">Info</option>
+                <option value="warn">Warn</option>
+                <option value="error">Error</option>
+                <option value="fatal">Fatal</option>
+              </select>
+              <input id="logOperationFilter" type="text" placeholder="operationId" aria-label="操作 ID" />
+              <input id="logKeywordFilter" type="search" placeholder="关键词" aria-label="日志关键词" />
+            </div>
+            <div class="button-row">
+              <button id="refreshLogsBtn" class="secondary" type="button">刷新日志</button>
+              <button id="downloadLogsBtn" class="secondary" type="button">下载 JSONL</button>
+            </div>
+            <div class="log-viewer-meta" id="logViewerMeta">实时日志（查询默认最多 1000 条）</div>
+            <div class="log" id="log">等待操作...</div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="button-row">
-      <button id="refreshLogsBtn" class="secondary" type="button">刷新日志</button>
-      <button id="downloadLogsBtn" class="secondary" type="button">下载 JSONL</button>
-    </div>
-    <div class="log-viewer-meta" id="logViewerMeta">实时日志（查询默认最多 1000 条）</div>
-    <div class="log" id="log">等待操作...</div>
   </div>
 
   <div class="modal-backdrop" id="psdIncrementalDialog" hidden>
@@ -2344,6 +3385,14 @@
     }
 
     // 切换功能页，避免主界面堆叠过长。
+    var workspaceTitleEl = document.getElementById("workspaceTitle");
+    var WorkspaceTabTitles = {
+      "sync-unity-tab": "同步 Unity",
+      "nine-slice-tab": "切九宫",
+      "ai-prompt-tab": "AI 提示词",
+      "ai-execution-tab": "AI 执行",
+      "settings-tab": "设置"
+    };
     function switchTab(tabId) {
       tabButtons.forEach(function (button) {
         button.classList.toggle("active", button.getAttribute("data-tab") === tabId);
@@ -2351,6 +3400,14 @@
       tabPages.forEach(function (page) {
         page.classList.toggle("active", page.id === tabId);
       });
+      if (workspaceTitleEl) {
+        var activeButton = tabButtons.filter(function (button) {
+          return button.getAttribute("data-tab") === tabId;
+        })[0];
+        var title = WorkspaceTabTitles[tabId]
+          || (activeButton ? activeButton.textContent.trim() : "");
+        if (title) workspaceTitleEl.textContent = title;
+      }
     }
 
     function switchSyncTab(tabId) {
@@ -5710,7 +6767,7 @@
 
       // 动态调整 Canvas 大小（根据缩放比例）
       var padding = 30;
-      var baseScale = Math.min(280 / origW, 200 / origH, 1);
+      var baseScale = Math.min(480 / origW, 360 / origH, 1);
       var finalScale = baseScale * nineSlicePreviewZoom;
       var drawW = origW * finalScale;
       var drawH = origH * finalScale;
@@ -5718,8 +6775,8 @@
       var canvasH = drawH + padding * 2;
 
       // 限制 Canvas 最大尺寸
-      canvasW = Math.min(canvasW, 500);
-      canvasH = Math.min(canvasH, 400);
+      canvasW = Math.min(canvasW, 640);
+      canvasH = Math.min(canvasH, 480);
 
       nineSlicePreviewCanvas.width = canvasW;
       nineSlicePreviewCanvas.height = canvasH;
@@ -6988,6 +8045,49 @@
         refreshAiPromptControls();
       });
     });
+
+    // ─── 顶栏状态芯片同步 ───
+    (function setupHeaderStatusChips() {
+      var headerRelayChip = document.getElementById("headerRelayChip");
+      var headerUnityChip = document.getElementById("headerUnityChip");
+      var aiBadgeEl = document.getElementById("ai-badge");
+      var unityBadgeEl = document.getElementById("unity-badge");
+      function syncChip(chip, badge, onlineLabel, offlineLabel) {
+        if (!chip || !badge) return;
+        var online = String(badge.className || "").indexOf("online") >= 0;
+        chip.classList.toggle("online", online);
+        chip.classList.toggle("offline", !online);
+        var label = online ? onlineLabel : offlineLabel;
+        var detail = String(badge.textContent || "").trim();
+        if (detail && detail !== "未连接" && detail !== "已连接") {
+          label += " · " + detail;
+        }
+        chip.innerHTML = '<span class="dot"></span>' + label;
+      }
+      function refreshChips() {
+        syncChip(headerRelayChip, aiBadgeEl, "Relay 已连接", "Relay 未连接");
+        syncChip(headerUnityChip, unityBadgeEl, "Unity 已连接", "Unity 未连接");
+      }
+      if (aiBadgeEl && typeof MutationObserver !== "undefined") {
+        new MutationObserver(refreshChips).observe(aiBadgeEl, { attributes: true, childList: true, subtree: true, characterData: true });
+      }
+      if (unityBadgeEl && typeof MutationObserver !== "undefined") {
+        new MutationObserver(refreshChips).observe(unityBadgeEl, { attributes: true, childList: true, subtree: true, characterData: true });
+      }
+      refreshChips();
+      setInterval(refreshChips, 2000);
+    })();
+
+    // ─── 底部日志坞折叠 ───
+    (function setupLogDock() {
+      var dock = document.getElementById("logDock");
+      var toggle = document.getElementById("logDockToggle");
+      if (!dock || !toggle) return;
+      toggle.addEventListener("click", function () {
+        var collapsed = dock.classList.toggle("collapsed");
+        toggle.textContent = collapsed ? "展开" : "收起";
+      });
+    })();
 
     // ─── 插件窗口拖拽缩放 ───
     (function setupPluginWindowResize() {

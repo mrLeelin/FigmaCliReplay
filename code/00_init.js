@@ -1,7 +1,7 @@
 // Figma Relay build #__BUILD_NUMBER__
 figma.showUI(__html__, {
-  width: 1080,
-  height: 760,
+  width: 1120,
+  height: 800,
   themeColors: true
 });
 // DIAG: 插件启动标记 (__BUILD_NUMBER__ 由 build.py 替换)
