@@ -18,7 +18,8 @@ const state = {
 };
 
 // ─── 实时选区监听 ───
-let lastSelectionSnapshot = "";
+// 初始为 null 而非 ""：空选区的快照也是 ""，否则启动时首次发送会被去重跳过，UI 拿不到 fileKey。
+let lastSelectionSnapshot = null;
 
 function getSelectionSnapshot() {
   const selection = figma.currentPage.selection || [];

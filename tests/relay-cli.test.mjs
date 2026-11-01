@@ -448,6 +448,17 @@ test("CLI reports cancelled plugin results as failure", async (t) => {
   assert.equal(result.json.error.code, "PLUGIN_FAILED");
 });
 
+test("CLI reports the plugin errors array as the failure message", async (t) => {
+  const h = await harness(t);
+  await plugin(t, h, "errors-array", (socket, message) => {
+    socket.send(JSON.stringify({ type: "relay.request", requestId: "errors-array-result", action: "job.result", payload: { requestId: message.requestId, resultToken: message.resultToken, result: { status: "error", errors: ["node not found: 1:2", "second reason"] } } }));
+  });
+  const result = await runCli(h, ["selection"]);
+  assert.equal(result.code, 1);
+  assert.equal(result.json.error.code, "PLUGIN_FAILED");
+  assert.equal(result.json.error.message, "node not found: 1:2; second reason");
+});
+
 test("busy CLI requests have correlated failure logs", async (t) => {
   const h = await harness(t);
   await plugin(t, h, "slow", () => {});

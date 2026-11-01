@@ -9,6 +9,18 @@ import { cliHelloSchema, cliRequestSchema, RELAY_PROTOCOL_VERSION, RelayProtocol
 import { isFailedJobResult, type RuntimeRelay } from "./runtimeRelay.js";
 import { bearerToken, constantTimeEqual, isAllowedLocalRequest, isRecord, validOperationId } from "./utils.js";
 
+const MAX_PLUGIN_ERROR_LENGTH = 500;
+
+/** 从插件失败结果中提取可读原因：插件各 handler 分别使用 error、errors[]、message 或 summary 字段。 */
+function pluginFailureMessage(result: Record<string, unknown>): string {
+  const errors = Array.isArray(result.errors)
+    ? result.errors.map((item) => String(item).trim()).filter(Boolean).join("; ")
+    : "";
+  const candidates = [result.error, errors, result.message, result.summary, result.status];
+  const text = candidates.map((value) => typeof value === "string" ? value.trim() : "").find(Boolean) || "Figma query failed";
+  return text.length > MAX_PLUGIN_ERROR_LENGTH ? text.slice(0, MAX_PLUGIN_ERROR_LENGTH) + "…" : text;
+}
+
 export type RelayCliControlHandler = (action: string, payload: Record<string, unknown>, operationId?: string) => Promise<unknown> | unknown;
 
 export class RelayCliEndpoint {
@@ -216,7 +228,8 @@ export class RelayCliEndpoint {
       const response = await this.relay.waitResult(request.requestId, request.payload.timeout, 0.05);
       const result = isRecord(response.result) ? response.result : {};
       if (isFailedJobResult(result)) {
-        throw new RelayProtocolError("PLUGIN_FAILED", String(result.error || result.status || "Figma query failed"));
+        operation.step("plugin-failed", "Figma plugin reported a failed result", { requestId: request.requestId, jobType: commandType, status: String(result.status || "") });
+        throw new RelayProtocolError("PLUGIN_FAILED", pluginFailureMessage(result));
       }
       this.send(socket, { ...envelope, ok: true, result });
       operation.succeed("Figma WebSocket job returned", { requestId: request.requestId, jobType: commandType });
