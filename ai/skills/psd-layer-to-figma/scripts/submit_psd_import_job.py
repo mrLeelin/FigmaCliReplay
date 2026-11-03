@@ -72,6 +72,7 @@ from figma_relay_cli import (  # noqa: E402
     query_selection as relay_query_selection,
     submit_job as relay_submit_job,
 )
+from native_text import NativeTextError, validate_native_text  # noqa: E402
 
 
 class Timeline:
@@ -185,6 +186,9 @@ def build_assets(manifest_dir: str, layers: list[dict]) -> tuple[list[dict], dic
     assets: list[dict] = []
     asset_paths: dict[str, str] = {}
     for layer in layers:
+        if layer.get("mode", layer.get("semanticMode")) == "text":
+            # Text needs font/content metadata, never an accidental <idx>.png.
+            continue
         idx = str(layer.get("idx", layer.get("index", 0)))
         rel_path = layer.get("path", "")
         png_name = os.path.basename(rel_path) if rel_path else f"{idx}.png"
@@ -217,6 +221,9 @@ def build_payload(
     manifest_dir = os.path.dirname(
         os.path.abspath(manifest.get("__source_path", ""))
     )
+    # Ordinary UI text is a native node, never an image fallback. Check this
+    # before asset registration, Relay preflight, or any Figma submission.
+    validate_native_text(manifest)
     layers = manifest_layers(manifest)
     assets, asset_paths = build_assets(manifest_dir, layers)
 
@@ -697,23 +704,27 @@ def main() -> int:
 
     # 构建 payload
     print(f"[BUILD] payload...")
-    with timeline.step("build_payload", rootName=args.root_name, x=args.x, y=args.y):
-        payload = build_payload(
-            manifest,
-            root_name=args.root_name,
-            common_root_id=args.component_common,
-            image_root_id=args.component_image,
-            file_key=args.file_key.strip(),
-            session_id=args.session_id.strip(),
-            target_node_id=args.target_node_id.strip(),
-            import_mode=args.import_mode,
-            baseline_fingerprint=args.baseline_fingerprint.strip(),
-            source_file_name=args.source_file_name.strip(),
-        )
-        if args.x is not None:
-            payload["job"]["x"] = args.x
-        if args.y is not None:
-            payload["job"]["y"] = args.y
+    try:
+        with timeline.step("build_payload", rootName=args.root_name, x=args.x, y=args.y):
+            payload = build_payload(
+                manifest,
+                root_name=args.root_name,
+                common_root_id=args.component_common,
+                image_root_id=args.component_image,
+                file_key=args.file_key.strip(),
+                session_id=args.session_id.strip(),
+                target_node_id=args.target_node_id.strip(),
+                import_mode=args.import_mode,
+                baseline_fingerprint=args.baseline_fingerprint.strip(),
+                source_file_name=args.source_file_name.strip(),
+            )
+            if args.x is not None:
+                payload["job"]["x"] = args.x
+            if args.y is not None:
+                payload["job"]["y"] = args.y
+    except NativeTextError as error:
+        print(f"[FAIL] Native text preflight: {error}")
+        return 1
 
     # 验证 payload 格式
     with timeline.step("validate_payload"):

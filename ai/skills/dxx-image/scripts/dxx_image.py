@@ -16,6 +16,7 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 from dxx_config import load_config
+from dxx_preflight import MIN_INPUT_PIXELS
 
 ROOT = Path(__file__).resolve().parent.parent
 ID = re.compile(r'[A-Za-z0-9_-]{1,200}')
@@ -417,18 +418,26 @@ def main(argv=None):
     parser.add_argument('--timeout-seconds', type=int, default=1800)
     parser.add_argument('--poll-seconds', type=int, default=4)
     parser.add_argument('--file', help='One local PNG/JPEG/WebP for layer decomposition')
+    parser.add_argument('--check-only', action='store_true', help='Decompose input check only; no configuration, upload or API calls')
+    parser.add_argument('--min-input-pixels', type=int, default=MIN_INPUT_PIXELS, help='Decomposition input pixel minimum (override only for a verified backend change)')
     parser.add_argument('--prompt', default=None, help='Optional layer separation description, max 2000 characters')
     parser.add_argument('--size', choices=['1K', '1.5K', '2K'], default='1K')
     parser.add_argument('--project-group-id', help='Only when user explicitly selected a billing group')
     parser.add_argument('--refresh-modules', action='store_true', help='Refresh metadata before submitting; default uses bundled verified snapshot')
     parser.add_argument('--no-preview', action='store_true', help='Skip optional Pillow thumbnail')
     args = parser.parse_args(argv)
+    if args.check_only and args.action != 'Decompose':
+        parser.error('--check-only 仅支持 Decompose。')
     if not 1 <= args.timeout_seconds <= 86400 or not 2 <= args.poll_seconds <= 60:
         parser.error('timeout-seconds 须为 1–86400，poll-seconds 须为 2–60。')
     key = ''
     client = None
     started = time.perf_counter()
     try:
+        if args.check_only:
+            from dxx_preflight import preflight_image
+            print(json.dumps(preflight_image(args.file, args.min_input_pixels), ensure_ascii=False, indent=2))
+            return 0
         config = load_config()
         key = config['apiKey']
         client = Client(config)
@@ -443,7 +452,7 @@ def main(argv=None):
         return 0
     except Exception as error:
         message = protect(str(error), key)
-        if args.out_dir:
+        if args.out_dir and not args.check_only:
             directory = Path(args.out_dir).expanduser()
             if directory.is_dir():
                 try:

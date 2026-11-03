@@ -5,6 +5,8 @@ description: Import Photoshop PSD files into Figma while preserving PSD layer na
 
 # PSD Layer To Figma
 
+For screenshot-derived mixed image/text manifests, first follow the adjacent [native ordinary text workflow](../image-layer-to-figma/references/native-text.md). Ordinary labels and values use editable Text; decorative raster lettering requires a recorded visual reason. The same import wrapper accepts the prepared manifest and validates its declared text roles.
+
 ## Hypothesis-Action-Verification Loop
 
 Use this loop for every write or cross-phase operation. Treat each step as a hypothesis that can be disproved by live evidence, not as a linear checklist.

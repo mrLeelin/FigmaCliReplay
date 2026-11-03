@@ -1,4 +1,4 @@
-// Figma Relay build #309
+// Figma Relay build #310
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #309
+// Figma Relay build #310
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (309 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 309)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "309" });
+// DIAG: 插件启动标记 (310 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 310)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "310" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "309",
+        build: "310",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -10709,6 +10709,15 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
   }
   for (const pair of diff.changed) {
     const node = pair.target.node;
+    if (isOrdinaryTextLayer(pair.source) || readSharedPluginData(node, "textRole") === "ordinary") {
+      diff.conflicts.push({
+        kind: "ordinary-text-requires-native-replacement",
+        layerId: pair.source.layerId,
+        nodeId: pair.target.nodeId,
+        message: "普通文字使用自动宽高；当前 PSD 增量路径要求固定几何，请通过原生文字替换流程更新。"
+      });
+      continue;
+    }
     const conflictKind = validatePsdOwnedTarget(
       pair.target.ownership,
       pair.source.mode,
@@ -11085,6 +11094,9 @@ function applyPsdTextShadow(node, shadow) {
 
 async function applyPsdTextPlan(plan, pair, prepared) {
   const node = pair.target.node;
+  if (isOrdinaryTextLayer(plan.source) || readSharedPluginData(node, "textRole") === "ordinary") {
+    throw new Error("ordinary-text-requires-native-replacement");
+  }
   const text = plan.incoming.text || {};
   if (plan.changedPaths.includes("text.fontFamily") || plan.changedPaths.includes("text.fontFallback")) {
     const resolvedFont = prepared.resolvedFonts.get(plan.layerId);
@@ -11558,7 +11570,7 @@ function verifyPsdRollbackRecords(records) {
 
 function capturePsdLayerMetadata(node) {
   const keys = [
-    "rawPsdLayerName", "normalizedLayerName", "semanticMode", "normalizationWarnings",
+    "rawPsdLayerName", "normalizedLayerName", "semanticMode", "normalizationWarnings", "textRole",
     "psdLayerIndex", "psdLayerId", "psdOriginalName", "psdContentHash", "psdOwnership",
     "psdSourceState", "psdSourceStateHash"
   ];
@@ -11668,7 +11680,12 @@ function normalizeLayer(layer) {
     normalizationWarnings: Array.isArray(layer.normalizationWarnings) ? layer.normalizationWarnings : []
   });
   applyNestedManifestCompatibility(normalized, layer, mode, width, height);
+  assertOrdinaryTextLayer(normalized);
   normalized.sourceState = normalizePsdSourceState({ ...normalized, sourceState: layer.sourceState });
+  if (isOrdinaryTextLayer(normalized) && normalized.sourceState.text) {
+    normalized.sourceState.text.lineHeightMode = "AUTO";
+    normalized.sourceState.text.leading = 0;
+  }
   normalized.sourceStateHash = hashPsdSourceState(normalized.sourceState);
   return normalized;
 }
@@ -11824,8 +11841,24 @@ async function resolveTargetParent(target) {
   return node.parent && "appendChild" in node.parent ? node.parent : figma.currentPage;
 }
 
-// 根据图层模式创建对应 Figma 节点，common 失败时自动降级为图片层。
+// 普通文字必须以明确的文字内容进入原生 Text 分支，不能降级到 common 或图片。
+function isOrdinaryTextLayer(layer) {
+  return !!layer && layer.textRole === "ordinary";
+}
+
+function assertOrdinaryTextLayer(layer) {
+  if (!isOrdinaryTextLayer(layer)) return;
+  if (layer.mode !== "text") {
+    throw new Error("ordinary-text-requires-native-text: " + String(layer.name || layer.idx || ""));
+  }
+  if (!String(layer.chars == null ? "" : layer.chars).trim()) {
+    throw new Error("ordinary-text-missing-characters: " + String(layer.name || layer.idx || ""));
+  }
+}
+
+// 根据图层模式创建对应 Figma 节点，只有 common 美术资源允许降级为图片层。
 async function createLayerNode(root, layer, context) {
+  assertOrdinaryTextLayer(layer);
   if (layer.mode === "common-component") {
     const instance = await tryCreateCommonInstance(root, layer, context);
     if (instance) {
@@ -11909,17 +11942,17 @@ async function createImageLayer(root, layer, context) {
 
 // 创建可编辑文字层，颜色和描边严格来自 manifest 数据。
 async function createTextLayer(root, layer, context) {
+  const fontName = await loadBestFont(layer, context);
   const text = figma.createText();
   text.name = buildTextLayerName(layer);
   root.appendChild(text);
 
-  const fontName = await loadBestFont(layer, context);
   text.fontName = fontName;
   text.characters = String(layer.chars || "");
   const resolvedFontSize = positiveOr(layer.effectiveFontSize, positiveOr(layer.fontSize, Math.max(12, layer.h)));
   text.fontSize = resolvedFontSize;
   const sourceText = layer.sourceState && layer.sourceState.text || {};
-  text.lineHeight = sourceText.lineHeightMode === "PIXELS" && Number(sourceText.leading) > 0
+  text.lineHeight = !isOrdinaryTextLayer(layer) && sourceText.lineHeightMode === "PIXELS" && Number(sourceText.leading) > 0
     ? { unit: "PIXELS", value: Number(sourceText.leading) }
     : { unit: "AUTO" };
   text.textAutoResize = "WIDTH_AND_HEIGHT";
@@ -11948,8 +11981,8 @@ async function createTextLayer(root, layer, context) {
       vertical: normalizeConstraint(layer.constraints.vertical, "MIN")
     };
   }
-  // 首次导入后冻结当前几何；后续增量只改 characters，不让自动尺寸扰动整理后的布局。
-  text.textAutoResize = "NONE";
+  // 普通 UI 文字保留自动宽高；未标记的旧 PSD 文字继续使用其固定几何增量契约。
+  if (!isOrdinaryTextLayer(layer)) text.textAutoResize = "NONE";
   applyLayerCommonState(text, layer);
   writeLayerMetadata(text, layer, {
     fontFamily: fontName.family,
@@ -12128,6 +12161,17 @@ function findBestFontMatch(targetFamily, targetStyle, availableFonts) {
 // 加载文字字体：PSD 候选字体 → 本机模糊匹配 → Inter 保底。
 async function loadBestFont(layer, context) {
   const candidates = normalizeFontCandidates(layer.fontFallback);
+  if (isOrdinaryTextLayer(layer)) {
+    for (const fontName of candidates) {
+      try {
+        await figma.loadFontAsync(fontName);
+        return fontName;
+      } catch (error) {
+        context.warnings.push(`${layer.idx}:${layer.name}: 普通文字指定字体 ${fontName.family} ${fontName.style} 加载失败。`);
+      }
+    }
+    throw new Error("ordinary-text-font-unavailable: 普通文字必须使用清单中明确指定的可用字体。");
+  }
   const availableFonts = await getAvailableFonts();
 
   for (const fontName of candidates) {
@@ -12289,6 +12333,7 @@ function writeLayerMetadata(node, layer, extra) {
     rawPsdLayerName: layer.rawPsdLayerName,
     normalizedLayerName: layer.normalizedLayerName,
     semanticMode: layer.semanticMode,
+    textRole: String(layer.textRole || ""),
     normalizationWarnings: JSON.stringify(layer.normalizationWarnings || []),
     psdLayerIndex: String(layer.idx),
     psdLayerId: normalizePsdLayerId(layer.layerId),

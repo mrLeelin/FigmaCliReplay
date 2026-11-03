@@ -1,6 +1,6 @@
 # Resource hierarchy delivery
 
-Use this after the raster resources have been imported, or when the user accepts the images but requests useful nesting. This phase reorganizes existing Figma nodes. It does not resubmit decomposition, replace image bytes, create ComponentSets, turn raster text into Text, or import Unity assets.
+Use this after the artwork and ordinary Text have been imported, or when accepted resources need useful nesting. This phase reorganizes existing Figma nodes. It does not resubmit decomposition, replace image bytes, create ComponentSets, turn raster text into Text, or import Unity assets.
 
 ## Plan against the current root
 
@@ -52,7 +52,7 @@ The script obtains a fresh analysis and native snapshot, resolves the root's con
 
 Afterward, fresh analysis must match every planned parent/order, retain all original IDs and resource subtrees, preserve bounds within 0.01 Figma units, and produce an identical RGBA screenshot. Readback depth covers the native snapshot depth plus the proposed new groups so protected descendants are not truncated. Initial import screenshots can precede full image decoding; obtain the hierarchy baseline from a fresh export after the accepted assets render. On pixel mismatch, retain the reports and stop downstream delivery; a geometry check alone is not acceptance.
 
-`report.json` reports `completed` only after live verification. Offline `validated`, a successful import and a native transaction `succeeded` are separate evidence. Raster text and inferred hidden pixels retain their existing limitations. Existing Unity Prefabs are not updated by this phase.
+`report.json` reports `completed` only after live verification. Offline `validated`, a successful import and a native transaction `succeeded` are separate evidence. Explicitly retained artistic raster lettering, substituted fonts and inferred hidden pixels retain their existing limitations. Existing Unity Prefabs are not updated by this phase.
 
 ## Submission recovery
 

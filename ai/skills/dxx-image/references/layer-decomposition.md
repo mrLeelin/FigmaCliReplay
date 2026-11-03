@@ -20,6 +20,16 @@ python -X utf8 $cli Decompose --file 'D:\images\界面.png' --prompt '分离人�
 
 本项目从仓库根目录调用以上相对路径；其它工作目录使用项目内脚本的绝对路径。仅一张 PNG/JPEG/WebP，单文件最多 50 MiB，保留原始字节。prompt 可省略，最多 2000 字符；size 为 1K/1.5K/2K，默认 1K。不保证固定数量或名称的图层。
 
+提交前自动检查图片头部尺寸与总像素，当前已观察到的上游下限为 262144 像素（不是每边 512）。尺寸不足在上传前失败，避免局部切片逐个提交后等待失败。不自动缩放、补边或修改原始字节。扩大裁切范围或显式调整图片时须保留对应坐标变换。仅经确认服务端规则已变更时用 `--min-input-pixels` 覆盖下限。
+
+纯本地预检（不读取凭证、不联网、不创建输出目录）：
+
+```powershell
+python -X utf8 ai/skills/dxx-image/scripts/dxx_image.py Decompose --file <crop.png> --check-only
+```
+
+成功输出尺寸、字节数、SHA256；正式提交将其保存为 `layer-preflight.json`，用于核对是否可复用旧结果。该检查只解析图片头部，不替代完整解码或最终透明边缘验收。
+
 ## 恢复与查询
 
 ```bash

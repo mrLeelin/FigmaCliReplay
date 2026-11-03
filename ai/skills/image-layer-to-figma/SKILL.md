@@ -1,6 +1,6 @@
 ---
 name: image-layer-to-figma
-description: Split a flattened UI screenshot or PNG into complete transparent resources and deliver a nested business hierarchy in Figma through the project Relay CLI, or consolidate an over-fragmented decomposition. Existing PSD layers use psd-layer-to-figma.
+description: Split a flattened UI screenshot or PNG into complete transparent artwork and editable ordinary text, and deliver a nested business hierarchy in Figma through the project Relay CLI, or consolidate an over-fragmented decomposition. Existing PSD layers use psd-layer-to-figma.
 ---
 
 # Image Layer To Figma
@@ -19,9 +19,15 @@ For each candidate split, identify a concrete independent use. Keep decorative p
 | Purchase button | Button artwork including fixed ornaments; price/label separate | A symbol has its own state, action, or replacement requirement |
 | Benefit entry | Complete icon and separate caption | An icon part has an independent behavior |
 | Currency bar | Reusable bar artwork, complete currency icon, balance, complete add button | A button state or skin requires a separate asset |
-| Text | Whole meaningful line or changing value | A portion changes independently |
+| Ordinary text | Editable Figma Text for each meaningful line or changing value | A portion changes independently |
 
 These defaults are contextual. Honor a requested finer or coarser boundary for that task. Maintain a brief resource list with each asset's intended use and any justified internal split. Show that list in a progress update when useful; existing task authorization covers routine planning and execution.
+
+## Ordinary text is editable
+
+Ordinary labels and values default to native Figma **Text**, including reward quantities, levels, countdowns, button and tab captions, and experience values. Keep stylized artistic lettering as an image only with a recorded visual reason. A crown, leaf ornament or progress fill does not make its accompanying ordinary text artistic lettering: separate the artwork from the text.
+
+Before import, read [native-text.md](references/native-text.md) and run `scripts/prepare_native_text.py` with an explicit text plan after any raster resource composition. Verify characters from the source and font/style from live text in the authorized scope; do not infer them from layer names. The prepared manifest keeps artwork raster and ordinary text native. Missing text or font information, a mixed text/art resource, or a failed font load must be resolved rather than silently delivered as image text.
 
 ## Source and provider
 
@@ -29,9 +35,17 @@ Lock the supplied file/page/node IDs through fresh project CLI sessions and a ta
 
 When using DXX, read the adjacent project-local [dxx-image Skill](../dxx-image/SKILL.md) and use its bundled `scripts/dxx_image.py`. It shares the plugin Settings configuration at `<relay-root>/.local/dxx-config.json`; no global DXX Skill is required. Follow its decomposition/recovery contract. DXX performs image decomposition; this skill owns resource planning and acceptance. Do not infer an upstream model name from the service name. Keep request/task IDs, original response, manifest, and ZIP. An unknown task outcome is queried using its saved ID, not submitted as a fresh paid task.
 
-State complete resource boundaries in the prompt, for example: “礼盒的主体、缎带和蝴蝶结合为一个完整透明资源；卡牌、附属植物、托盘和局部闪光合为完整插画；购买价格独立。” Request only justified separate assets. Review missing or over-merged resources before scheduling another regional decomposition. Backend layer count or a `completed` status does not establish semantic correctness.
+State complete resource boundaries in the prompt, for example: “礼盒的主体、缎带和蝴蝶结合为一个完整透明资源；卡牌、附属植物、托盘和局部闪光合为完整插画；购买价格与按钮美术分离，普通文字随后重建为可编辑 Text。” Request only justified separate assets. Review missing or over-merged resources before scheduling another regional decomposition. Backend layer count or a `completed` status does not establish semantic correctness.
 
 Map DXX document dimensions, placement, opacity and z-order into the project import manifest. PNG pixel dimensions alone do not determine its document bounds. Identify inferred hidden pixels and raster text in the delivery.
+
+## Execution time
+
+Use one full-image decomposition first. While it runs, prepare the resource inventory and semantic tree from the source. Reuse existing task results when the source hash and request match; a hierarchy-only correction needs no new decomposition. Use the bundled compositor, import wrapper and hierarchy script instead of writing a new per-screen pipeline.
+
+Review returned coverage before choosing repairs. Collect defects into one targeted repair pass, keeping complete repeated artwork reusable when pixel comparisons support it. A repeated row does not need its own paid task. Validate a regional crop locally with `dxx_image.py Decompose --file <crop.png> --check-only` before submitting it; retain the crop/scale transform. If a repair method fails, change strategy based on the failure rather than repeating it across all regions. Additional generation/editing is for a named missing resource or visible defect, not speculative polishing.
+
+At ten minutes, report elapsed time by stage, remaining defects and the next concrete action. This is a progress checkpoint, not a completion deadline or permission gate. Preserve semantic coverage, transparent boundaries, nested hierarchy and final visual checks; report unresolved defects honestly. Record provider wait separately from local preparation, repair, import and verification so later runs can target the actual delay. When the task is complete, deliver without optional extra variants or packaging the user did not request.
 
 ## Correct an over-fragmented result
 
@@ -51,7 +65,7 @@ Inspect complete resources on light/dark backgrounds, especially the gift, attac
 
 ## Figma delivery
 
-Use the adjacent [psd-layer-to-figma](../psd-layer-to-figma/SKILL.md) import wrapper for the compatible image manifest. Despite the wrapper name, these inputs are image resources, not a claim of PSD recovery. Pass explicit file/session/target page and constrain component lookup to the authorized scope.
+Use the adjacent [psd-layer-to-figma](../psd-layer-to-figma/SKILL.md) import wrapper for the prepared image-and-text manifest. Despite the wrapper name, these inputs do not establish PSD recovery. Pass explicit file/session/target page and constrain component lookup to the authorized scope.
 
 Default screenshot-to-Figma delivery includes a **nested business hierarchy**, not a flat collection of numbered images. A successful import or its `stopAfterSummary` ends the import phase, not this delivery. Leave flat output only when the user explicitly requests raw layers. Resource granularity and hierarchy are separate: keep each complete PNG intact while grouping existing nodes into useful functional containers.
 
@@ -59,6 +73,6 @@ After import, read [resource-hierarchy.md](references/resource-hierarchy.md), ca
 
 Use `scripts/structure_resources.py` to validate the entire node mapping and execute the already-authorized tree through the adjacent cleanup transaction helper. It preserves original nodes and protected subtrees, creates transparent non-clipping Frames, and checks bounds, sibling order and fresh rendered pixels. Unchanged complete resources may remain direct children; do not manufacture single-child wrappers. Mark a fixed horizontal row explicitly with `layoutIntent: "static-horizontal"`; geometry must pass before treating its item groups as a static strip. Scrolling lists keep their ScrollView structure.
 
-Use the existing task authorization for the normal decomposition-and-hierarchy delivery. This does not authorize ComponentSet creation, editable text reconstruction, Unity Prefab writes, or bypassing a plugin cleanup session's server-side approval stage. Report Figma completion separately from any subsequent Unity import.
+Use the existing task authorization for the normal decomposition, ordinary-text reconstruction and hierarchy delivery. This does not authorize ComponentSet creation, Unity Prefab writes, or bypassing a plugin cleanup session's server-side approval stage. Report Figma completion separately from any subsequent Unity import.
 
-Create a separately named resource version when revising a prior delivery. Verify populated IMAGE fills, layer order/positions, independently exported complete resources, foreground hide/show, the live composite, and unchanged original source. Retain the earlier detailed version for traceability. Report semantic resource acceptance separately from operation checks and disclose remaining alpha, occlusion, and fidelity limits.
+Create a separately named resource version when revising a prior delivery unless the user requests an in-place correction. Verify populated IMAGE fills for artwork, native Text for ordinary labels and values, layer order/positions, independently exported complete resources, foreground hide/show, the live composite, and unchanged original source. Retain the earlier detailed version or hidden raster references for traceability. Report semantic resource acceptance separately from operation checks and disclose remaining alpha, occlusion, font-substitution and fidelity limits.

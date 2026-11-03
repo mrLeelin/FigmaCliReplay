@@ -10,7 +10,8 @@ from urllib.parse import urljoin
 import uuid
 import zipfile
 
-from dxx_image import ID, MIME, MAX_UPLOAD, origin, save, task_id
+from dxx_image import ID, MIME, origin, save, task_id
+from dxx_preflight import MIN_INPUT_PIXELS, preflight_image
 
 ENDPOINT = '/api/v1/layer-decomposition/jobs'
 
@@ -160,11 +161,8 @@ def execute_layers(args, client):
     if args.action == 'Decompose':
         if ident:
             raise ValueError('恢复已有拆层任务请使用 Layerwait，不要 Decompose。')
-        if not args.file:
-            raise ValueError('Decompose 需要 --file 本地 PNG/JPEG/WebP。')
-        image = Path(args.file).expanduser().resolve()
-        if not image.is_file() or image.suffix.lower() not in MIME or image.stat().st_size > MAX_UPLOAD:
-            raise ValueError('图片必须是存在且不超过 50 MiB 的 PNG/JPEG/WebP 文件。')
+        preflight = preflight_image(args.file, getattr(args, 'min_input_pixels', MIN_INPUT_PIXELS))
+        image = Path(preflight['file'])
         if args.prompt is not None and (not isinstance(args.prompt, str) or len(args.prompt) > 2000):
             raise ValueError('拆层 prompt 最多 2000 字符。')
         if args.size not in ('1K', '1.5K', '2K'):
@@ -172,6 +170,7 @@ def execute_layers(args, client):
         directory.mkdir(parents=True, exist_ok=True)
         if any(directory.iterdir()):
             raise ValueError('新拆层任务需要空输出目录；已有任务请 Layerwait/Layerresume。')
+        save(directory / 'layer-preflight.json', preflight)
         write_private(directory / 'layer-started.json', {'requestId': str(uuid.uuid4()), 'startedAt': time.time()})
         request_id = json.loads((directory / 'layer-started.json').read_text(encoding='utf-8'))['requestId']
         body = {'image': client.upload(image), 'size': args.size}
