@@ -34,7 +34,7 @@ test("top bar shows Bridge version immediately after the plugin release version"
 
 test("Unity gateway address is auto-discovered instead of manually edited", () => {
   assert.match(ui, /<input id="unityUrl"[^>]*\sreadonly(?:\s|\/?>)/);
-  assert.match(ui, /<button id="unityConnectBtn">自动连接<\/button>/);
+  assert.match(ui, /<button id="unityConnectBtn"[^>]*>自动连接<\/button>/);
   assert.doesNotMatch(ui, /unityPortMin|unityPortMax|buildUnityProbeUrls/);
   assert.match(ui, /actualProjectPath !== expectedProjectPath/);
 });
@@ -44,7 +44,7 @@ test("settings tab reports every disconnected required service", () => {
   assert.match(ui, /\.tab-button\.connection-error::after\s*\{/);
   assert.match(ui, /function refreshSettingsConnectionAlert\(\)/);
   assert.match(ui, /if \(!relayConnected\) missing\.push\("本地 Relay"\)/);
-  assert.match(ui, /if \(!unityConnected\) missing\.push\("Unity 网关"\)/);
+  assert.match(ui, /if \(!unityConnected && !unityConnectionIsPending\(\)\) missing\.push\("Unity 网关"\)/);
   assert.match(ui, /settingsTabBtn\.title = message/);
   assert.match(ui, /function setAiBadge\(online\)[\s\S]*?refreshSettingsConnectionAlert\(\)/);
   assert.match(ui, /function setUnityBadge\(online\)[\s\S]*?refreshSettingsConnectionAlert\(\)/);

@@ -411,7 +411,7 @@ export class RuntimeRelay {
           const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
           operation.step("spawn", "Launch folder opener");
           await new Promise<void>((resolve, reject) => {
-            const child = spawn(command, [PLUGIN_ROOT], { windowsHide: true, stdio: "ignore" });
+            const child = spawn(command, [PLUGIN_ROOT], { windowsHide: false, stdio: "ignore" });
             child.once("error", reject);
             child.once("spawn", () => { child.unref(); resolve(); });
           });
@@ -419,7 +419,23 @@ export class RuntimeRelay {
           return { ok: true, path: PLUGIN_ROOT };
         } catch (error) { operation.fail(error, "Folder opener failed"); throw error; }
       }
+      case "psd.export.open-folder": {
+        const exportRoot = path.join(PLUGIN_ROOT, ".tmp", "exports");
+        fs.mkdirSync(exportRoot, { recursive: true });
+        const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+        await new Promise<void>((resolve, reject) => {
+          // This is an explicitly requested GUI window, not a background worker.
+          const child = spawn(command, [exportRoot], { windowsHide: false, stdio: "ignore" });
+          child.once("error", reject);
+          child.once("spawn", () => { child.unref(); resolve(); });
+        });
+        return { ok: true, path: exportRoot };
+      }
       case "image.crop": return this.algorithms.crop(payload);
+      case "psd.export": return this.algorithms.exportPsd(payload);
+      case "psd.export.stage-meta": return this.algorithms.stagePsdExport(payload);
+      case "psd.export.stage-chunk": return this.algorithms.stagePsdChunk(payload);
+      case "psd.export.assemble": return this.algorithms.assemblePsdExport(payload);
       case "prefab.import.start": return this.algorithms.startImport(payload);
       case "prefab.import.get": return this.algorithms.getImport(String(payload.taskId || ""), String(payload.sessionId || ""));
       default: throw new Error(`Unknown algorithm control: ${action}`);

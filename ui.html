@@ -1240,6 +1240,9 @@
       background: var(--danger);
       box-shadow: 0 0 0 3px rgba(255,123,130,0.12);
     }
+    .status-chip.pending { color: var(--accent); border-color: rgba(110,168,255,0.25); background: rgba(110,168,255,0.08); }
+    .status-chip.pending .dot { background: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,255,0.12); }
+    .badge.pending, .main .badge.pending { background: rgba(110,168,255,0.12); color: var(--accent); }
 
     /* Workspace */
     .workspace {
@@ -1836,9 +1839,10 @@
 
       <div class="tabs" role="tablist">
         <button class="tab-button active" data-tab="sync-unity-tab" type="button">同步 Unity</button>
-        <button class="tab-button" data-tab="nine-slice-tab" type="button">切九宫</button>
         <button class="tab-button" data-tab="ai-prompt-tab" type="button">AI 提示词</button>
         <button class="tab-button" data-tab="ai-execution-tab" type="button">AI 执行</button>
+        <button class="tab-button" data-tab="export-tab" type="button">导出</button>
+        <button class="tab-button" data-tab="tools-tab" type="button">工具</button>
         <button class="tab-button" id="settingsTabBtn" data-tab="settings-tab" type="button" aria-label="设置">设置</button>
       </div>
 
@@ -1846,7 +1850,7 @@
         <div class="status-label">连接状态</div>
         <div class="header-status" aria-label="连接状态">
           <span class="status-chip offline" id="headerRelayChip" title="本地 Relay"><span class="dot"></span>Relay 未连接</span>
-          <span class="status-chip offline" id="headerUnityChip" title="Unity 网关"><span class="dot"></span>Unity 未连接</span>
+          <span class="status-chip pending" id="headerUnityChip" title="Unity 网关"><span class="dot"></span>Unity 连接中</span>
         </div>
       </div>
     </aside>
@@ -1876,10 +1880,28 @@
       <div class="status-box" id="ai-status">等待连接本地 Relay...</div>
     </div>
 
+    <div class="section global-section" id="dxx-settings-section">
+      <h2>DXX 图片拆层</h2>
+      <div class="field">
+        <label for="dxxApiBaseInput">API 地址</label>
+        <input id="dxxApiBaseInput" type="url" value="https://canvas.dxx.cn" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label for="dxxApiKeyInput">API Key（明文）</label>
+        <input id="dxxApiKeyInput" type="text" placeholder="输入 DXX API Key" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="row">
+        <button id="dxxSaveConfigBtn" type="button" disabled>保存</button>
+        <button id="dxxTestConnectionBtn" class="secondary" type="button" disabled>测试连接</button>
+      </div>
+      <div class="status-box" id="dxxConfigStatus" role="status" aria-live="polite">连接本地 Relay 后读取配置。</div>
+      <div class="hint">保存后会在本机记住 Key，重新打开自动读取；留空保留现有 Key。测试不会上传图片或创建拆图任务。</div>
+    </div>
+
     <div class="section unity global-section" id="unity-section">
       <div class="flex">
         <h2>Unity 网关</h2>
-        <span class="badge offline" id="unity-badge">未连接</span>
+        <span class="badge pending" id="unity-badge">连接中</span>
       </div>
       <div class="field">
         <label for="unityProjectSelect">目标 Unity 工程</label>
@@ -1894,13 +1916,13 @@
         <button id="installUnityBridgeBtn" type="button">安装/更新 Bridge</button>
         <button id="refreshUnityProjectsBtn" class="secondary" type="button">刷新工程</button>
       </div>
-      <div class="status-box" id="unityProjectStatus">尚未登记 Unity 工程。</div>
+      <div class="status-box" id="unityProjectStatus">正在读取上次的 Unity 工程...</div>
       <div class="row">
-        <input id="unityUrl" value="http://localhost:32129" readonly title="自动扫描 localhost:32129-32135，并匹配当前 Unity 工程" />
-        <button id="unityConnectBtn">自动连接</button>
+        <input id="unityUrl" value="" readonly placeholder="读取上次工程的 Unity Bridge 连接" title="通过本地 Relay 恢复所选 Unity 工程的连接" />
+        <button id="unityConnectBtn" disabled>自动连接</button>
         <button id="unityDisconnectBtn" class="danger" disabled>断开</button>
       </div>
-      <div class="status-box" id="unity-status">等待连接 Unity 网关...</div>
+      <div class="status-box" id="unity-status">正在恢复上次的 Unity 连接...</div>
     </div>
   </div>
   <!-- SETTINGS_TAB_END -->
@@ -1908,55 +1930,14 @@
   <div class="tab-page active" id="sync-unity-tab">
     <div class="sync-tabs" role="tablist" aria-label="同步 Unity">
       <button class="sync-tab-button active" data-sync-tab="unity-tab" type="button">图片导出</button>
-      <button class="sync-tab-button" data-sync-tab="hierarchy-export-tab" type="button">Figma 导入 Prefab</button>
-      <button class="sync-tab-button" data-sync-tab="prefab-import-tab" type="button">Prefab 导入 Figma</button>
       <button class="sync-tab-button" data-sync-tab="text-style-tab" type="button">字体同步</button>
     </div>
 
     <div class="sync-sub-page active" id="unity-tab">
       <div class="section" id="image-export-section">
         <h2>图片导出</h2>
-        <div class="folder-box missing" id="selectedFolderBox">Unity 图片目标：未连接</div>
+        <div class="folder-box" id="selectedFolderBox">Unity 图片目标：正在恢复连接...</div>
         <button id="exportImagesBtn" class="export-btn secondary" disabled>导出选中图片到 Unity</button>
-      </div>
-    </div>
-
-    <div class="sync-sub-page" id="hierarchy-export-tab">
-      <div class="section" id="hierarchy-export-section">
-        <h2>Figma 导入 Prefab</h2>
-        <div class="folder-box missing" id="hierarchyImageTargetBox">Unity 导入目标：未连接</div>
-        <div class="status-box" id="hierarchy-export-status">选择 Unity Project 中的空文件夹后，当前 Figma 根节点会直接导入；输出自动分为 Prefab、Texture、UiAtlas。</div>
-        <div class="button-row">
-          <button id="previewHierarchyBtn" class="export-btn secondary" style="display:none" disabled>预览层级变更</button>
-          <button id="exportHierarchyBtn" class="export-btn secondary" disabled>直接导入 Prefab</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="sync-sub-page" id="prefab-import-tab">
-      <div class="section unity">
-        <h2>Unity Prefab → Figma</h2>
-        <div class="control-grid">
-          <div class="control-card">
-            <label for="prefabImportComponentModeSelect">根节点</label>
-            <select id="prefabImportComponentModeSelect">
-              <option value="component">转成 Component</option>
-              <option value="frame">保留 Frame</option>
-            </select>
-          </div>
-          <div class="control-card">
-            <label for="prefabImportNestedComponentModeSelect">嵌套 Prefab</label>
-            <select id="prefabImportNestedComponentModeSelect">
-              <option value="all">全部打成组件</option>
-              <option value="commonOnly">仅 Common 公共组件</option>
-              <option value="none">嵌套不打组件</option>
-            </select>
-          </div>
-        </div>
-        <div class="folder-box missing" id="prefabImportPrefabBox">Unity Prefab：未连接</div>
-        <button id="prefabImportBtn" class="export-btn" disabled>导出选中 Prefab 到 Figma</button>
-        <div class="progress"><div class="progress-bar" id="prefabImportProgressBar"></div></div>
-        <div class="status-box" id="prefab-import-status">连接 Unity 网关和本地 Relay 后，选择一个或多个 Prefab，再点击导出。该流程不生成提示词、不调用大模型。</div>
       </div>
     </div>
 
@@ -1974,7 +1955,11 @@
     </div>
   </div>
 
-  <div class="tab-page" id="nine-slice-tab">
+  <div class="tab-page" id="tools-tab">
+    <div class="sync-tabs" role="tablist" aria-label="工具">
+      <button class="sync-tab-button active" data-tools-tab="nine-slice-tab" type="button">切九宫</button>
+    </div>
+    <div class="sync-sub-page active" id="nine-slice-tab">
     <div class="section" id="nine-slice-section">
       <h2>切九宫</h2>
       <div class="grid">
@@ -2005,6 +1990,7 @@
         <div class="nine-slice-preview-info" id="nineSlicePreviewInfo"></div>
       </div>
       <div class="status-box" id="nine-slice-status">选择 1 个带图片填充的节点，可自动识别或手动输入 Unity spriteBorder。Frame/Group 会在原节点内生成 __slice_*；Rectangle 这类叶子节点会原地转换为同名 Frame。</div>
+    </div>
     </div>
   </div>
 
@@ -2109,6 +2095,62 @@
       <div class="button-row">
         <button id="aiExecutionContinueBtn" class="export-btn secondary" type="button" disabled>继续执行</button>
         <button id="aiExecutionStopBtn" class="export-btn danger" type="button" disabled>停止</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 导出 ========== -->
+  <div class="tab-page" id="export-tab">
+    <div class="sync-tabs" role="tablist" aria-label="导出">
+      <button class="sync-tab-button active" data-export-tab="export-psd-tab" type="button">导出 PSD</button>
+      <button class="sync-tab-button" data-export-tab="export-prefab-tab" type="button">导出 Prefab</button>
+    </div>
+
+    <div class="sync-sub-page active" id="export-psd-tab">
+      <div class="section" id="export-psd-section">
+        <h2>导出 PSD</h2>
+        <div class="status-box" id="exportPsdSelection">选区：未选择</div>
+        <div class="control-grid">
+          <div class="control-card">
+            <label for="exportPsdScaleSelect">输出像素倍率</label>
+            <select id="exportPsdScaleSelect">
+              <option value="1" selected>1x</option>
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+            </select>
+          </div>
+          <div class="control-card">
+            <label>分层方式</label>
+            <div class="status-box" style="margin:0">逐节点像素分层（容器成组）</div>
+          </div>
+        </div>
+        <div class="status-box">倍率仅改变 PSD 画布和图层的输出像素尺寸。文字以像素图层保留外观；蒙版、布尔和复杂组效果采用保真合成，并保留隐藏的「源图层」子组。</div>
+        <div class="status-box" id="exportPsdStatus">选择 Figma 节点后点击「导出 PSD」。文件由 Relay 写入本地目录，保留中文层名并生成节点图层索引。</div>
+        <div class="progress"><div class="progress-bar" id="exportPsdProgressBar"></div></div>
+        <div class="button-row">
+          <button id="exportPsdBtn" class="export-btn" type="button" disabled>导出 PSD</button>
+          <button id="exportPsdOpenFolderBtn" class="secondary" type="button" disabled>打开所在文件夹</button>
+        </div>
+        <div class="status-box" id="exportPsdResult" hidden></div>
+      </div>
+    </div>
+
+    <div class="sync-sub-page" id="export-prefab-tab">
+      <div class="section" id="export-prefab-section">
+        <h2>导出 Unity Prefab</h2>
+        <div class="status-box" id="exportPrefabSelection">选区：请选择一个 Figma 根节点</div>
+        <div class="status-box" id="exportPrefabProject">Unity 工程：未连接</div>
+        <div class="folder-box missing" id="exportPrefabFolder">Unity 输出目录：未选择</div>
+        <div class="status-box" id="exportPrefabPreview" style="white-space:pre-wrap">输出结构：名字/Prefab/名字.prefab
+名字/Texture/</div>
+        <div class="status-box">读取 Unity Project 当前选中的文件夹，在其中新建以 Figma 根节点命名的文件夹。保留 UI 层级、图片与 TextMeshPro 文字，不生成图集；同名目录已存在时停止，不覆盖已有资源。</div>
+        <div class="status-box" id="exportPrefabStatus">选择 Figma 根节点和 Unity 输出文件夹后，点击「导出 Prefab」。</div>
+        <div class="progress"><div class="progress-bar" id="exportPrefabProgressBar"></div></div>
+        <div class="button-row">
+          <button id="exportPrefabReadFolderBtn" class="secondary" type="button" disabled>读取 Unity 选中目录</button>
+          <button id="exportUnityPrefabBtn" class="export-btn" type="button" disabled>导出 Prefab</button>
+        </div>
+        <div class="status-box" id="exportPrefabResult" style="white-space:pre-wrap" hidden></div>
       </div>
     </div>
   </div>
@@ -2284,8 +2326,30 @@
     const bridgeVersionBadge = document.getElementById("bridgeVersionBadge");
     const tabButtons = Array.prototype.slice.call(document.querySelectorAll(".tab-button"));
     const tabPages = Array.prototype.slice.call(document.querySelectorAll(".tab-page"));
-    const syncTabButtons = Array.prototype.slice.call(document.querySelectorAll(".sync-tab-button"));
-    const syncSubPages = Array.prototype.slice.call(document.querySelectorAll(".sync-sub-page"));
+    const syncTabButtons = Array.prototype.slice.call(document.querySelectorAll("#sync-unity-tab .sync-tab-button"));
+    const syncSubPages = Array.prototype.slice.call(document.querySelectorAll("#sync-unity-tab .sync-sub-page"));
+    const toolsTabButtons = Array.prototype.slice.call(document.querySelectorAll(".sync-tab-button[data-tools-tab]"));
+    const toolsSubPages = Array.prototype.slice.call(document.querySelectorAll("#tools-tab .sync-sub-page"));
+    const exportTabButtons = Array.prototype.slice.call(document.querySelectorAll(".sync-tab-button[data-export-tab]"));
+    const exportSubPages = Array.prototype.slice.call(
+      document.querySelectorAll("#export-tab .sync-sub-page")
+    );
+    const exportPsdBtn = document.getElementById("exportPsdBtn");
+    const exportPsdOpenFolderBtn = document.getElementById("exportPsdOpenFolderBtn");
+    const exportPsdScaleSelect = document.getElementById("exportPsdScaleSelect");
+    const exportPsdSelectionEl = document.getElementById("exportPsdSelection");
+    const exportPsdStatusEl = document.getElementById("exportPsdStatus");
+    const exportPsdResultEl = document.getElementById("exportPsdResult");
+    const exportPsdProgressBar = document.getElementById("exportPsdProgressBar");
+    const exportUnityPrefabBtn = document.getElementById("exportUnityPrefabBtn");
+    const exportPrefabReadFolderBtn = document.getElementById("exportPrefabReadFolderBtn");
+    const exportPrefabFolderEl = document.getElementById("exportPrefabFolder");
+    const exportPrefabSelectionEl = document.getElementById("exportPrefabSelection");
+    const exportPrefabProjectEl = document.getElementById("exportPrefabProject");
+    const exportPrefabPreviewEl = document.getElementById("exportPrefabPreview");
+    const exportPrefabStatusEl = document.getElementById("exportPrefabStatus");
+    const exportPrefabResultEl = document.getElementById("exportPrefabResult");
+    const exportPrefabProgressBar = document.getElementById("exportPrefabProgressBar");
 
     // ─── 本地 Relay 状态 ───
     let relayUrl = normalizeRelayUrl(relayUrlInput.value);
@@ -2442,6 +2506,11 @@
     // ─── Unity 网关状态 ───
     let unityUrl = unityUrlInput.value.trim();
     let unityConnected = false;
+    let unityConnectionState = "restoring";
+    let unityConnectionAttempt = 0;
+    let unityProjectRefreshSequence = 0;
+    let unityAutoConnectPending = true;
+    let unityAutoReconnectEnabled = true;
     let unityGatewayProjectPath = "";
     let unityBridgeVersionMismatch = null;
     let unityProjects = [];
@@ -2664,7 +2733,10 @@
     function setNineSliceStatus(message) { nineSliceStatusEl.textContent = message; }
     function setTextStyleStatus(message) { textStyleStatusEl.textContent = message; }
     function setAiPromptStatus(message) { aiPromptStatusEl.textContent = message; }
-    function setPrefabImportStatus(message) { prefabImportStatusEl.textContent = message; }
+    function setPrefabImportStatus(message) {
+      if (prefabImportStatusEl) prefabImportStatusEl.textContent = message;
+      else appendLog(message);
+    }
 
     function clearAiPromptTimeout() {
       if (aiPromptTimeoutTimer) {
@@ -2966,9 +3038,9 @@
       var missing = [];
       if (!relayConnected) missing.push("本地 Relay");
       if (unityBridgeVersionMismatch) missing.push("Unity Bridge 版本不一致");
-      else if (!unityConnected) missing.push("Unity 网关");
+      else if (!unityConnected && !unityConnectionIsPending()) missing.push("Unity 网关");
       var hasError = missing.length > 0;
-      var message = hasError ? "未连接：" + missing.join("、") : "连接正常";
+      var message = hasError ? "未连接：" + missing.join("、") : (unityConnectionIsPending() ? "正在连接 Unity" : "连接正常");
       settingsTabBtn.classList.toggle("connection-error", hasError);
       settingsTabBtn.title = message;
       settingsTabBtn.setAttribute("aria-label", "设置；" + message);
@@ -2979,15 +3051,44 @@
       aiBadge.textContent = online ? "已连接" : "未连接";
       aiBadge.className = "badge " + (online ? "online" : "offline");
       refreshSettingsConnectionAlert();
+      refreshDxxControls();
     }
     function setUnityBadge(online) {
-      if (!online && unityBridgeVersionMismatch) {
+      var pending = !online && unityConnectionIsPending();
+      if (pending) {
+        unityBadge.textContent = "连接中";
+      } else if (!online && unityBridgeVersionMismatch) {
         unityBadge.textContent = "版本错误";
       } else {
         unityBadge.textContent = online ? "已连接" : "未连接";
       }
-      unityBadge.className = "badge " + (online ? "online" : "offline");
+      unityBadge.className = "badge " + (pending ? "pending" : online ? "online" : "offline");
       refreshSettingsConnectionAlert();
+    }
+
+    function unityConnectionIsPending() {
+      return unityConnectionState === "restoring" || unityConnectionState === "connecting";
+    }
+
+    function unityConnectionRequestIsCurrent(context, attempt, projectId) {
+      return relayRequestIsCurrent(context) && attempt === unityConnectionAttempt
+        && (selectedUnityProject && selectedUnityProject.id) === projectId;
+    }
+
+    function resetUnityForRelayDisconnect(reconnecting) {
+      unityConnectionAttempt += 1;
+      unityProjectRefreshSequence += 1;
+      unityAutoConnectPending = unityAutoReconnectEnabled;
+      unityConnected = false;
+      unityConnectionState = reconnecting && unityAutoReconnectEnabled ? "restoring" : "disconnected";
+      unityGatewayProjectPath = "";
+      unityBridgeVersionMismatch = null;
+      setBridgeVersionBadge("", "disconnected");
+      setUnityBadge(false);
+      stopSelectedFolderRefresh();
+      setUnityStatus(unityConnectionIsPending() ? "正在恢复上次的 Unity 连接..."
+        : "本地 Relay 未连接，连接恢复后将重新连接上次的 Unity 工程。");
+      refreshUnityControls();
     }
 
     function refreshUnityBridgeVersionState() {
@@ -3047,6 +3148,7 @@
       refreshUnityFolderDisplay();
       refreshHierarchyImageTargetDisplay();
       refreshTemplateCardStatuses();
+      refreshUnityPrefabExportControls();
     }
 
     // 记录 Unity 当前图片导入目标模式，供九宫导出覆盖图片时使用。
@@ -3055,6 +3157,7 @@
       selectedUnityReplaceAssetPath = data && data.replaceAssetPath ? String(data.replaceAssetPath) : "";
       selectedUnityObjectIsFolder = !!(data && data.selectedObjectIsFolder);
       selectedUnityFolderIsEmpty = !!(data && data.selectedFolderIsEmpty);
+      refreshUnityPrefabExportControls();
     }
 
     // 更新 Unity 当前选中的字体同步目标显示。
@@ -3191,6 +3294,7 @@
       relayUrl = normalizeRelayUrl(relayUrlInput.value);
       if (previousRelayUrl !== relayUrl) {
         relayRuntimeGeneration += 1;
+        resetDxxConfigForRelay();
         relayRuntimePaths = readCachedRelayRuntimePaths(relayRuntimeStorage, relayPluginRootCacheKey(relayUrl));
       }
       if (relayUrlInput.value.trim() !== relayUrl) {
@@ -3234,12 +3338,44 @@
     }
 
     async function refreshUnityProjects() {
+      if (!relaySocketRegistered) return;
+      var context = captureRelayRequestContext();
+      var sequence = ++unityProjectRefreshSequence;
+      if (unityAutoConnectPending) {
+        unityConnectionState = "restoring";
+        unityBridgeVersionMismatch = null;
+        setUnityBadge(false);
+        setUnityStatus("正在恢复上次的 Unity 连接...");
+        refreshUnityControls();
+      }
       try {
         var result = await sendRelaySocketRequest("unity.projects.list", {}, "", 5000);
+        if (!relayRequestIsCurrent(context) || sequence !== unityProjectRefreshSequence) return;
         if (result.ok === false) throw new Error(result.error || "读取 Unity 工程失败");
+        var previousProjectId = selectedUnityProject && selectedUnityProject.id;
         renderUnityProjects(result);
+        if (unityConnected && previousProjectId !== (selectedUnityProject && selectedUnityProject.id)) disconnectUnity();
+        if (unityAutoConnectPending) {
+          unityAutoConnectPending = false;
+          if (selectedUnityProject && result.lastSelectedProjectId === selectedUnityProject.id) {
+            await connectUnity();
+          } else {
+            unityConnectionState = "disconnected";
+            setUnityBadge(false);
+            setUnityStatus("没有可恢复的上次 Unity 工程，请在设置中选择工程后连接。");
+            refreshUnityControls();
+          }
+        }
       } catch (error) {
+        if (!relayRequestIsCurrent(context) || sequence !== unityProjectRefreshSequence) return;
         unityProjectStatus.textContent = "读取 Unity 工程失败：" + (error.message || error);
+        if (unityAutoConnectPending || unityConnectionState === "restoring") {
+          unityAutoConnectPending = false;
+          unityConnectionState = "disconnected";
+          setUnityBadge(false);
+          setUnityStatus("恢复 Unity 连接失败：" + (error.message || error));
+          refreshUnityControls();
+        }
       }
     }
 
@@ -3276,12 +3412,16 @@
     async function selectUnityProject() {
       var projectId = unityProjectSelect.value;
       if (!projectId) return;
+      unityProjectRefreshSequence += 1;
+      if (unityConnected || unityConnectionIsPending()) disconnectUnity();
+      var context = captureRelayRequestContext();
       var result = await sendRelaySocketRequest("unity.projects.select", { id: projectId }, "", 8000);
+      if (!relayRequestIsCurrent(context) || unityProjectSelect.value !== projectId) return;
       if (!result.ok) throw new Error(result.error || "选择 Unity 工程失败");
-      if (unityConnected) disconnectUnity();
       unityBridgeVersionMismatch = null;
       setBridgeVersionBadge("", "disconnected");
       renderUnityProjects(result);
+      await connectUnity();
     }
 
     async function removeUnityProject() {
@@ -3388,9 +3528,10 @@
     var workspaceTitleEl = document.getElementById("workspaceTitle");
     var WorkspaceTabTitles = {
       "sync-unity-tab": "同步 Unity",
-      "nine-slice-tab": "切九宫",
+      "tools-tab": "工具",
       "ai-prompt-tab": "AI 提示词",
       "ai-execution-tab": "AI 执行",
+      "export-tab": "导出",
       "settings-tab": "设置"
     };
     function switchTab(tabId) {
@@ -3415,6 +3556,24 @@
         button.classList.toggle("active", button.getAttribute("data-sync-tab") === tabId);
       });
       syncSubPages.forEach(function (page) {
+        page.classList.toggle("active", page.id === tabId);
+      });
+    }
+
+    function switchToolsTab(tabId) {
+      toolsTabButtons.forEach(function (button) {
+        button.classList.toggle("active", button.getAttribute("data-tools-tab") === tabId);
+      });
+      toolsSubPages.forEach(function (page) {
+        page.classList.toggle("active", page.id === tabId);
+      });
+    }
+
+    function switchExportTab(tabId) {
+      exportTabButtons.forEach(function (button) {
+        button.classList.toggle("active", button.getAttribute("data-export-tab") === tabId);
+      });
+      exportSubPages.forEach(function (page) {
         page.classList.toggle("active", page.id === tabId);
       });
     }
@@ -4743,6 +4902,123 @@
       } catch (error) { aiRunnerStatusEl.textContent = "读取本机 AI 设置失败：" + (error.message || error); }
     }
 
+    // DXX_SETTINGS_BEGIN
+    const dxxApiBaseInput = document.getElementById("dxxApiBaseInput");
+    const dxxApiKeyInput = document.getElementById("dxxApiKeyInput");
+    const dxxSaveConfigBtn = document.getElementById("dxxSaveConfigBtn");
+    const dxxTestConnectionBtn = document.getElementById("dxxTestConnectionBtn");
+    const dxxConfigStatus = document.getElementById("dxxConfigStatus");
+    let dxxConfigBusy = false;
+    let dxxHasKey = false;
+    let dxxSettingsDirty = false;
+    let dxxLoadSequence = 0;
+
+    function refreshDxxControls() {
+      dxxApiBaseInput.disabled = dxxConfigBusy;
+      dxxApiKeyInput.disabled = dxxConfigBusy;
+      dxxSaveConfigBtn.disabled = !relayConnected || dxxConfigBusy;
+      dxxTestConnectionBtn.disabled = !relayConnected || dxxConfigBusy
+        || (!dxxHasKey && !dxxApiKeyInput.value.trim());
+    }
+
+    function resetDxxConfigForRelay() {
+      dxxLoadSequence += 1;
+      dxxConfigBusy = false;
+      dxxHasKey = false;
+      dxxSettingsDirty = false;
+      dxxApiKeyInput.value = "";
+      dxxApiBaseInput.value = "https://canvas.dxx.cn";
+      dxxApiKeyInput.placeholder = "输入 DXX API Key";
+      dxxConfigStatus.textContent = "Relay 地址已切换，连接后读取配置。";
+      refreshDxxControls();
+    }
+
+    function renderDxxConfig(config) {
+      dxxHasKey = config.hasKey === true;
+      if (!dxxSettingsDirty) {
+        dxxApiBaseInput.value = config.apiBase || "https://canvas.dxx.cn";
+        if (typeof config.apiKey === "string") dxxApiKeyInput.value = config.apiKey;
+      }
+      dxxApiKeyInput.placeholder = dxxHasKey ? "输入新 Key 可替换" : "输入 DXX API Key";
+      dxxConfigStatus.textContent = dxxHasKey
+        ? (config.keySource === "project" ? "已配置本机 Key。" : "已检测到环境变量中的 Key，可直接测试连接。")
+        : "尚未配置 Key，请输入后保存。";
+      refreshDxxControls();
+    }
+
+    async function refreshDxxConfig() {
+      refreshDxxControls();
+      if (!relayConnected || dxxConfigBusy) return;
+      var context = captureRelayRequestContext();
+      var sequence = ++dxxLoadSequence;
+      try {
+        var result = await sendRelaySocketRequest("dxx.config.read", {}, "", 5000);
+        if (!relayRequestIsCurrent(context) || sequence !== dxxLoadSequence) return;
+        if (!result || result.ok !== true) throw new Error(result && result.error || "读取 DXX 配置失败");
+        renderDxxConfig(result.config || {});
+      } catch (error) {
+        if (relayRequestIsCurrent(context) && sequence === dxxLoadSequence) {
+          dxxConfigStatus.textContent = "读取 DXX 配置失败：" + (error.message || "请检查 Relay 连接。");
+        }
+      }
+    }
+
+    async function submitDxxConfig(testOnly) {
+      if (dxxConfigBusy) return;
+      var context = captureRelayRequestContext();
+      var payload = { apiBase: dxxApiBaseInput.value.trim() };
+      var enteredKey = dxxApiKeyInput.value.trim();
+      if (enteredKey) payload.apiKey = enteredKey;
+      dxxLoadSequence += 1;
+      dxxConfigBusy = true;
+      refreshDxxControls();
+      dxxConfigStatus.textContent = testOnly ? "正在验证 Key 和拆层服务..." : "正在保存 DXX 配置...";
+      try {
+        if (!await waitForRelaySocketRegistration(5000)) throw new Error("请先连接本地 Relay。");
+        if (!relayRequestIsCurrent(context)) return;
+        var result = await sendRelaySocketRequest(testOnly ? "dxx.config.test" : "dxx.config.set", payload, "", 20000);
+        if (!relayRequestIsCurrent(context)) return;
+        if (!result || result.ok !== true) throw new Error(result && result.error || "DXX 请求失败");
+        if (testOnly) {
+          if (result.enabled !== true) throw new Error("DXX 拆层服务尚未启用。");
+          dxxConfigStatus.textContent = "测试通过，DXX 拆层服务可用。"
+            + (dxxSettingsDirty ? "当前输入尚未保存，请点击保存。" : "");
+        } else {
+          dxxSettingsDirty = false;
+          renderDxxConfig(result.config || {});
+          dxxConfigStatus.textContent = "配置已保存，重新打开插件会自动读取。";
+          try {
+            var saved = await sendRelaySocketRequest("dxx.config.read", {}, "", 5000);
+            if (!relayRequestIsCurrent(context)) return;
+            if (!saved || saved.ok !== true) throw new Error("读取已保存配置失败");
+            renderDxxConfig(saved.config || {});
+            dxxConfigStatus.textContent = "配置已保存，重新打开插件会自动读取。";
+          } catch (_) {
+            if (relayRequestIsCurrent(context)) dxxConfigStatus.textContent = "配置已保存；重新连接后会再次读取 Key。";
+          }
+        }
+      } catch (error) {
+        if (relayRequestIsCurrent(context)) {
+          dxxConfigStatus.textContent = (testOnly ? "测试失败：" : "保存失败：") + (error.message || "请检查 Relay 连接。");
+        }
+      } finally {
+        if (relayRequestIsCurrent(context)) {
+          dxxConfigBusy = false;
+          refreshDxxControls();
+        }
+      }
+    }
+
+    dxxSaveConfigBtn.addEventListener("click", function () { submitDxxConfig(false); });
+    dxxTestConnectionBtn.addEventListener("click", function () { submitDxxConfig(true); });
+    [dxxApiBaseInput, dxxApiKeyInput].forEach(function (input) {
+      input.addEventListener("input", function () {
+        dxxSettingsDirty = true;
+        refreshDxxControls();
+      });
+    });
+    // DXX_SETTINGS_END
+
     async function writeAiRunnerConfigWithLiveSessionRetry(payload, operation) {
       return requestAiControlWithRetry("ai.config", { runner: payload.runner, sessionId: relaySessionId }, "", operation, true);
     }
@@ -5746,6 +6022,7 @@
 
     function closeRelaySocket() {
       relaySocketRegistered = false;
+      resetUnityForRelayDisconnect(true);
       setAiBadge(false);
       if (activeAiCleanupRun) activeAiCleanupRun.subscriptionId = null;
       rejectRelaySocketRequests(new Error("Relay WebSocket was closed."));
@@ -5799,6 +6076,7 @@
       if (!relaySocketRegistered || !relaySocket || relaySocket.readyState !== WebSocket.OPEN) {
         var unavailableError = new Error("Relay WebSocket is not registered.");
         unavailableError.relayTransportFailure = true;
+        unavailableError.relayRequestSent = false;
         return Promise.reject(unavailableError);
       }
       var requestId = explicitRequestId || "relay-control-" + Date.now() + "-" + Math.random().toString(16).slice(2);
@@ -5971,6 +6249,7 @@
         relaySocketRegistered = false;
       } catch (error) {
         appendLog("WebSocket 连接初始化失败：" + (error.message || error), true);
+        resetUnityForRelayDisconnect(false);
         scheduleRelaySocketReconnect("connect-init-failed");
         return;
       }
@@ -6011,6 +6290,7 @@
           appendLog("WebSocket 会话已在本地 Relay 完成注册：" + relaySessionId);
           refreshCleanupProviders();
           refreshAiRunner();
+          refreshDxxConfig();
           scheduleAiCleanupPoll();
           reconcileRelayTasks();
           if (prefabImportBusy && prefabImportTaskId) subscribePrefabImportTask();
@@ -6039,6 +6319,7 @@
       socket.onclose = function () {
         if (relaySocket !== socket) return;
         relaySocketRegistered = false;
+        resetUnityForRelayDisconnect(false);
         setAiBadge(false);
         setAiStatus("本地 Relay 连接已断开，正在自动重连…");
         if (activeAiCleanupRun) activeAiCleanupRun.subscriptionId = null;
@@ -6239,12 +6520,18 @@
 
     async function probeUnityUrl(url) {
       var normalizedUrl = normalizeBaseUrl(url);
+      var context = captureRelayRequestContext();
+      var attempt = unityConnectionAttempt;
+      var projectId = selectedUnityProject && selectedUnityProject.id;
       var data = await requestUnityCommand("unity.health");
+      if (!unityConnectionRequestIsCurrent(context, attempt, projectId)) throw new Error("Unity 连接上下文已切换");
       if (selectedUnityProject) {
         var expectedProjectPath = normalizeUnityProjectPath(selectedUnityProject.path);
         var actualProjectPath = normalizeUnityProjectPath(data.projectPath);
         if (!actualProjectPath || actualProjectPath !== expectedProjectPath) {
-          throw new Error("Unity 网关工程不匹配：期望 " + selectedUnityProject.path + "，实际 " + (data.projectPath || "未报告"));
+          var mismatch = new Error("Unity 网关工程不匹配：期望 " + selectedUnityProject.path + "，实际 " + (data.projectPath || "未报告"));
+          mismatch.unityProjectMismatch = true;
+          throw mismatch;
         }
       }
       var bridgeVersion = evaluateBridgeVersion(pluginReleaseVersion, data.version);
@@ -6255,21 +6542,50 @@
       return { url: normalizedUrl, data: data };
     }
 
+    function waitForUnityConnectionRetry(attempt) {
+      return new Promise(function (resolve) { setTimeout(resolve, 750 * attempt); });
+    }
+
     async function connectUnity() {
+      if (unityConnectionState === "connecting") return;
+      var context = captureRelayRequestContext();
+      var attempt = ++unityConnectionAttempt;
       var connectingProjectId = selectedUnityProject && selectedUnityProject.id;
+      unityAutoReconnectEnabled = true;
+      unityAutoConnectPending = false;
+      unityConnectionState = "connecting";
+      unityConnected = false;
       unityBridgeVersionMismatch = null;
       setBridgeVersionBadge("", "disconnected");
-      unityConnectBtn.disabled = true;
+      setUnityBadge(false);
+      setUnityStatus("正在连接 Unity" + (selectedUnityProject ? "：" + selectedUnityProject.name : "") + "...");
+      setSelectedFolder("正在连接 Unity...", false);
+      setSelectedTextTarget("正在连接 Unity...", "", false);
+      refreshUnityControls();
       appendLog("正在读取 Unity 网关配置" + (selectedUnityProject ? "：" + selectedUnityProject.name : ""));
       try {
-        var configuredUrl = await readSelectedUnityGatewayConfig();
-        if (!selectedUnityProject || selectedUnityProject.id !== connectingProjectId) throw new Error("Unity 工程已切换，请重新连接");
-        if (!configuredUrl) throw new Error("所选工程未提供 Unity Bridge 发现记录");
-        var probe = await probeUnityUrl(configuredUrl);
+        var probe;
+        for (var connectionTry = 0; connectionTry < 3; connectionTry += 1) {
+          try {
+            var configuredUrl = await readSelectedUnityGatewayConfig();
+            if (!unityConnectionRequestIsCurrent(context, attempt, connectingProjectId)) return;
+            if (!configuredUrl) throw new Error("上次选择的 Unity 工程尚未连接 Relay，请保持 Unity Editor 和 Bridge 打开");
+            probe = await probeUnityUrl(configuredUrl);
+            break;
+          } catch (error) {
+            if (!unityConnectionRequestIsCurrent(context, attempt, connectingProjectId)) return;
+            if (error.bridgeVersionMismatch || error.unityProjectMismatch || connectionTry === 2) throw error;
+            setUnityStatus("正在等待上次工程的 Unity Bridge 就绪，第 " + (connectionTry + 2) + "/3 次连接...");
+            await waitForUnityConnectionRetry(connectionTry + 1);
+            if (!unityConnectionRequestIsCurrent(context, attempt, connectingProjectId)) return;
+          }
+        }
+        if (!unityConnectionRequestIsCurrent(context, attempt, connectingProjectId)) return;
         const data = probe.data || {};
         unityUrl = probe.url;
         unityUrlInput.value = unityUrl;
         unityConnected = true;
+        unityConnectionState = "connected";
         unityGatewayProjectPath = data.projectPath || "";
         unityBridgeVersionMismatch = null;
         setBridgeVersionBadge(data.version, "connected");
@@ -6283,7 +6599,9 @@
         startSelectedFolderRefresh();
         refreshUnityControls();
       } catch (error) {
+        if (!unityConnectionRequestIsCurrent(context, attempt, connectingProjectId)) return;
         unityConnected = false;
+        unityConnectionState = "disconnected";
         unityGatewayProjectPath = "";
         unityBridgeVersionMismatch = error && error.bridgeVersionMismatch ? error : null;
         setUnityBadge(false);
@@ -6297,7 +6615,11 @@
     }
 
     function disconnectUnity() {
+      unityConnectionAttempt += 1;
+      unityAutoConnectPending = false;
+      unityAutoReconnectEnabled = false;
       unityConnected = false;
+      unityConnectionState = "disconnected";
       unityGatewayProjectPath = "";
       setBridgeVersionBadge("", "disconnected");
       setUnityBadge(false);
@@ -6314,23 +6636,25 @@
       var directImportProjectReady = !!(selectedUnityProject && selectedUnityProject.valid
         && selectedUnityProject.bridgeInstalled && selectedUnityProject.settingsConfigured
         && !unityBridgeVersionMismatch);
-      unityConnectBtn.disabled = unityConnected;
-      unityDisconnectBtn.disabled = !unityConnected;
-      unityUrlInput.disabled = unityConnected;
+      unityConnectBtn.disabled = unityConnected || unityConnectionIsPending();
+      unityDisconnectBtn.disabled = !unityConnected && !unityConnectionIsPending();
+      unityUrlInput.disabled = unityConnected || unityConnectionIsPending();
       exportImagesBtn.disabled = exportingImages || !unityConnected;
-      previewHierarchyBtn.disabled = true;
-      exportHierarchyBtn.disabled = exportingHierarchy || figmaPrefabImportBusy || !unityConnected
+      if (previewHierarchyBtn) previewHierarchyBtn.disabled = true;
+      if (exportHierarchyBtn) exportHierarchyBtn.disabled = exportingHierarchy || figmaPrefabImportBusy || !unityConnected
         || !directImportProjectReady || !selectedUnityFolder || selectedUnityFolder === "Assets"
         || !selectedUnityObjectIsFolder || !selectedUnityFolderIsEmpty;
       syncTextStyleBtn.disabled = syncingTextStyle || !unityConnected;
       refreshUnityBridgeVersionState();
       refreshPrefabImportControls();
       refreshTemplateCardStatuses();
+      refreshUnityPrefabExportControls();
     }
 
     // ─── 导出 Figma 层级到 Unity Prefab ───
     async function exportHierarchyToUnity(dryRun) {
       if (dryRun) return;
+      var requestStarted = false;
       if (figmaPrefabImportBusy || isExecuting) {
         setHierarchyExportStatus("已有 Figma/Unity 导入任务正在执行，请等待当前任务结束。");
         return;
@@ -6341,6 +6665,7 @@
         return;
       }
       try {
+        figmaPrefabTaskOutputMode = "direct-import";
         if (!selectedUnityProject || !selectedUnityProject.id) {
           throw new Error("请先选择已注册的 Unity 工程。");
         }
@@ -6357,6 +6682,7 @@
         figmaPrefabImportBusy = true;
         refreshUnityControls();
         figmaPrefabImportTaskId = "figma-prefab-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        requestStarted = true;
         var data = await sendRelaySocketRequest("figma.prefab.start", {
             clientRequestId: figmaPrefabImportTaskId,
             projectId: selectedUnityProject.id,
@@ -6370,7 +6696,9 @@
             nodeHeight: Number(node.height) || 0
         }, "", 8000);
         if (!data || !data.ok || !data.task || !data.task.taskId) {
-          throw new Error((data && data.error) || "直接导入任务启动失败");
+          var rejected = new Error((data && data.error) || "直接导入任务启动失败");
+          if (data && data.ok === false) rejected.relayTransportFailure = false;
+          throw rejected;
         }
         figmaPrefabImportTaskId = data.task.taskId;
         figmaPrefabImportBusy = true;
@@ -6379,6 +6707,10 @@
         appendLog("Figma 直接导入 Prefab 已启动：任务=" + figmaPrefabImportTaskId + "，目标=" + folder);
         subscribeFigmaPrefabImportTask();
       } catch (error) {
+        if (!requestStarted || error.relayTransportFailure === false || error.relayRequestSent === false) {
+          figmaPrefabImportTaskId = "";
+          figmaPrefabSubscriptionId = "";
+        }
         figmaPrefabImportBusy = !!figmaPrefabImportTaskId;
         if (figmaPrefabImportTaskId && relaySocketRegistered) subscribeFigmaPrefabImportTask();
         refreshUnityControls();
@@ -6396,7 +6728,8 @@
         await sendRelaySocketRequest("figma.prefab.subscribe", { taskId: figmaPrefabImportTaskId }, "", 8000, subscriptionId);
       } catch (error) {
         if (figmaPrefabSubscriptionId !== subscriptionId) return;
-        setHierarchyExportStatus("状态待核对：" + figmaPrefabImportTaskId + "；" + (error.message || error));
+        if (figmaPrefabTaskOutputMode === "named-export") setUnityPrefabExportStatus("状态待核对：" + figmaPrefabImportTaskId + "；" + (error.message || error), true);
+        else setHierarchyExportStatus("状态待核对：" + figmaPrefabImportTaskId + "；" + (error.message || error));
         appendLog("导入订阅失败，保留原任务 ID，不重放写入：" + figmaPrefabImportTaskId, true);
       }
     }
@@ -6405,6 +6738,10 @@
       if (!figmaPrefabImportTaskId || message.taskId !== figmaPrefabImportTaskId || message.subscriptionId !== figmaPrefabSubscriptionId) return;
       if (message.sequence && message.sequence <= figmaPrefabEventSequence) return;
       figmaPrefabEventSequence = message.sequence || figmaPrefabEventSequence;
+      if (typeof figmaPrefabTaskOutputMode !== "undefined" && figmaPrefabTaskOutputMode === "named-export") {
+        handleNamedPrefabExportEvent(message);
+        return;
+      }
       try {
         var data = message.result || {};
         if (message.error || !data.task) {
@@ -7292,8 +7629,8 @@
             unityProjectPath: selectedUnityProject.path,
             canvas: "auto",
             canvasByPrefabPath: canvasByPrefabPath,
-            componentMode: prefabImportComponentModeSelect.value || "component",
-            nestedPrefabComponentMode: prefabImportNestedComponentModeSelect.value || "all",
+            componentMode: (prefabImportComponentModeSelect && prefabImportComponentModeSelect.value) || "component",
+            nestedPrefabComponentMode: (prefabImportNestedComponentModeSelect && prefabImportNestedComponentModeSelect.value) || "all",
             figmaUrl: buildPrefabImportFigmaUrl(),
             fileKey: figmaKey
         }, "", 10000);
@@ -7381,7 +7718,7 @@
       var value = Math.max(0, Math.min(100, Number(percent || 0)));
       prefabImportDisplayedPercent = value;
       prefabImportTargetPercent = Math.max(prefabImportTargetPercent, value);
-      prefabImportProgressBar.style.width = value + "%";
+      if (prefabImportProgressBar) prefabImportProgressBar.style.width = value + "%";
     }
 
     function startPrefabImportProgressAnimation(initialPercent) {
@@ -7661,6 +7998,485 @@
       }
     }
 
+    // ─── 导出 Unity Prefab ───
+    var figmaPrefabTaskOutputMode = "direct-import";
+    var prefabExportReadingFolder = false;
+
+    function normalizeUnityPrefabExportName(value) {
+      var name = String(value || "").normalize("NFC").trim()
+        .replace(/[\[\]]/g, "").split(/[｜|]/, 1)[0].trim()
+        .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, "_").replace(/[. ]+$/, "");
+      name = Array.from(name).slice(0, 120).join("").replace(/[. ]+$/, "") || "FigmaExport";
+      if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name)) name = "_" + name;
+      return name;
+    }
+
+    function validUnityPrefabExportFolder(value) {
+      var segments = String(value || "").replace(/\\/g, "/").split("/");
+      return segments[0] === "Assets" && segments.every(function (segment) { return segment && segment !== "." && segment !== ".."; });
+    }
+
+    function setUnityPrefabExportStatus(message, isError) {
+      if (!exportPrefabStatusEl) return;
+      exportPrefabStatusEl.textContent = message;
+      exportPrefabStatusEl.classList.toggle("error", !!isError);
+    }
+
+    function setUnityPrefabExportProgress(value) {
+      if (exportPrefabProgressBar) exportPrefabProgressBar.style.width = Math.max(0, Math.min(100, Number(value) || 0)) + "%";
+    }
+
+    function refreshUnityPrefabExportControls() {
+      var selection = typeof lastSelectionData !== "undefined" && lastSelectionData || {};
+      var nodes = Array.isArray(selection.nodes) ? selection.nodes : [];
+      var oneNode = nodes.length === 1 ? nodes[0] : null;
+      var folderReady = !!(unityConnected && selectedUnityObjectIsFolder && selectedUnityImageTargetMode !== "replaceImage"
+        && validUnityPrefabExportFolder(selectedUnityFolder));
+      var projectReady = !!(selectedUnityProject && selectedUnityProject.valid && selectedUnityProject.bridgeInstalled
+        && selectedUnityProject.settingsConfigured && !unityBridgeVersionMismatch);
+      if (exportPrefabSelectionEl) exportPrefabSelectionEl.textContent = oneNode
+        ? "选区：" + (oneNode.name || "未命名") : (nodes.length ? "选区：已选择 " + nodes.length + " 个节点，请只选择一个根节点" : "选区：请选择一个 Figma 根节点");
+      if (exportPrefabProjectEl) exportPrefabProjectEl.textContent = "Unity 工程：" + (selectedUnityProject ? (selectedUnityProject.name || selectedUnityProject.path) : "未连接");
+      if (exportPrefabFolderEl) {
+        exportPrefabFolderEl.textContent = "Unity 输出目录：" + (folderReady ? selectedUnityFolder : (unityConnected ? "请在 Unity Project 中选择文件夹" : "未连接"));
+        exportPrefabFolderEl.className = "folder-box" + (folderReady ? "" : " missing");
+      }
+      if (exportPrefabPreviewEl) {
+        if (folderReady && oneNode) {
+          var name = normalizeUnityPrefabExportName(oneNode.name);
+          var root = selectedUnityFolder.replace(/\\/g, "/").replace(/\/+$/, "") + "/" + name;
+          exportPrefabPreviewEl.textContent = "Prefab：" + root + "/Prefab/" + name + ".prefab\nTexture：" + root + "/Texture/";
+        } else exportPrefabPreviewEl.textContent = "输出结构：名字/Prefab/名字.prefab\n名字/Texture/";
+      }
+      if (exportPrefabReadFolderBtn) exportPrefabReadFolderBtn.disabled = !unityConnected || prefabExportReadingFolder || figmaPrefabImportBusy;
+      if (exportUnityPrefabBtn) exportUnityPrefabBtn.disabled = !folderReady || !projectReady || !oneNode || !selection.fileKey
+        || !relaySocketRegistered || prefabExportReadingFolder || figmaPrefabImportBusy || exportingHierarchy || isExecuting;
+    }
+
+    async function readUnityPrefabExportFolder() {
+      if (prefabExportReadingFolder || figmaPrefabImportBusy) return;
+      prefabExportReadingFolder = true;
+      refreshUnityPrefabExportControls();
+      try {
+        if (!unityConnected) throw new Error("请先连接 Unity 网关。");
+        var folder = await fetchSelectedUnityFolder();
+        if (!validUnityPrefabExportFolder(folder) || !selectedUnityObjectIsFolder || selectedUnityImageTargetMode === "replaceImage") {
+          throw new Error("请在 Unity Project 中选择 Assets 下的文件夹。");
+        }
+        setUnityPrefabExportStatus("已读取 Unity 输出目录：" + folder + "。导出时将在其中新建名字文件夹。");
+      } catch (error) {
+        setUnityPrefabExportStatus(error.message || String(error), true);
+      } finally {
+        prefabExportReadingFolder = false;
+        refreshUnityPrefabExportControls();
+      }
+    }
+
+    async function startUnityPrefabExport() {
+      if (figmaPrefabImportBusy || prefabExportReadingFolder || isExecuting || exportingHierarchy) return;
+      var requestStarted = false;
+      try {
+        if (!unityConnected || !relaySocketRegistered) throw new Error("请先连接 Unity 和本地 Relay。");
+        if (!selectedUnityProject || !selectedUnityProject.id || !selectedUnityProject.valid
+          || !selectedUnityProject.bridgeInstalled || !selectedUnityProject.settingsConfigured || unityBridgeVersionMismatch) {
+          throw new Error("请先选择有效的 Unity 工程，并完成 Bridge 和字体配置。");
+        }
+        var selection = lastSelectionData || {};
+        var nodes = Array.isArray(selection.nodes) ? selection.nodes : [];
+        if (nodes.length !== 1 || !selection.fileKey) throw new Error("请在 Figma 中只选择一个要导出的根节点。");
+        var node = nodes[0];
+        var snapshot = {
+          projectId: selectedUnityProject.id, projectPath: selectedUnityProject.path,
+          gatewayProjectPath: unityGatewayProjectPath || selectedUnityProject.path,
+          sessionId: relaySessionId, fileKey: selection.fileKey,
+          nodeId: node.id || node.urlNodeId || "", nodeName: node.name || "",
+          nodeWidth: Number(node.width) || 0, nodeHeight: Number(node.height) || 0
+        };
+        figmaPrefabTaskOutputMode = "named-export";
+        figmaPrefabImportBusy = true;
+        refreshUnityControls();
+        setUnityPrefabExportProgress(0);
+        if (exportPrefabResultEl) exportPrefabResultEl.hidden = true;
+        setUnityPrefabExportStatus("正在读取 Unity 当前输出目录…");
+        var folder = await fetchSelectedUnityFolder();
+        if (!selectedUnityProject || selectedUnityProject.id !== snapshot.projectId || selectedUnityProject.path !== snapshot.projectPath) {
+          throw new Error("Unity 工程已切换，请在当前工程重新读取输出目录。");
+        }
+        if (relaySessionId !== snapshot.sessionId || !lastSelectionData || lastSelectionData.fileKey !== snapshot.fileKey) {
+          throw new Error("Figma 文件已切换，请重新选择要导出的根节点。");
+        }
+        if (!validUnityPrefabExportFolder(folder) || !selectedUnityObjectIsFolder || selectedUnityImageTargetMode === "replaceImage") {
+          throw new Error("请在 Unity Project 中选择 Assets 下的文件夹，不能选择图片替换目标。");
+        }
+        figmaPrefabImportTaskId = "figma-prefab-export-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        requestStarted = true;
+        var data = await sendRelaySocketRequest("figma.prefab.start", {
+          clientRequestId: figmaPrefabImportTaskId, outputMode: "named-export",
+          projectId: snapshot.projectId, gatewayProjectPath: snapshot.gatewayProjectPath,
+          targetFolder: folder, sessionId: snapshot.sessionId, fileKey: snapshot.fileKey,
+          nodeId: snapshot.nodeId, nodeName: snapshot.nodeName, nodeWidth: snapshot.nodeWidth, nodeHeight: snapshot.nodeHeight
+        }, "", 8000);
+        if (!data || data.ok !== true || !data.task || !data.task.taskId) {
+          var rejected = new Error((data && data.error) || "Prefab 导出任务未被接受。");
+          if (data && data.ok === false) rejected.relayTransportFailure = false;
+          throw rejected;
+        }
+        if (data.task.taskId !== figmaPrefabImportTaskId || data.task.outputMode !== "named-export") {
+          throw new Error("Relay 返回的导出任务身份或目录模式不匹配，请核对原任务。");
+        }
+        figmaPrefabImportTaskId = data.task.taskId;
+        setUnityPrefabExportProgress(5);
+        setUnityPrefabExportStatus("正在导出 Prefab：" + (data.task.targetFolder || folder) + "。目标已锁定，同名资源不会被覆盖。");
+        appendLog("Unity Prefab 导出已启动：" + figmaPrefabImportTaskId + "，输出=" + (data.task.targetFolder || folder));
+        subscribeFigmaPrefabImportTask();
+      } catch (error) {
+        var uncertain = requestStarted && error.relayTransportFailure !== false && error.relayRequestSent !== false;
+        if (!uncertain) {
+          figmaPrefabImportBusy = false;
+          figmaPrefabImportTaskId = "";
+          figmaPrefabSubscriptionId = "";
+          figmaPrefabTaskOutputMode = "direct-import";
+        }
+        setUnityPrefabExportStatus((uncertain ? "导出状态待核对：" : "导出失败：") + (error.message || String(error)), true);
+        appendLog("Unity Prefab 导出：" + (error.message || error) + (uncertain ? "；保留任务=" + figmaPrefabImportTaskId + "，不重放写入。" : ""), true);
+        if (uncertain && figmaPrefabImportTaskId && relaySocketRegistered) subscribeFigmaPrefabImportTask();
+        refreshUnityControls();
+      }
+    }
+
+    function handleNamedPrefabExportEvent(message) {
+      var data = message.result || {};
+      if (message.error || !data.task) {
+        setUnityPrefabExportStatus("导出状态待核对：" + (message.error || "任务结果无效") + "。保留原任务，不重复导出。", true);
+        return;
+      }
+      var task = data.task;
+      setUnityPrefabExportProgress(task.percent);
+      if (task.status === "queued" || task.status === "running") {
+        var stageNames = { queued: "等待导出", checking_unity: "检查 Unity", running_pipeline: "生成 Prefab 与贴图", generating_prefab: "生成 Prefab" };
+        setUnityPrefabExportStatus("Prefab 导出进行中：" + (stageNames[task.stage || task.status] || "处理 UI 层级与资源") + "（" + Number(task.percent || 0) + "%）");
+        return;
+      }
+      if (task.status === "completed" && task.summary && task.summary.verifyAllPass === true) {
+        var summary = task.summary;
+        var lines = ["Unity Prefab 导出完成", "Prefab：" + (summary.prefab || "未报告"),
+          "Texture：" + (summary.targetImageDir || "未报告"), "Unity 验证通过"];
+        setUnityPrefabExportProgress(100);
+        setUnityPrefabExportStatus("导出完成：" + (task.targetFolder || summary.prefab));
+        if (exportPrefabResultEl) { exportPrefabResultEl.hidden = false; exportPrefabResultEl.textContent = lines.join("\n"); }
+        appendLog(lines.join("\n"));
+        if (selectedUnityProject && selectedUnityProject.id === task.projectId) selectedUnityFolderIsEmpty = false;
+      } else {
+        setUnityPrefabExportStatus("导出失败：" + (task.error || "Unity 验证未通过"), true);
+        appendLog("Unity Prefab 导出失败：" + (task.error || "Unity 验证未通过"), true);
+      }
+      figmaPrefabImportBusy = false;
+      figmaPrefabImportTaskId = "";
+      figmaPrefabSubscriptionId = "";
+      figmaPrefabTaskOutputMode = "direct-import";
+      sendRelaySocketRequest("figma.prefab.unsubscribe", {}, "", 3000).catch(function (error) { appendLog("导出退订失败：" + (error.message || error), true); });
+      refreshUnityControls();
+    }
+
+    // ─── 导出 PSD ───
+    var exportPsdBusy = false;
+    var exportPsdOpeningFolder = false;
+    var exportPsdRequestId = "";
+    var exportPsdLastPath = "";
+    var exportPsdCollectionTimeout = null;
+    var exportPsdConnectionTimer = null;
+    // 对实际 Relay JSON（含协议开销）计 UTF-8 字节，逐批发送。
+    var PSD_CHUNK_BUDGET = 6 * 1024 * 1024;
+
+    function setExportPsdProgress(percent) {
+      if (!exportPsdProgressBar) return;
+      var value = Math.max(0, Math.min(100, Math.round(percent)));
+      exportPsdProgressBar.style.width = value + "%";
+    }
+
+    function setExportPsdStatus(text, isError) {
+      if (!exportPsdStatusEl) return;
+      exportPsdStatusEl.textContent = text;
+      exportPsdStatusEl.classList.toggle("error", !!isError);
+    }
+
+    function refreshExportPsdControls() {
+      var hasSelection = !!(lastSelectionData && Array.isArray(lastSelectionData.nodes) && lastSelectionData.nodes.length > 0);
+      if (exportPsdSelectionEl) {
+        var names = hasSelection
+          ? lastSelectionData.nodes.map(function (n) { return n.name || "<未命名>"; })
+          : [];
+        exportPsdSelectionEl.textContent = hasSelection
+          ? "选区：" + names.length + " 个节点 — " + names.slice(0, 3).join("、") + (names.length > 3 ? " 等" : "")
+          : "选区：未选择";
+      }
+      if (exportPsdBtn) exportPsdBtn.disabled = exportPsdBusy || !hasSelection;
+      if (exportPsdOpenFolderBtn) exportPsdOpenFolderBtn.disabled = exportPsdBusy || exportPsdOpeningFolder || !exportPsdLastPath;
+    }
+
+    function handleExportPsdCollectError(message) {
+      if (!exportPsdRequestId || message.requestId !== exportPsdRequestId) return;
+      clearExportPsdCollectionWatchdog();
+      setExportPsdStatus("导出失败：" + (message.error || "图层采集失败，请重试。"), true);
+      appendLog("PSD 导出失败：" + (message.error || "图层采集失败"), true);
+      exportPsdBusy = false;
+      exportPsdRequestId = "";
+      refreshExportPsdControls();
+    }
+
+    function clearExportPsdCollectionWatchdog() {
+      clearTimeout(exportPsdCollectionTimeout);
+      clearTimeout(exportPsdConnectionTimer);
+      exportPsdCollectionTimeout = null;
+      exportPsdConnectionTimer = null;
+    }
+
+    function armExportPsdCollectionTimeout(requestId) {
+      clearTimeout(exportPsdCollectionTimeout);
+      exportPsdCollectionTimeout = setTimeout(function () {
+        handleExportPsdCollectError({ requestId: requestId, error: "图层采集超时，请重新选择节点后重试。" });
+      }, 300000);
+    }
+
+    function watchExportPsdConnection(requestId) {
+      exportPsdConnectionTimer = setTimeout(function () {
+        if (requestId !== exportPsdRequestId) return;
+        if (!relaySocketRegistered || !relaySocket || relaySocket.readyState !== WebSocket.OPEN) {
+          handleExportPsdCollectError({ requestId: requestId, error: "Relay 连接已断开，请连接后重新导出。" });
+          return;
+        }
+        watchExportPsdConnection(requestId);
+      }, 1000);
+    }
+
+    function handleExportPsdProgress(message) {
+      if (message.requestId !== exportPsdRequestId) return;
+      armExportPsdCollectionTimeout(message.requestId);
+      var done = Number(message.done) || 0;
+      var total = Number(message.total) || 0;
+      if (message.phase === "collecting") {
+        setExportPsdStatus("正在扫描节点结构…");
+        setExportPsdProgress(0);
+        return;
+      }
+      var percent = total > 0 ? (done / total) * 70 : 0; // 采集占 70%，组装占剩余 30%
+      setExportPsdStatus("正在导出图层 " + done + " / " + total + "…");
+      setExportPsdProgress(percent);
+    }
+
+    async function requestPsdExport(action, payload, timeoutMs, requestId) {
+      var result = await sendRelaySocketRequest(action, payload, "", timeoutMs, requestId);
+      if (!result || result.ok !== true) throw new Error((result && result.error) || "Relay 未返回成功结果。");
+      return result;
+    }
+
+    /** 把图层 PNG 切成分批，逐批送入 Relay 暂存，最后触发组装。 */
+    async function sendPsdExportToRelay(collected) {
+      var taskId = "psd-" + Date.now() + "-" + Math.random().toString(16).slice(2, 8);
+      var nodes = collected.nodes || [];
+      var size = collected.size || { width: 1, height: 1 };
+      var scale = collected.scale || 1;
+
+      // 1) 登记结构（不含像素）
+      var metaNodes = nodes.map(function (n) {
+        var copy = {};
+        Object.keys(n).forEach(function (k) { if (k !== "pngBase64") copy[k] = n[k]; });
+        return copy;
+      });
+      setExportPsdStatus("正在登记图层结构…");
+      await requestPsdExport("psd.export.stage-meta", {
+        taskId: taskId,
+        nodes: metaNodes,
+        size: size,
+        scale: scale,
+        baseName: collected.baseName || "export",
+        imagesPrestretched: collected.imagesPrestretched === true,
+        warnings: Array.isArray(collected.warnings) ? collected.warnings : []
+      }, 60000);
+
+      // 2) 只保留当前批次，避免先复制整份图层数据。
+      var current = [];
+      var currentBytes = 0;
+      var batchNumber = 0;
+      var transferred = 0;
+      var imageCount = nodes.reduce(function (count, node) { return count + (node.pngBase64 ? 1 : 0); }, 0);
+      var encoder = new TextEncoder();
+
+      function chunkRequestId() { return taskId + "-chunk-" + batchNumber; }
+      function chunkEnvelopeBytes(requestId) {
+        return encoder.encode(JSON.stringify({
+          type: "relay.request", requestId: requestId || chunkRequestId(), action: "psd.export.stage-chunk",
+          payload: { taskId: taskId, layers: [] }, capabilityToken: ""
+        })).length;
+      }
+      async function flushChunk() {
+        if (!current.length) return;
+        setExportPsdStatus("正在传输图层，第 " + (batchNumber + 1) + " 批…");
+        setExportPsdProgress(70 + (transferred / Math.max(1, imageCount)) * 20);
+        await requestPsdExport("psd.export.stage-chunk", {
+          taskId: taskId, layers: current
+        }, 120000, chunkRequestId());
+        batchNumber += 1;
+        current = [];
+        currentBytes = 0;
+      }
+      async function addImage(record) {
+        var recordBytes = encoder.encode(JSON.stringify(record)).length;
+        if (current.length >= 500 || chunkEnvelopeBytes() + currentBytes + recordBytes + (current.length ? 1 : 0) > PSD_CHUNK_BUDGET) {
+          await flushChunk();
+        }
+        if (chunkEnvelopeBytes() + recordBytes > PSD_CHUNK_BUDGET) throw new Error("单张图层超过传输上限。");
+        currentBytes += recordBytes + (current.length ? 1 : 0);
+        current.push(record);
+      }
+
+      for (var i = 0; i < nodes.length; i += 1) {
+        var node = nodes[i];
+        if (!node.pngBase64) continue;
+        var recordOverhead = encoder.encode(JSON.stringify({ id: node.id, pngBase64: "" })).length;
+        if (chunkEnvelopeBytes() + recordOverhead + node.pngBase64.length <= PSD_CHUNK_BUDGET) {
+          await addImage({ id: node.id, pngBase64: node.pngBase64 });
+        } else {
+          await flushChunk();
+          // 为分片序号和后续请求序号预留最大安全整数的 JSON 开销。
+          var partOverhead = encoder.encode(JSON.stringify({
+            id: node.id, pngBase64: "", partIndex: Number.MAX_SAFE_INTEGER, partCount: Number.MAX_SAFE_INTEGER
+          })).length;
+          var partLength = Math.floor((PSD_CHUNK_BUDGET - chunkEnvelopeBytes(taskId + "-chunk-" + Number.MAX_SAFE_INTEGER) - partOverhead) / 4) * 4;
+          if (partLength < 4) throw new Error("图层标识超过传输上限。");
+          var partCount = Math.ceil(node.pngBase64.length / partLength);
+          for (var partIndex = 0; partIndex < partCount; partIndex += 1) {
+            await addImage({
+              id: node.id,
+              pngBase64: node.pngBase64.slice(partIndex * partLength, (partIndex + 1) * partLength),
+              partIndex: partIndex, partCount: partCount
+            });
+          }
+        }
+        transferred += 1;
+      }
+      await flushChunk();
+
+      // 3) 组装
+      setExportPsdStatus("正在组装 PSD…");
+      setExportPsdProgress(92);
+      var result = await requestPsdExport("psd.export.assemble", {
+        taskId: taskId
+      }, 300000);
+      return result;
+    }
+
+    async function handleExportPsdCollectResult(message) {
+      if (message.requestId !== exportPsdRequestId) return;
+      clearExportPsdCollectionWatchdog();
+      var collected = message.result || {};
+      try {
+        if (!Array.isArray(collected.nodes) || collected.nodes.length === 0) {
+          throw new Error("采集结果为空，请重新选择节点。");
+        }
+        setExportPsdStatus("已采集 " + (collected.imageCount || 0) + " 张图层，正在发送到 Relay…");
+        setExportPsdProgress(72);
+        var result = await sendPsdExportToRelay(collected);
+        if (!result || result.ok !== true) throw new Error((result && result.error) || "Relay 未返回成功结果。");
+        var coverage = result.coverage || {};
+        var hasCoverage = typeof coverage.expectedImages === "number" && typeof coverage.exportedImages === "number";
+        var missingImages = Number(coverage.missingImages) || 0;
+        var incomplete = coverage.complete === false || missingImages > 0 || (hasCoverage && coverage.exportedImages < coverage.expectedImages);
+        var warnings = [];
+        (Array.isArray(collected.warnings) ? collected.warnings : []).concat(Array.isArray(result.warnings) ? result.warnings : []).forEach(function (warning) {
+          var text = typeof warning === "string" ? warning : String(warning && (warning.message || warning.error) || JSON.stringify(warning));
+          if (text && warnings.indexOf(text) === -1) warnings.push(text);
+        });
+        var outcome = incomplete ? "导出不完整" : (warnings.length ? "导出完成（有提示）" : "导出完成");
+        var coverageText = hasCoverage
+          ? "图层完整性：已导出 " + coverage.exportedImages + " / " + coverage.expectedImages + " 张，缺失 " + missingImages + " 张"
+          : "未提供图层完整性统计";
+        exportPsdLastPath = result.psdPath || "";
+        setExportPsdProgress(100);
+        setExportPsdStatus(outcome + "：" + (result.layerCount || 0) + " 层，" + (result.groupCount || 0) + " 组，" + formatBytes(result.bytes || 0) + "；" + coverageText + (warnings.length ? "；" + warnings.length + " 条提示" : ""), incomplete);
+        if (exportPsdResultEl) {
+          exportPsdResultEl.hidden = false;
+          var mapping = Array.isArray(result.layers) ? result.layers : [];
+          var lines = [];
+          lines.push("PSD：" + (result.psdPath || "-"));
+          lines.push("对照表：" + (result.indexPath || "-"));
+          lines.push(coverageText);
+          if (warnings.length) {
+            lines.push("");
+            lines.push("导出提示：");
+            warnings.forEach(function (warning) { lines.push("  " + warning); });
+          }
+          lines.push("");
+          lines.push("图层名对照（原名 → PSD 层名）：");
+          mapping.slice(0, 60).forEach(function (item) {
+            lines.push("  " + (item.original || "-") + "  →  " + (item.layer || "-") + "  [" + item.kind + "]");
+          });
+          if (mapping.length > 60) lines.push("  … 共 " + mapping.length + " 项，完整内容见对照表文件");
+          exportPsdResultEl.textContent = lines.join("\n");
+        }
+        appendLog("PSD " + outcome + "：" + (result.psdPath || "-") + "；" + coverageText, incomplete);
+      } catch (error) {
+        setExportPsdStatus("导出失败：" + (error.message || error), true);
+        appendLog("PSD 导出失败：" + (error.message || error), true);
+      } finally {
+        exportPsdBusy = false;
+        exportPsdRequestId = "";
+        refreshExportPsdControls();
+      }
+    }
+
+    function formatBytes(bytes) {
+      if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+      if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
+      return bytes + " B";
+    }
+
+    function startExportPsd() {
+      if (exportPsdBusy) return;
+      if (!relaySocketRegistered || !relaySocket || relaySocket.readyState !== WebSocket.OPEN) {
+        setExportPsdStatus("请先连接本地 Relay，再导出 PSD。", true);
+        return;
+      }
+      if (!lastSelectionData || !Array.isArray(lastSelectionData.nodes) || lastSelectionData.nodes.length === 0) {
+        setExportPsdStatus("请先在 Figma 画布中选择节点。", true);
+        return;
+      }
+      exportPsdBusy = true;
+      exportPsdRequestId = "psd-collect-" + Date.now() + "-" + Math.random().toString(16).slice(2, 8);
+      armExportPsdCollectionTimeout(exportPsdRequestId);
+      watchExportPsdConnection(exportPsdRequestId);
+      refreshExportPsdControls();
+      setExportPsdProgress(0);
+      setExportPsdStatus("正在采集选区图层…");
+      exportPsdResultEl.hidden = true;
+      parent.postMessage({
+        pluginMessage: {
+          type: "EXPORT_PSD_COLLECT",
+          requestId: exportPsdRequestId,
+          scale: Number(exportPsdScaleSelect && exportPsdScaleSelect.value) || 1
+        }
+      }, "*");
+    }
+
+    async function openExportFolder() {
+      if (exportPsdOpeningFolder) return;
+      exportPsdOpeningFolder = true;
+      refreshExportPsdControls();
+      setExportPsdStatus("正在打开导出文件夹…");
+      try {
+        var result = await sendRelaySocketRequest("psd.export.open-folder", {}, "", 5000);
+        if (!result || result.ok !== true) throw new Error((result && result.error) || "Relay 未确认打开文件夹。");
+        setExportPsdStatus("已打开导出文件夹" + (result.path ? "：" + result.path : "。"));
+        appendLog("已打开 PSD 导出文件夹：" + (result.path || "-"));
+      } catch (error) {
+        setExportPsdStatus("打开文件夹失败：" + (error.message || error), true);
+        appendLog("打开 PSD 导出文件夹失败：" + (error.message || error), true);
+      } finally {
+        exportPsdOpeningFolder = false;
+        refreshExportPsdControls();
+      }
+    }
+
     // ─── 插件消息 ───
     window.onmessage = function (event) {
       var message = event.data && event.data.pluginMessage;
@@ -7765,7 +8581,9 @@
       }
 
       // 本地 Relay 的 _RESULT 回传
-      if (message.type && message.type.endsWith("_RESULT") && message.type !== "EXPORT_IMAGES_TO_UNITY_RESULT") {
+      if (message.type && message.type.endsWith("_RESULT")
+          && message.type !== "EXPORT_IMAGES_TO_UNITY_RESULT"
+          && message.type !== "EXPORT_PSD_COLLECT_RESULT") {
         if (!executingRequestId || message.requestId !== executingRequestId) {
           appendLog("收到晚到或非当前任务结果，已回传 Relay 但忽略晚到状态覆盖：" + (message.requestId || "-"), true);
           (async function () {
@@ -7800,6 +8618,23 @@
         handleUnityImageExport(message);
         return;
       }
+
+      // PSD 导出：采集进度
+      if (message.type === "EXPORT_PSD_PROGRESS") {
+        handleExportPsdProgress(message);
+        return;
+      }
+
+      // PSD 导出：采集完成，转交 Relay 组装
+      if (message.type === "EXPORT_PSD_COLLECT_ERROR") {
+        handleExportPsdCollectError(message);
+        return;
+      }
+
+      if (message.type === "EXPORT_PSD_COLLECT_RESULT") {
+        handleExportPsdCollectResult(message);
+        return;
+      }
     };
 
     // ─── 实时选区更新 ───
@@ -7822,6 +8657,9 @@
       }
       updateFigmaKeyContextFromSelection(lastSelectionData);
       refreshAiPromptControls();
+      // 选区变化必须同步刷新导出按钮：否则按钮会永远停在初始的「未选择」禁用态。
+      refreshExportPsdControls();
+      refreshUnityPrefabExportControls();
 
       // 更新节点列表显示，保留可读上下文，不暴露 page/frame id。
       var nodes = lastSelectionData.nodes;
@@ -7976,8 +8814,6 @@
     installUnityBridgeBtn.addEventListener("click", function () { installSelectedUnityBridge().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
     refreshUnityProjectsBtn.addEventListener("click", refreshUnityProjects);
     exportImagesBtn.addEventListener("click", exportImagesToUnity);
-    previewHierarchyBtn.addEventListener("click", function () { exportHierarchyToUnity(true); });
-    exportHierarchyBtn.addEventListener("click", function () { exportHierarchyToUnity(false); });
     if (createHierarchyBackupCheck) createHierarchyBackupCheck.addEventListener("change", refreshUnityControls);
     suggestNineSliceBtn.addEventListener("click", requestNineSliceSuggestion);
     createNineSliceBtn.addEventListener("click", createNineSliceFromSelection);
@@ -8007,9 +8843,6 @@
     restoreCleanupRecoveryBtn.addEventListener("click", function () { runCleanupRecoveryAction("restore"); });
     aiPromptPreviewEl.addEventListener("input", refreshAiPromptControls);
     aiPromptTemplateSelect.addEventListener("change", refreshAiPromptControls);
-    prefabImportBtn.addEventListener("click", startPrefabImportToFigma);
-    prefabImportComponentModeSelect.addEventListener("change", refreshPrefabImportControls);
-    prefabImportNestedComponentModeSelect.addEventListener("change", refreshPrefabImportControls);
     aiPromptPsdDropZone.addEventListener("dragover", handleAiPromptPsdDragOver);
     aiPromptPsdDropZone.addEventListener("dragleave", handleAiPromptPsdDragLeave);
     aiPromptPsdDropZone.addEventListener("drop", handleAiPromptPsdDrop);
@@ -8032,6 +8865,22 @@
         switchSyncTab(button.getAttribute("data-sync-tab"));
       });
     });
+    toolsTabButtons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        switchToolsTab(button.getAttribute("data-tools-tab"));
+      });
+    });
+    exportTabButtons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        switchExportTab(button.getAttribute("data-export-tab"));
+      });
+    });
+    if (exportPsdBtn) exportPsdBtn.addEventListener("click", startExportPsd);
+    if (exportPsdOpenFolderBtn) exportPsdOpenFolderBtn.addEventListener("click", openExportFolder);
+    if (exportUnityPrefabBtn) exportUnityPrefabBtn.addEventListener("click", startUnityPrefabExport);
+    if (exportPrefabReadFolderBtn) exportPrefabReadFolderBtn.addEventListener("click", readUnityPrefabExportFolder);
+    refreshExportPsdControls();
+    refreshUnityPrefabExportControls();
 
     // ─── AI 模板卡片选择器 ───
     removeDisabledAiPromptTemplates();
@@ -8052,21 +8901,23 @@
       var headerUnityChip = document.getElementById("headerUnityChip");
       var aiBadgeEl = document.getElementById("ai-badge");
       var unityBadgeEl = document.getElementById("unity-badge");
-      function syncChip(chip, badge, onlineLabel, offlineLabel) {
+      function syncChip(chip, badge, onlineLabel, offlineLabel, pendingLabel) {
         if (!chip || !badge) return;
         var online = String(badge.className || "").indexOf("online") >= 0;
+        var pending = String(badge.className || "").indexOf("pending") >= 0;
         chip.classList.toggle("online", online);
-        chip.classList.toggle("offline", !online);
-        var label = online ? onlineLabel : offlineLabel;
+        chip.classList.toggle("pending", pending);
+        chip.classList.toggle("offline", !online && !pending);
+        var label = pending ? (pendingLabel || "连接中") : online ? onlineLabel : offlineLabel;
         var detail = String(badge.textContent || "").trim();
-        if (detail && detail !== "未连接" && detail !== "已连接") {
+        if (!pending && detail && detail !== "未连接" && detail !== "已连接") {
           label += " · " + detail;
         }
         chip.innerHTML = '<span class="dot"></span>' + label;
       }
       function refreshChips() {
         syncChip(headerRelayChip, aiBadgeEl, "Relay 已连接", "Relay 未连接");
-        syncChip(headerUnityChip, unityBadgeEl, "Unity 已连接", "Unity 未连接");
+        syncChip(headerUnityChip, unityBadgeEl, "Unity 已连接", "Unity 未连接", "Unity 连接中");
       }
       if (aiBadgeEl && typeof MutationObserver !== "undefined") {
         new MutationObserver(refreshChips).observe(aiBadgeEl, { attributes: true, childList: true, subtree: true, characterData: true });
@@ -8179,7 +9030,7 @@
     appendLog("AI 提示词模板已加载：" + Object.keys(AiPromptTemplates).map(function (key) {
       return key + "=" + String(AiPromptTemplates[key] || "").length;
     }).join(", "));
-    appendLog("插件已启动。选择 Figma 节点后，连接 Unity 网关并点击「导出选中图片到 Unity」。");
+    appendLog("插件已启动，正在恢复上次的 Unity 连接。连接成功后可导出选中的 Figma 节点。");
     refreshAiRunner();
     requestCleanupProviderPreference();
     requestCleanupRecoveryBackups(false);

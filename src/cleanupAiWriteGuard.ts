@@ -41,6 +41,8 @@ const ReadOnlyJobTypes = new Set([
   "FIGMA_HIERARCHY_CLEANUP_ANALYZE",
   "FIGMA_HIERARCHY_REPEAT_CLUSTER_ANALYZE",
   "FIGMA_EXPORT_NODE_SCREENSHOT",
+  // 设计编辑 inspect 只读取节点属性；FIGMA_APPLY_EDITS 不进入任何写入阶段集合，整理会话中一律被拒绝。
+  "FIGMA_INSPECT_NODES",
 ]);
 
 const HierarchyJobTypes = new Set([

@@ -12,6 +12,12 @@ import { notifyRunChanged } from "./runChangeNotifier.js";
 import { logInfo, logWarn } from "./utils/logger.js";
 
 export type FigmaPrefabImportTaskStatus = "queued" | "running" | "completed" | "error";
+export type FigmaPrefabOutputMode = "direct-import" | "named-export";
+
+export interface UnityGatewayProbeOptions {
+  requireEmptyFolder?: boolean;
+  requirePrefabExportWithoutAtlas?: boolean;
+}
 
 export interface FigmaPrefabImportSummary {
   status: string;
@@ -37,6 +43,8 @@ export interface FigmaPrefabImportTask {
   percent: number;
   projectId: string;
   projectPath: string;
+  outputMode: FigmaPrefabOutputMode;
+  selectedFolder: string;
   targetFolder: string;
   manifestDir: string;
   wallClockReport: string;
@@ -55,7 +63,7 @@ export interface FigmaPrefabImportProcessResult {
 }
 
 export interface FigmaPrefabImportDependencies {
-  probeUnityGateway?: (project: UnityProjectStatus, expectedTargetFolder?: string) => Promise<void>;
+  probeUnityGateway?: (project: UnityProjectStatus, expectedTargetFolder?: string, options?: UnityGatewayProbeOptions) => Promise<void>;
   executePython?: (
     task: FigmaPrefabImportTask,
     scriptPath: string,
@@ -66,7 +74,10 @@ export interface FigmaPrefabImportDependencies {
 interface PreparedImport {
   project: UnityProjectStatus;
   projectKey: string;
+  outputMode: FigmaPrefabOutputMode;
+  selectedFolder: string;
   targetFolder: string;
+  exportName: string;
   sessionId: string;
   fileKey: string;
   nodeId: string;
@@ -95,6 +106,7 @@ export function startFigmaPrefabImportTask(
   const requestFingerprint = createHash("sha256").update(JSON.stringify([
     payload.projectId, payload.gatewayProjectPath, payload.targetFolder, payload.sessionId, payload.fileKey,
     payload.nodeId, payload.nodeName, payload.nodeWidth, payload.nodeHeight,
+    payload.outputMode == null ? "direct-import" : payload.outputMode,
   ])).digest("hex");
   const previous = tasks.get(taskId);
   if (previous) {
@@ -122,6 +134,8 @@ export function startFigmaPrefabImportTask(
     percent: 0,
     projectId: prepared.project.id,
     projectPath: prepared.project.path,
+    outputMode: prepared.outputMode,
+    selectedFolder: prepared.selectedFolder,
     targetFolder: prepared.targetFolder,
     manifestDir: path.join(taskDirectory, "manifest"),
     wallClockReport: path.join(taskDirectory, "wall-clock.json"),
@@ -151,7 +165,7 @@ export function getFigmaPrefabImportTask(taskId: string): FigmaPrefabImportTask 
   return task ? serializeTask(task) : undefined;
 }
 
-export function normalizeFigmaPrefabTargetFolder(value: unknown): string {
+export function normalizeFigmaPrefabTargetFolder(value: unknown, allowAssetsRoot = false): string {
   const raw = stringValue(value).replace(/\\/g, "/").replace(/\/+$/, "");
   if (!raw) throw new Error("targetFolder is required");
   if (path.isAbsolute(raw) || /^\/?[A-Za-z]:/.test(raw) || raw.startsWith("/")) {
@@ -161,10 +175,20 @@ export function normalizeFigmaPrefabTargetFolder(value: unknown): string {
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     throw new Error("targetFolder must not contain empty, current, or parent path segments");
   }
-  if (segments[0] !== "Assets" || segments.length < 2) {
+  if (segments[0] !== "Assets" || (!allowAssetsRoot && segments.length < 2)) {
     throw new Error("targetFolder must be a child folder under Assets/");
   }
   return segments.join("/");
+}
+
+/** Use the design identifier for files; pipe-separated notes belong to Figma. */
+export function normalizeFigmaPrefabExportName(value: unknown): string {
+  let name = (typeof value === "string" ? value : "").normalize("NFC").trim()
+    .replace(/[\[\]]/g, "").split(/[｜|]/, 1)[0].trim()
+    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, "_").replace(/[. ]+$/g, "");
+  name = Array.from(name).slice(0, 120).join("").replace(/[. ]+$/g, "") || "FigmaExport";
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(name)) name = "_" + name;
+  return name;
 }
 
 export function buildFigmaPrefabImportArgs(
@@ -172,7 +196,8 @@ export function buildFigmaPrefabImportArgs(
   prepared: PreparedImport,
   task: Pick<FigmaPrefabImportTask, "manifestDir" | "wallClockReport">
 ): string[] {
-  const placeholderPrefab = `${prepared.targetFolder}/Prefab/Pending.prefab`;
+  const namedExport = prepared.outputMode === "named-export";
+  const placeholderPrefab = `${prepared.targetFolder}/Prefab/${namedExport ? prepared.exportName : "Pending"}.prefab`;
   const placeholderTextureDirectory = `${prepared.targetFolder}/Texture`;
   const urlNodeId = prepared.nodeId.replace(/:/g, "-");
   const figmaUrl = `https://www.figma.com/design/${encodeURIComponent(prepared.fileKey)}/Relay?node-id=${encodeURIComponent(urlNodeId)}`;
@@ -185,9 +210,11 @@ export function buildFigmaPrefabImportArgs(
     "--file-key", prepared.fileKey,
     "--session-id", prepared.sessionId,
     "--relay-url", publicUrl(config),
-    "--infer-formal-names",
-    "--formal-layout", "split",
-    "--formal-output-dir", prepared.targetFolder,
+    ...(namedExport ? ["--prefab-name", prepared.exportName, "--no-atlas"] : [
+      "--infer-formal-names",
+      "--formal-layout", "split",
+      "--formal-output-dir", prepared.targetFolder,
+    ]),
     "--overwrite", "create-new-only",
     "--manifest-dir", task.manifestDir,
     "--wall-clock-report", task.wallClockReport,
@@ -202,9 +229,10 @@ export function buildFigmaPrefabImportArgs(
 export function parseFigmaPrefabImportSummary(
   stdout: string,
   targetFolder: string,
-  options: { requireVerified?: boolean } = {}
+  options: { requireVerified?: boolean; requireAtlas?: boolean } = {}
 ): FigmaPrefabImportSummary {
   const requireVerified = options.requireVerified !== false;
+  const requireAtlas = options.requireAtlas !== false;
   const marker = "[SUMMARY_JSON]";
   const markerCount = stdout.split(marker).length - 1;
   if (markerCount !== 1) {
@@ -247,10 +275,10 @@ export function parseFigmaPrefabImportSummary(
     }
   }
   if (!requireVerified && summary.status !== "completed") return summary;
-  if (!summary.prefab || !summary.targetImageDir || !summary.atlasDir) {
+  if (!summary.prefab || !summary.targetImageDir || (requireAtlas && !summary.atlasDir)) {
     throw new Error("deterministic import summary is missing one or more output paths");
   }
-  if (!summary.atlasPath) {
+  if (requireAtlas && !summary.atlasPath) {
     throw new Error("deterministic import summary is missing the generated SpriteAtlas path");
   }
   const normalizedPrefab = normalizeFigmaPrefabTargetAssetPath(summary.prefab);
@@ -259,14 +287,20 @@ export function parseFigmaPrefabImportSummary(
   if (!normalizedPrefab.startsWith(`${targetFolder}/Prefab/`) || !normalizedPrefab.toLowerCase().endsWith(".prefab")) {
     throw new Error("prefab output does not match the fixed Prefab/ layout");
   }
+  if (!requireAtlas && normalizedPrefab !== `${targetFolder}/Prefab/${targetFolder.split("/").at(-1)}.prefab`) {
+    throw new Error("named export prefab output does not match the reserved design name");
+  }
   if (normalizedTextureDir !== `${targetFolder}/Texture`) {
     throw new Error("targetImageDir output does not match the fixed Texture/ layout");
   }
-  if (normalizedAtlasDir !== `${targetFolder}/UiAtlas`) {
+  if (!requireAtlas && (summary.atlasDir || summary.atlasPath)) {
+    throw new Error("named Prefab export must not generate atlas outputs");
+  }
+  if (requireAtlas && normalizedAtlasDir !== `${targetFolder}/UiAtlas`) {
     throw new Error("atlasDir output does not match the fixed UiAtlas/ layout");
   }
   const normalizedAtlasPath = normalizeFigmaPrefabTargetAssetPath(summary.atlasPath);
-  if (!normalizedAtlasPath.startsWith(`${targetFolder}/UiAtlas/`) || !normalizedAtlasPath.toLowerCase().endsWith(".spriteatlasv2")) {
+  if (requireAtlas && (!normalizedAtlasPath.startsWith(`${targetFolder}/UiAtlas/`) || !normalizedAtlasPath.toLowerCase().endsWith(".spriteatlasv2"))) {
     throw new Error("atlasPath output does not match the fixed UiAtlas/*.spriteatlasv2 layout");
   }
   return summary;
@@ -279,13 +313,33 @@ async function runFigmaPrefabImportTask(
   dependencies: FigmaPrefabImportDependencies
 ): Promise<void> {
   try {
+    const namedExport = prepared.outputMode === "named-export";
+    const probeOptions: UnityGatewayProbeOptions = namedExport
+      ? { requireEmptyFolder: false, requirePrefabExportWithoutAtlas: true }
+      : { requireEmptyFolder: true };
+    const probe = dependencies.probeUnityGateway || ((project, folder, options) => probeUnityGateway(project, folder, callUnityBridge, options));
     setTaskStage(task, "checking_unity", 5, "Checking the registered Unity project and gateway.");
-    assertEmptyImportTarget(prepared.project.path, prepared.targetFolder);
-    await (dependencies.probeUnityGateway || probeUnityGateway)(prepared.project, prepared.targetFolder);
+    if (namedExport) assertNamedExportTarget(prepared);
+    else assertEmptyImportTarget(prepared.project.path, prepared.targetFolder);
+    await probe(prepared.project, prepared.selectedFolder, probeOptions);
 
     setTaskStage(task, "running_pipeline", 10, "Running fixed Figma-to-Prefab rules.");
-    assertEmptyImportTarget(prepared.project.path, prepared.targetFolder);
-    await (dependencies.probeUnityGateway || probeUnityGateway)(prepared.project, prepared.targetFolder);
+    let reservedTarget: fs.Stats | undefined;
+    if (namedExport) {
+      const targetPath = assertNamedExportTarget(prepared);
+      // No recursive creation: an output claimed during the health check must
+      // fail rather than quietly reusing another writer's directory.
+      fs.mkdirSync(targetPath);
+      reservedTarget = fs.statSync(targetPath);
+    } else assertEmptyImportTarget(prepared.project.path, prepared.targetFolder);
+    await probe(prepared.project, prepared.selectedFolder, probeOptions);
+    if (namedExport) {
+      const reservedPath = assertEmptyImportTarget(prepared.project.path, prepared.targetFolder);
+      const current = fs.statSync(reservedPath);
+      if (current.dev !== reservedTarget!.dev || current.ino !== reservedTarget!.ino) {
+        throw new Error("named export output directory changed during Unity validation");
+      }
+    }
     const scriptPath = path.join(
       PLUGIN_ROOT,
       "ai",
@@ -308,7 +362,7 @@ async function runFigmaPrefabImportTask(
       // Parse once without throwing on verification so failed processes retain their
       // structured summary for diagnostics; successful processes still enforce every
       // verification gate immediately below.
-      summary = parseFigmaPrefabImportSummary(result.stdout, prepared.targetFolder, { requireVerified: false });
+      summary = parseFigmaPrefabImportSummary(result.stdout, prepared.targetFolder, { requireVerified: false, requireAtlas: !namedExport });
       task.summary = summary;
       if (result.exitCode === 0 && (summary.status !== "completed" || summary.verifyAllPass !== true)) {
         throw new Error("deterministic import summary did not pass Unity verification");
@@ -328,7 +382,7 @@ async function runFigmaPrefabImportTask(
     }
     if (summaryError) throw summaryError;
     if (!summary) throw new Error("run_full_import.py completed without a valid summary");
-    assertImportOutputsExist(prepared.project.path, prepared.targetFolder, summary);
+    assertImportOutputsExist(prepared.project.path, prepared.targetFolder, summary, !namedExport);
 
     task.status = "completed";
     task.stage = "completed";
@@ -336,7 +390,9 @@ async function runFigmaPrefabImportTask(
     task.completedAt = Date.now();
     task.updatedAt = task.completedAt;
     notifyRunChanged(task.taskId);
-    appendTaskLog(task, "[100%] Prefab, Texture, and UiAtlas outputs passed deterministic verification.");
+    appendTaskLog(task, namedExport
+      ? "[100%] Named Prefab and Texture outputs passed deterministic verification."
+      : "[100%] Prefab, Texture, and UiAtlas outputs passed deterministic verification.");
     logInfo("Deterministic Figma Prefab import completed", {
       taskId: task.taskId,
       projectId: task.projectId,
@@ -378,19 +434,26 @@ function prepareFigmaPrefabImport(registry: UnityProjectRegistry, payload: unkno
   }
   assertCommonFontAssets(project.path);
 
-  const targetFolder = normalizeFigmaPrefabTargetFolder(payload.targetFolder);
-  assertEmptyImportTarget(project.path, targetFolder);
+  const outputMode = payload.outputMode == null ? "direct-import" : stringValue(payload.outputMode);
+  if (outputMode !== "direct-import" && outputMode !== "named-export") throw new Error("Invalid Prefab outputMode");
+  const selectedFolder = normalizeFigmaPrefabTargetFolder(payload.targetFolder, outputMode === "named-export");
   const sessionId = requiredString(payload.sessionId, "sessionId");
   const fileKey = requiredString(payload.fileKey, "fileKey");
   const nodeId = requiredString(payload.nodeId, "nodeId");
   const nodeName = requiredString(payload.nodeName, "nodeName");
   if (!/^[A-Za-z0-9_-]+$/.test(fileKey)) throw new Error("fileKey contains invalid characters");
   if (!/^[0-9]+(?::|-)[0-9]+$/.test(nodeId)) throw new Error("nodeId must identify exactly one Figma node");
+  const exportName = normalizeFigmaPrefabExportName(nodeName);
+  const targetFolder = outputMode === "named-export" ? `${selectedFolder}/${exportName}` : selectedFolder;
+  if (outputMode === "direct-import") assertEmptyImportTarget(project.path, targetFolder);
 
-  return {
+  const prepared: PreparedImport = {
     project,
     projectKey: pathKey(project.path),
+    outputMode,
+    selectedFolder,
     targetFolder,
+    exportName,
     sessionId,
     fileKey,
     nodeId,
@@ -398,9 +461,15 @@ function prepareFigmaPrefabImport(registry: UnityProjectRegistry, payload: unkno
     nodeWidth: positiveInteger(payload.nodeWidth),
     nodeHeight: positiveInteger(payload.nodeHeight)
   };
+  if (outputMode === "named-export") assertNamedExportTarget(prepared);
+  return prepared;
 }
 
 function assertEmptyImportTarget(projectPath: string, targetFolder: string): string {
+  return assertSelectedTargetDirectory(projectPath, targetFolder, true);
+}
+
+function assertSelectedTargetDirectory(projectPath: string, targetFolder: string, requireEmpty: boolean): string {
   const projectRealPath = fs.realpathSync.native(projectPath);
   const assetsRealPath = fs.realpathSync.native(path.join(projectRealPath, "Assets"));
   if (!isFileSystemPathWithin(assetsRealPath, projectRealPath)) {
@@ -411,13 +480,23 @@ function assertEmptyImportTarget(projectPath: string, targetFolder: string): str
     throw new Error(`selected Unity target folder does not exist: ${targetFolder}`);
   }
   const targetRealPath = fs.realpathSync.native(targetPath);
-  if (!isFileSystemPathWithin(targetRealPath, assetsRealPath)) {
+  if (pathKey(targetRealPath) !== pathKey(assetsRealPath) && !isFileSystemPathWithin(targetRealPath, assetsRealPath)) {
     throw new Error("selected Unity target folder escapes the registered project's Assets directory through a symlink or junction");
   }
-  if (fs.readdirSync(targetRealPath).length !== 0) {
+  if (requireEmpty && fs.readdirSync(targetRealPath).length !== 0) {
     throw new Error("selected Unity target folder must be empty");
   }
   return targetRealPath;
+}
+
+function assertNamedExportTarget(prepared: PreparedImport): string {
+  const parentRealPath = assertSelectedTargetDirectory(prepared.project.path, prepared.selectedFolder, false);
+  const targetPath = path.join(parentRealPath, prepared.exportName);
+  if (!isFileSystemPathWithin(targetPath, parentRealPath)) throw new Error("named export target escapes the selected Unity folder");
+  if (fs.lstatSync(targetPath, { throwIfNoEntry: false }) || fs.lstatSync(targetPath + ".meta", { throwIfNoEntry: false })) {
+    throw new Error(`named export target already exists or has a conflicting .meta: ${prepared.targetFolder}`);
+  }
+  return targetPath;
 }
 
 function assertCommonFontAssets(projectPath: string): void {
@@ -454,7 +533,12 @@ function normalizeFigmaPrefabTargetAssetPath(value: unknown): string {
   return segments.join("/");
 }
 
-export async function probeUnityGateway(project: UnityProjectStatus, expectedTargetFolder = "", command = callUnityBridge): Promise<void> {
+export async function probeUnityGateway(
+  project: UnityProjectStatus,
+  expectedTargetFolder = "",
+  command = callUnityBridge,
+  options: UnityGatewayProbeOptions = {}
+): Promise<void> {
   const payload = await command(project.path, "unity.health", {}, { timeoutMs: 3000 });
   if (pathKey(stringValue(payload.projectPath)) !== pathKey(project.path)) {
     throw new Error("running Unity gateway reports a different project path");
@@ -462,15 +546,21 @@ export async function probeUnityGateway(project: UnityProjectStatus, expectedTar
   if (stringValue(payload.version) !== SERVER_VERSION) {
     throw new Error(`Unity Bridge version mismatch: expected ${SERVER_VERSION}, received ${stringValue(payload.version) || "missing"}`);
   }
+  if (options.requirePrefabExportWithoutAtlas && payload.supportsPrefabExportWithoutAtlas !== true) {
+    throw new Error("Update Unity Bridge before exporting Prefab: supportsPrefabExportWithoutAtlas is missing");
+  }
+  if (options.requirePrefabExportWithoutAtlas && (payload.isPlaying === true || payload.isCompiling === true || payload.isChangingPlayMode === true)) {
+    throw new Error("Export Prefab requires stable EditMode: exit PlayMode and wait for Unity compilation to finish");
+  }
   if (!expectedTargetFolder) return;
   const selection = await command(project.path, "unity.selected-folder", {}, { timeoutMs: 3000 });
   if (selection.ok === false) throw new Error(String(selection.error || "Unity selected-folder query failed"));
-  const selectedFolder = normalizeFigmaPrefabTargetFolder(selection.selectedFolder);
+  const selectedFolder = normalizeFigmaPrefabTargetFolder(selection.selectedFolder, options.requireEmptyFolder === false);
   if (pathKey(selectedFolder) !== pathKey(expectedTargetFolder)) {
     throw new Error(`Unity current selected folder does not match the import target: ${selectedFolder}`);
   }
-  if (selection.selectedObjectIsFolder !== true || selection.selectedFolderIsEmpty !== true) {
-    throw new Error("Unity current selected target must be an empty folder");
+  if (selection.selectedObjectIsFolder !== true || (options.requireEmptyFolder !== false && selection.selectedFolderIsEmpty !== true)) {
+    throw new Error(options.requireEmptyFolder === false ? "Unity current selected target must be a folder" : "Unity current selected target must be an empty folder");
   }
 }
 
@@ -576,18 +666,27 @@ function summarizeProcessFailure(stdout: string, stderr: string): string {
 function assertImportOutputsExist(
   projectPath: string,
   targetFolder: string,
-  summary: FigmaPrefabImportSummary
+  summary: FigmaPrefabImportSummary,
+  requireAtlas = true
 ): void {
   const assetsPath = fs.realpathSync.native(path.join(projectPath, "Assets"));
   const targetPath = fs.realpathSync.native(path.join(projectPath, ...targetFolder.split("/")));
   if (!isFileSystemPathWithin(targetPath, assetsPath)) {
     throw new Error("import target folder escapes the project's Assets directory");
   }
+  if (!requireAtlas) {
+    const allowedEntries = new Set(["Prefab", "Prefab.meta", "Texture", "Texture.meta"]);
+    if (fs.readdirSync(targetPath).some((entry) => !allowedEntries.has(entry))) {
+      throw new Error("named export contains unexpected outputs outside Prefab/ and Texture/");
+    }
+  }
   const outputs: Array<[string, string, "file" | "directory"]> = [
     ["Prefab", summary.prefab, "file"],
     ["Texture", summary.targetImageDir, "directory"],
-    ["UiAtlas", summary.atlasDir, "directory"],
-    ["SpriteAtlas", summary.atlasPath || "", "file"]
+    ...(requireAtlas ? [
+      ["UiAtlas", summary.atlasDir, "directory"],
+      ["SpriteAtlas", summary.atlasPath || "", "file"]
+    ] as Array<[string, string, "file" | "directory"]> : []),
   ];
   for (const [label, assetPath, kind] of outputs) {
     const normalized = normalizeFigmaPrefabTargetAssetPath(assetPath);
@@ -601,6 +700,9 @@ function assertImportOutputsExist(
     const real = fs.realpathSync.native(resolved);
     if (!isFileSystemPathWithin(real, assetsPath)) {
       throw new Error(`${label} output escapes the project's Assets directory`);
+    }
+    if (!requireAtlas && !isFileSystemPathWithin(real, targetPath)) {
+      throw new Error(`${label} output escapes the named export folder`);
     }
     const stat = fs.statSync(real);
     if (kind === "file" ? !stat.isFile() : !stat.isDirectory()) {

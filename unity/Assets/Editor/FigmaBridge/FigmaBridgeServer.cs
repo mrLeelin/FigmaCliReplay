@@ -288,6 +288,10 @@ namespace MagicWarrior.Editor.FigmaBridge
             sb.Append("{");
             sb.Append("\"connected\":true,");
             sb.AppendFormat("\"version\":\"{0}\",", EscapeJsonValue(Version));
+            sb.Append("\"supportsPrefabExportWithoutAtlas\":true,");
+            sb.AppendFormat("\"isPlaying\":{0},", EditorApplication.isPlaying ? "true" : "false");
+            sb.AppendFormat("\"isCompiling\":{0},", EditorApplication.isCompiling ? "true" : "false");
+            sb.AppendFormat("\"isChangingPlayMode\":{0},", EditorApplication.isPlayingOrWillChangePlaymode != EditorApplication.isPlaying ? "true" : "false");
             sb.AppendFormat("\"projectName\":\"{0}\",", EscapeJsonValue(projectName));
             sb.AppendFormat("\"projectPath\":\"{0}\",", EscapeJsonValue(projectPath));
             sb.AppendFormat("\"currentPrefabName\":\"{0}\",", EscapeJsonValue(currentPrefab));
@@ -624,10 +628,20 @@ namespace MagicWarrior.Editor.FigmaBridge
             }
 
             if (request == null || string.IsNullOrWhiteSpace(request.imageDir) ||
-                string.IsNullOrWhiteSpace(request.atlasDir) || string.IsNullOrWhiteSpace(request.atlasName) ||
                 request.specPaths == null || request.specPaths.Count == 0)
             {
-                RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"imageDir, atlasDir, atlasName, and specPaths are required\"}");
+                RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"imageDir and specPaths are required\"}");
+                return;
+            }
+            if (!request.skipAtlas &&
+                (string.IsNullOrWhiteSpace(request.atlasDir) || string.IsNullOrWhiteSpace(request.atlasName)))
+            {
+                RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"atlasDir and atlasName are required unless skipAtlas is true\"}");
+                return;
+            }
+            if (request.skipAtlas && (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling))
+            {
+                RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"Prefab export requires stable EditMode\"}");
                 return;
             }
 
@@ -637,8 +651,9 @@ namespace MagicWarrior.Editor.FigmaBridge
                 RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"imageDir must be under Assets\"}");
                 return;
             }
-            string atlasDir = NormalizeUnityPath(request.atlasDir).TrimEnd('/');
-            if (!IsSafeUnityAssetPath(atlasDir) || !atlasDir.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            string atlasDir = request.skipAtlas ? string.Empty : NormalizeUnityPath(request.atlasDir).TrimEnd('/');
+            if (!request.skipAtlas &&
+                (!IsSafeUnityAssetPath(atlasDir) || !atlasDir.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)))
             {
                 RespondJson(ctx.Response, 400, "{\"ok\":false,\"error\":\"atlasDir must be under Assets\"}");
                 return;
@@ -691,7 +706,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                 }
 
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
-                string atlasPath = CreateSpriteAtlasV2(atlasDir, request.atlasName, imageDir);
+                string atlasPath = request.skipAtlas ? string.Empty : CreateSpriteAtlasV2(atlasDir, request.atlasName, imageDir);
                 string response = "{\"ok\":true,\"reimportedPngCount\":" + reimportedPngCount +
                     ",\"specCount\":" + specPaths.Count +
                     ",\"atlasPath\":\"" + EscapeJsonValue(atlasPath) + "\"}";
@@ -1955,6 +1970,8 @@ namespace MagicWarrior.Editor.FigmaBridge
             public string imageDir;
             public string atlasDir;
             public string atlasName;
+            /// <summary>省略图集生成；旧请求未传此字段时仍生成图集。</summary>
+            public bool skipAtlas;
             public List<string> specPaths;
         }
 

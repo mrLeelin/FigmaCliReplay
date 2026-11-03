@@ -78,6 +78,16 @@ await handleFigmaHierarchyCleanupAnalyze(message);
     return;
   }
 
+  if (message.type === "FIGMA_INSPECT_NODES") {
+    await handleFigmaInspectNodes(message);
+    return;
+  }
+
+  if (message.type === "FIGMA_APPLY_EDITS") {
+    await handleFigmaApplyEdits(message);
+    return;
+  }
+
   if (message.type === "FIGMA_HIERARCHY_REORDER_CHILDREN") {
     await handleFigmaHierarchyReorderChildren(message);
     return;

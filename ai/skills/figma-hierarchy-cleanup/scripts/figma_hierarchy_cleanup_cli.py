@@ -327,10 +327,10 @@ def save_screenshot_if_present(result_payload: Dict[str, Any], result_path: Path
     screenshot.pop("base64", None)
 
 
-def submit_job(relay_url: str, job: Dict[str, Any], timeout: float, interval: float) -> Dict[str, Any]:
+def submit_job(relay_url: str, job: Dict[str, Any], timeout: float, interval: float, *, request_id: str = "") -> Dict[str, Any]:
     """提交 Relay job 并等待 Figma 插件执行完成。"""
     del interval
-    request_id = str(uuid.uuid4())
+    request_id = request_id or str(uuid.uuid4())
     job = attach_target_fields(job)
     return relay_submit_job(
         job,

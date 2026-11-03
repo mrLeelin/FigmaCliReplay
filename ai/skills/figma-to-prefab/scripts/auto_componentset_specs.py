@@ -52,6 +52,7 @@ from nine_slice_common import detect_type_and_border
 from name_utils import sanitize_name, normalize_unity_display_name, strip_outer_brackets, clamp, unity_node_name
 from constraints_utils import convert_figma_bounds_to_unity_rect, figma_constraints_to_rect_transform_spec
 from unity_project_paths import resolve_unity_project
+from image_output import prepare_png_bytes
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -99,20 +100,20 @@ def normalize_asset_path(value: str) -> str:
     return str(value or "").replace("\\", "/")
 
 
-def md5_of_base64(value: str) -> str:
+def md5_of_base64(value: str, expected_size=None) -> str:
     """计算 base64 图片内容 MD5，失败时返回空字符串。"""
     if not value:
         return ""
     try:
-        return hashlib.md5(base64.b64decode(value)).hexdigest()
+        return hashlib.md5(prepare_png_bytes(base64.b64decode(value), expected_size)).hexdigest()
     except (TypeError, ValueError):
         return ""
 
 
-def unity_node_name(raw_name: str, is_root: bool, prefab_name: str) -> str:
+def unity_node_name(raw_name: str, is_root: bool, prefab_name: str, has_children: bool = False) -> str:
     """委托到共享模块。"""
     from name_utils import unity_node_name as _un
-    return _un(raw_name, is_root, prefab_name)
+    return _un(raw_name, is_root, prefab_name, has_children=has_children)
 
 
 def bounds_rect(child_bounds: dict, parent_bounds: dict, rect_transform: dict | None = None) -> dict:
@@ -211,13 +212,13 @@ def text_alignment(node: dict) -> str:
 
 def is_common_instance_name(name: str) -> bool:
     """判断实例名是否属于公共资源或公共 Prefab，不参与 feature-local 拆分。"""
-    plain = strip_outer_brackets(name)
+    plain = normalize_unity_display_name(name)
     return plain.startswith(("Common_Texture_", "Common_Prefab_", "Common_", "UI_Common_"))
 
 
 def infer_group_name_from_instance(name: str) -> str:
     """从业务实例名兜底推断 ComponentSet 名称。"""
-    plain = strip_outer_brackets(name)
+    plain = normalize_unity_display_name(name)
     if is_common_instance_name(plain):
         return ""
 
@@ -258,7 +259,7 @@ def infer_group_name_from_component(node: dict) -> tuple[str, str]:
 
 def infer_variant_state_key(variant_name: str) -> str:
     """从业务实例名提取状态后缀，用于合并同状态变体。"""
-    plain = strip_outer_brackets(variant_name)
+    plain = normalize_unity_display_name(variant_name)
     if "_" not in plain:
         return plain
     return plain.rsplit("_", 1)[-1] or plain
@@ -478,7 +479,9 @@ class ComponentSetSpecBuilder:
         else:
             expected_width = int(export_item.get("width", 0) or 0)
             expected_height = int(export_item.get("height", 0) or 0)
-        expected_md5 = "" if is_sliced else md5_of_base64(str(export_item.get("base64") or ""))
+        expected_md5 = "" if is_sliced else md5_of_base64(
+            str(export_item.get("base64") or ""), (expected_width, expected_height),
+        )
         state["plan_images"].append({
             "imageId": image_id,
             "fileName": file_name,
@@ -516,7 +519,7 @@ class ComponentSetSpecBuilder:
         }
 
         root_index = self._append_node(state, {
-            "name": unity_node_name(group_name, True, group_name),
+            "name": "",
             "type": "Root",
             "rect": {"x": 0, "y": 0, "w": max_width, "h": max_height},
             "childIndices": [],
@@ -524,10 +527,10 @@ class ComponentSetSpecBuilder:
 
         variant_indices = []
         for variant_node in variants:
-            variant_name = strip_outer_brackets(variant_node.get("name", "Variant"))
+            variant_name = normalize_unity_display_name(variant_node.get("name", "Variant"))
             variant_bounds = variant_node.get("bounds", {})
             variant_index = self._append_node(state, {
-                "name": f"[Variant_{variant_name}]",
+                "name": "",
                 "type": "Panel",
                 "rect": {
                     "x": 0,
@@ -544,9 +547,15 @@ class ComponentSetSpecBuilder:
                 if child_index is not None:
                     children.append(child_index)
             state["nodes"][variant_index]["childIndices"] = children
+            state["nodes"][variant_index]["name"] = unity_node_name(
+                f"Variant_{variant_name}", False, "", has_children=bool(children),
+            )
             variant_indices.append(variant_index)
 
         state["nodes"][root_index]["childIndices"] = variant_indices
+        state["nodes"][root_index]["name"] = unity_node_name(
+            group_name, True, group_name, has_children=bool(variant_indices),
+        )
 
         # 如果有节点引用白像素，在 images 中加入白像素 ImageSpec
         has_white = any(n.get("imageId") == WHITE_PIXEL_IMAGE_ID for n in state["nodes"])
@@ -576,7 +585,7 @@ class ComponentSetSpecBuilder:
             return None
 
         raw_name = str(node.get("name") or "Node")
-        plain_name = strip_outer_brackets(raw_name)
+        plain_name = normalize_unity_display_name(raw_name)
         node_type = node.get("type")
         bounds = node.get("bounds", {})
         children = [child_id for child_id in self.children_map.get(node_id, []) if child_id not in self.skip_ids]
@@ -635,7 +644,7 @@ class ComponentSetSpecBuilder:
 
         rect_transform = self._rect_transform_for_node(node)
         index = self._append_node(state, {
-            "name": unity_node_name(raw_name, False, ""),
+            "name": "",
             "type": spec_type,
             "rect": bounds_rect(bounds, parent_bounds, rect_transform),
             "rectTransform": rect_transform,
@@ -649,6 +658,9 @@ class ComponentSetSpecBuilder:
             if child_index is not None:
                 child_indices.append(child_index)
         state["nodes"][index]["childIndices"] = child_indices
+        state["nodes"][index]["name"] = unity_node_name(
+            raw_name, False, "", has_children=bool(child_indices),
+        )
         return index
 
 
@@ -661,7 +673,7 @@ def find_component_groups(builder: ComponentSetSpecBuilder) -> tuple[list[dict],
     for node in builder.nodes:
         if node.get("type") != "INSTANCE":
             continue
-        plain_name = strip_outer_brackets(node.get("name", ""))
+        plain_name = normalize_unity_display_name(node.get("name", ""))
         if is_common_instance_name(plain_name):
             ignored.append({"nodeId": node["id"], "name": plain_name, "reason": "common-prefix"})
             continue
@@ -707,7 +719,7 @@ def find_component_groups(builder: ComponentSetSpecBuilder) -> tuple[list[dict],
         duplicate_mappings = []
         representative_nodes = list(ordered_nodes)
         for node in ordered_nodes:
-            variant_name = strip_outer_brackets(node.get("name", ""))
+            variant_name = normalize_unity_display_name(node.get("name", ""))
             state_key = infer_variant_state_key(variant_name)
             state_key_by_variant[variant_name] = state_key
             representative_by_variant[variant_name] = variant_name
@@ -717,9 +729,9 @@ def find_component_groups(builder: ComponentSetSpecBuilder) -> tuple[list[dict],
             "source": "mcp-relay-component-metadata" if metadata_driven else "name-pattern",
             "nodes": ordered_nodes,
             "representativeNodes": representative_nodes,
-            "variantNames": [strip_outer_brackets(node.get("name", "")) for node in ordered_nodes],
+            "variantNames": [normalize_unity_display_name(node.get("name", "")) for node in ordered_nodes],
             "representativeVariantNames": [
-                strip_outer_brackets(node.get("name", "")) for node in representative_nodes
+                normalize_unity_display_name(node.get("name", "")) for node in representative_nodes
             ],
             "variantRepresentativeByName": representative_by_variant,
             "variantStateKeyByName": state_key_by_variant,
@@ -778,7 +790,7 @@ def rewrite_main_spec_with_component_sets(
     target_dir = normalize_asset_path(target_dir).rstrip("/")
     nodes_by_plain: dict[str, list[dict]] = defaultdict(list)
     for index, node in enumerate(spec.get("nodes", [])):
-        nodes_by_plain[strip_outer_brackets(node.get("name", ""))].append({"index": index, "node": node})
+        nodes_by_plain[normalize_unity_display_name(node.get("name", ""))].append({"index": index, "node": node})
 
     prefab_refs = list(spec.get("prefabInstances") or [])
     prefab_ref_by_id = {str(item.get("id") or ""): item for item in prefab_refs}
@@ -813,7 +825,7 @@ def rewrite_main_spec_with_component_sets(
                 rect_transform = node.get("rectTransform")
                 node.clear()
                 node.update({
-                    "name": f"[{variant_name}]",
+                    "name": unity_node_name(variant_name, False, "", has_children=True),
                     "type": "PrefabInstance",
                     "rect": rect,
                     "rectTransform": rect_transform,

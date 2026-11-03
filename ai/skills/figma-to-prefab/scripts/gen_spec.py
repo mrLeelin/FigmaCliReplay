@@ -28,6 +28,7 @@ from auto_componentset_specs import apply_auto_componentsets_to_data
 from name_utils import sanitize_name, normalize_unity_display_name, strip_outer_brackets, clamp, unity_node_name
 from constraints_utils import convert_figma_bounds_to_unity_rect, figma_constraints_to_rect_transform_spec
 from unity_project_paths import normalize_asset_path, resolve_unity_project
+from image_output import prepare_png_bytes
 
 # Windows GBK 编码兼容 — 强制 stdout 使用 UTF-8
 if hasattr(sys.stdout, "reconfigure"):
@@ -447,21 +448,21 @@ def apply_name_size_fallback_dedup(spec_nodes, images_spec, dl_images):
     }
 
 
-def unity_node_name(raw_name, is_root, prefab_name):
+def unity_node_name(raw_name, is_root, prefab_name, has_children=False):
     """委托到共享模块。"""
     from name_utils import unity_node_name as _un
-    return _un(raw_name, is_root, prefab_name)
+    return _un(raw_name, is_root, prefab_name, has_children=has_children)
 
 
-def calculate_base64_md5(base64_value):
-    """计算 Relay 导出 base64 图片内容的 MD5，失败时返回空字符串。"""
+def calculate_base64_md5(base64_value, expected_size=None):
+    """Hash the final PNG bytes after the writer's optional size normalization."""
     if not base64_value:
         return ""
     try:
         raw_bytes = base64.b64decode(str(base64_value))
     except (ValueError, TypeError):
         return ""
-    return hashlib.md5(raw_bytes).hexdigest()
+    return hashlib.md5(prepare_png_bytes(raw_bytes, expected_size)).hexdigest()
 
 
 def clamp(value, minimum, maximum):
@@ -1072,7 +1073,7 @@ def build_spec(
         # 先添加到数组（确保 Root 在 index 0）
         idx = len(spec_nodes)
         spec_node = {
-            "name": unity_node_name(nname, spec_type == "Root", prefab_name),
+            "name": "",
             "type": spec_type, "rect": rect, "childIndices": [],
         }
         spec_node["rectTransform"] = rect_transform
@@ -1098,6 +1099,9 @@ def build_spec(
                     child_indices.append(ci)
 
         spec_nodes[idx]["childIndices"] = child_indices
+        spec_nodes[idx]["name"] = unity_node_name(
+            nname, spec_type == "Root", prefab_name, has_children=bool(child_indices),
+        )
         return idx
 
     idx_map = {}
@@ -1161,7 +1165,9 @@ def build_spec(
             "downloadUrl": export_item.get("downloadUrl", ""),
             "targetAssetPath": asset_path,
             "expectedSize": {"x": expected_width, "y": expected_height},
-            "expectedMD5": calculate_base64_md5(export_item.get("base64", "")),
+            "expectedMD5": calculate_base64_md5(
+                export_item.get("base64", ""), None if is_sliced else (expected_width, expected_height),
+            ),
             "imageType": "Sliced" if is_sliced else "Simple", "border": border,
             "needsContentVerification": not bool(export_item.get("base64", "")),
             "reuseExistingAsset": reuse_existing_asset,

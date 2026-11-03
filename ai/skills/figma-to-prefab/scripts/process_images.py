@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from nine_slice_common import detect_type_and_border
 from name_utils import sanitize_name
 from unity_project_paths import normalize_asset_path, resolve_unity_project
+from image_output import prepare_png_bytes
 from io import BytesIO
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -20,6 +21,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(PLUGIN_ROOT / "server"))
+from python_logger import PythonLogger
 
 
 def find_repository_root():
@@ -88,8 +91,8 @@ def calculate_file_md5(file_path):
     return hashlib.md5(Path(file_path).read_bytes()).hexdigest()
 
 
-def md5_of_base64(b64_str):
-    return hashlib.md5(base64.b64decode(b64_str)).hexdigest() if b64_str else ""
+def md5_of_base64(b64_str, expected_size=None):
+    return hashlib.md5(prepare_png_bytes(base64.b64decode(b64_str), expected_size)).hexdigest() if b64_str else ""
 
 
 def resolve_unity_asset_path(asset_path):
@@ -478,7 +481,11 @@ def make_check(pass_state, summary=None, details=None):
 def validate_download_plan(download_plan_path, resolved_plan_exports=None, base64_by_node=None):
     """校验下载计划中的图片文件是否存在、尺寸和 MD5 是否匹配。"""
     plan_path = Path(download_plan_path)
+    operation = PythonLogger("process-images").start_operation(
+        "images.validate-download-plan", data={"planPath": str(plan_path)},
+    )
     if not plan_path.is_file():
+        operation.fail(FileNotFoundError(str(plan_path)), "Image download plan missing")
         return {
             "planExists": False,
             "items": [],
@@ -530,7 +537,9 @@ def validate_download_plan(download_plan_path, resolved_plan_exports=None, base6
         if resolved:
             resolved_b64 = base64_by_node.get(str(resolved.get("resolvedExportNodeId") or ""))
             if resolved_b64:
-                expected_md5 = md5_of_base64(resolved_b64)
+                expected_md5 = md5_of_base64(
+                    resolved_b64, None if item.get("imageType") == "Sliced" else (expected_w, expected_h),
+                )
         if expected_md5:
             actual_md5 = calculate_file_md5(file_path)
             if actual_md5 != expected_md5:
@@ -547,6 +556,14 @@ def validate_download_plan(download_plan_path, resolved_plan_exports=None, base6
                 "reason": "expectedMD5_empty",
             })
 
+    counts = {"checked": len(items), "missingFiles": len(missing_files),
+              "sizeMismatch": len(size_mismatch), "md5Mismatch": len(md5_mismatch),
+              "contentVerificationPending": len(content_pending)}
+    operation.step("images.integrity", "Checked final PNG sizes and MD5 hashes", data=counts)
+    if missing_files or size_mismatch or md5_mismatch:
+        operation.fail(ValueError("Image download plan validation failed"), data=counts)
+    else:
+        operation.succeed("Image download plan validation passed", data=counts)
     return {
         "planExists": True,
         "items": items,
@@ -783,16 +800,16 @@ def crop_png_to_expected_size(file_path, expected_size):
     """Crop oversized generated PNGs to the explicit download-plan size."""
     if not expected_size:
         return False
-    expected_w, expected_h = expected_size
-    actual_w, actual_h = read_image_size(file_path)
-    if actual_w == expected_w and actual_h == expected_h:
+    file_path = Path(file_path)
+    source = file_path.read_bytes()
+    prepared = prepare_png_bytes(source, expected_size)
+    if prepared == source:
         return False
-    if actual_w < expected_w or actual_h < expected_h:
-        return False
-    from PIL import Image
-    with Image.open(file_path) as image:
-        cropped = image.crop((0, 0, expected_w, expected_h))
-        cropped.save(file_path)
+    file_path.write_bytes(prepared)
+    PythonLogger("process-images").info("Cropped generated PNG to planned size", data={
+        "fileName": file_path.name, "expectedSize": expected_size,
+        "sourceMD5": hashlib.md5(source).hexdigest(), "outputMD5": hashlib.md5(prepared).hexdigest(),
+    })
     return True
 
 
@@ -1337,6 +1354,10 @@ def main():
     required_node_ids, plan_name_map, resolved_plan_exports = resolve_download_plan_node_exports(
         plan_data, node_map, children_map, exports_by_node, exports_by_id, base64_by_node
     )
+    for resolved in resolved_plan_exports:
+        size = plan_size_map.get(str(resolved.get("plannedNodeId") or ""))
+        if size:
+            plan_size_map[str(resolved.get("resolvedExportNodeId") or "")] = size
 
     # 收集 reuseExistingAsset=true 且 targetAssetPath 不在 output_dir 下的节点 ID
     # 用于九宫和普通图片导出时跳过，避免把 Common_Texture 等已有资源重复写入输出目录

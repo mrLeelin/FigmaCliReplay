@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, List, Tuple
 
 
@@ -153,6 +155,54 @@ def semantic_intent_of_plan(plan: Dict[str, Any]) -> Dict[str, bool]:
         "hasListContainer": has_list_container,
         "hasScrollViewChain": has_scroll_chain,
     }
+
+
+def validate_static_horizontal_layout(groups: List[Dict[str, Any]], nodes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Validate an explicitly requested fixed strip using geometry, never labels."""
+    by_id = {node_id_of(node): node for node in nodes}
+    boxes = []
+    assigned = []
+    reasons = []
+    if len(groups) < 2:
+        reasons.append("at least two fixed items are required")
+    for group in groups:
+        ids = group.get("childNodeIds", [])
+        if not isinstance(ids, list) or len(ids) < 2 or any(str(key) not in by_id for key in ids):
+            reasons.append("each fixed item must own at least two existing nodes")
+            continue
+        assigned.extend(map(str, ids))
+        bounds = [bounds_of(by_id[str(key)]) for key in ids]
+        if any(not all(math.isfinite(value) for value in box.values())
+               or box["width"] <= 0 or box["height"] <= 0 for box in bounds):
+            reasons.append("item bounds must be finite and positive")
+            continue
+        x, y = min(box["x"] for box in bounds), min(box["y"] for box in bounds)
+        right = max(box["x"] + box["width"] for box in bounds)
+        bottom = max(box["y"] + box["height"] for box in bounds)
+        boxes.append((x, y, right, bottom))
+    if len(assigned) != len(set(assigned)):
+        reasons.append("fixed items have duplicate node ownership")
+    boxes.sort()
+    confidence = 0.0
+    if len(boxes) >= 2:
+        centers = [(box[0] + box[2]) / 2 for box in boxes]
+        gaps = [right - left for left, right in zip(centers, centers[1:])]
+        step = median(gaps)
+        confidence = max(0.0, 1 - max(abs(gap - step) for gap in gaps) / max(step, 0.001))
+        if any(left[2] > right[0] + DEFAULT_TOLERANCE for left, right in zip(boxes, boxes[1:])):
+            reasons.append("fixed items overlap on the horizontal axis")
+        heights = [box[3] - box[1] for box in boxes]
+        center_y = [(box[1] + box[3]) / 2 for box in boxes]
+        if max(center_y) - min(center_y) > max(20, median(heights) * 0.25):
+            reasons.append("fixed items are not on one horizontal row")
+        if step <= 0 or confidence < 0.85:
+            reasons.append("horizontal spacing confidence is below 0.85")
+    else:
+        reasons.append("not enough valid horizontal bounds")
+    return {"pass": not reasons, "clusterType": "horizontal-list", "confidence": confidence,
+            "groupCount": len(boxes), "assignedCount": len(assigned), "rejectReasons": reasons,
+            "usedSignals": ["bounds", "horizontalSpacing", "verticalAlignment", "uniqueOwnership"],
+            "ignoredSignals": ["name", "path", "characters"]}
 
 
 def target_is_list_container(before_result: Dict[str, Any], plan: Dict[str, Any]) -> bool:
@@ -321,7 +371,12 @@ def verify(before: Dict[str, Any], after: Dict[str, Any], plan: Dict[str, Any]) 
     semantic_intent = semantic_intent_of_plan(plan)
     target_list_container = target_is_list_container(before_result, plan)
     target_content_container = target_is_content_container(before_result, plan)
-    if semantic_intent["listLike"] and semantic_intent["hasItemGroups"] and not semantic_intent["hasScrollViewChain"] and not target_content_container:
+    layout_intent = plan.get("layoutIntent") if isinstance(plan.get("layoutIntent"), dict) else {}
+    static_horizontal = layout_intent.get("kind") == "static-horizontal"
+    static_check = validate_static_horizontal_layout(plan.get("groups", []), before_children) if static_horizontal else None
+    if static_check and not static_check["pass"]:
+        blocking_errors.append(make_error("invalidStaticHorizontalLayout", "Fixed horizontal items failed geometry validation.", static_check))
+    if semantic_intent["listLike"] and semantic_intent["hasItemGroups"] and not semantic_intent["hasScrollViewChain"] and not target_content_container and not (static_check and static_check["pass"]):
         blocking_errors.append(make_error("scrollViewChainMissing", "List-like hierarchy with item groups must include ScrollView/Viewport/Content, unless grouping directly inside an existing Content node.", {
             "required": "[ListRoot] > [ScrollView] > [Viewport] > [Content] > [Item_*]",
         }))
@@ -345,10 +400,12 @@ def verify(before: Dict[str, Any], after: Dict[str, Any], plan: Dict[str, Any]) 
         "topLevelGroupsMatchPlan": {"pass": not any(error.get("code") == "topLevelGroupsMismatch" for error in blocking_errors)},
         "screenshotPresent": {"pass": screenshot_ok},
         "semanticDepthSatisfied": {
-            "pass": not any(error.get("code") in {"scrollViewChainMissing", "tabItemsMissing", "progressMarkerNotInRewardSlot"} for error in blocking_errors),
+            "pass": not any(error.get("code") in {"scrollViewChainMissing", "tabItemsMissing", "progressMarkerNotInRewardSlot", "invalidStaticHorizontalLayout"} for error in blocking_errors),
             "intent": {**semantic_intent, "targetIsListContainer": target_list_container, "targetIsContentContainer": target_content_container},
         },
     }
+    if static_check is not None:
+        checks["staticHorizontalLayout"] = static_check
 
     return {
         "allPass": not blocking_errors,

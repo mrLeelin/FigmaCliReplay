@@ -68,6 +68,50 @@ def test_verify_allows_item_groups_inside_existing_content():
     assert report["allPass"], report["blockingErrors"]
 
 
+def fixed_strip_case():
+    originals = []
+    after_nodes = []
+    groups = []
+    for index in range(3):
+        ids = []
+        for part, y, height in (("icon", 0, 50), ("caption", 60, 20)):
+            key = f"{part}-{index}"
+            original = {**node(key, part, len(originals)), "bounds": {"x": index * 100, "y": y, "width": 70, "height": height}}
+            originals.append(original)
+            after_nodes.append({**original, "parentId": f"item-{index}"})
+            ids.append(key)
+        groups.append({"name": f"[Item_{index}]", "childNodeIds": ids})
+    before = {"rootNodeId": "root", "rootName": "[Benefits_Layout]", "directChildren": originals}
+    after = {"status": "completed", "allPass": True, "rootNodeId": "root", "originalNodesAfter": after_nodes,
+             "topLevelGroups": [{"id": f"item-{index}", "name": group["name"]} for index, group in enumerate(groups)], "screenshot": {"path": "out.png"}}
+    plan = {"target": {"nodeId": "root"}, "groups": groups, "layoutIntent": {"kind": "static-horizontal"}}
+    return before, after, plan
+
+
+def test_fixed_horizontal_items_need_no_scrollview_when_geometry_passes():
+    before, after, plan = fixed_strip_case()
+    report = verify(before, after, plan)
+    assert report["allPass"], report["blockingErrors"]
+    assert report["checks"]["staticHorizontalLayout"]["confidence"] >= 0.85
+
+
+def test_fixed_strip_flag_cannot_exempt_a_vertical_list():
+    before, after, plan = fixed_strip_case()
+    for original, current in zip(before["directChildren"], after["originalNodesAfter"]):
+        original["bounds"] = {"x": 0, "y": original["bounds"]["x"] + original["bounds"]["y"], "width": 70, "height": 50}
+        current["bounds"] = original["bounds"].copy()
+    report = verify(before, after, plan)
+    assert not report["allPass"]
+    assert "invalidStaticHorizontalLayout" in [error["code"] for error in report["blockingErrors"]]
+
+
+def test_horizontal_looking_items_are_not_exempt_without_explicit_layout_intent():
+    before, after, plan = fixed_strip_case()
+    plan.pop("layoutIntent")
+    report = verify(before, after, plan)
+    assert "scrollViewChainMissing" in [error["code"] for error in report["blockingErrors"]]
+
+
 def test_progress_marker_under_track_is_planner_issue():
     children = [
         node("1", "34_jiugong_daily_jdtbig2__slice", 0),

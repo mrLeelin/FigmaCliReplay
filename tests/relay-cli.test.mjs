@@ -459,6 +459,78 @@ test("CLI reports the plugin errors array as the failure message", async (t) => 
   assert.equal(result.json.error.message, "node not found: 1:2; second reason");
 });
 
+test("CLI rejects an invalid design edit batch before it reaches the plugin", async (t) => {
+  const h = await harness(t);
+  const { commands } = await plugin(t, h, "design-edit-reject");
+  const payload = JSON.stringify({ edits: [{ op: "setFill", nodeId: "1:2", color: "red" }] });
+  const result = await runCli(h, ["figma-command", "--job-type", "FIGMA_APPLY_EDITS", "--payload", payload]);
+  assert.equal(result.code, 1);
+  assert.equal(result.json.error.code, "INVALID_REQUEST");
+  assert.match(result.json.error.message, /edits\.0\.color/);
+  assert.equal(commands.length, 0);
+});
+
+test("CLI forwards a valid design edit batch with schema defaults applied", async (t) => {
+  const h = await harness(t);
+  const { commands } = await plugin(t, h, "design-edit-forward");
+  const payload = JSON.stringify({ edits: [{ op: "setOpacity", nodeId: "1:2", opacity: 0.5 }] });
+  const result = await runCli(h, ["figma-command", "--job-type", "FIGMA_APPLY_EDITS", "--payload", payload]);
+  assert.equal(result.code, 0);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].job.type, "FIGMA_APPLY_EDITS");
+  assert.equal(commands[0].job.dryRun, false);
+  assert.deepEqual(commands[0].job.edits, [{ op: "setOpacity", nodeId: "1:2", opacity: 0.5 }]);
+});
+
+for (const scenario of [
+  {
+    jobType: "FIGMA_APPLY_EDITS",
+    payload: { edits: [{ op: "createFrame", parentId: "1:2", tempId: "once", name: "Created exactly once", width: 120, height: 40 }] },
+    changedPayload: { edits: [{ op: "createFrame", parentId: "1:2", tempId: "once", name: "Created exactly once", width: 121, height: 40 }] },
+    defaults: { dryRun: false },
+    result: { status: "completed", applied: 1, createdIds: { once: "10:20" } },
+  },
+  {
+    jobType: "FIGMA_INSPECT_NODES",
+    payload: { nodeIds: ["1:2"] },
+    changedPayload: { nodeIds: ["1:2"], depth: 2 },
+    defaults: { depth: 1, includeText: true },
+    result: { status: "completed", nodes: [{ id: "1:2", name: "Original inspection" }] },
+  },
+]) {
+  test(`CLI retries defaulted ${scenario.jobType} without dispatching twice and rejects changed payloads`, async (t) => {
+    const h = await harness(t);
+    const sessionId = `idempotent-${scenario.jobType}`;
+    const { commands } = await plugin(t, h, sessionId, (socket, message) => {
+      socket.send(JSON.stringify({
+        type: "relay.request", requestId: `result-${message.requestId}`, action: "job.result",
+        payload: { requestId: message.requestId, resultToken: message.resultToken, result: scenario.result },
+      }));
+    });
+    const requestId = `same-${scenario.jobType}`;
+    const args = ["figma-command", "--session-id", sessionId, "--file-key", "file-test", "--job-type", scenario.jobType, "--request-id", requestId];
+    const payload = JSON.stringify(scenario.payload);
+    const first = await runCli(h, [...args, "--payload", payload]);
+    assert.equal(first.code, 0, first.stderr);
+    assert.deepEqual(first.json.result, scenario.result);
+    assert.equal(commands.length, 1);
+    for (const [key, value] of Object.entries(scenario.defaults)) assert.equal(commands[0].job[key], value);
+
+    // Reuse the original CLI payload: callers do not receive or resubmit Relay's schema defaults.
+    const repeated = await runCli(h, [...args, "--payload", payload]);
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.deepEqual(repeated.json.result, first.json.result);
+    assert.equal(commands.length, 1);
+    assert.equal(h.relay.getJob(requestId).dispatchAttempts, 1);
+
+    const conflict = await runCli(h, [...args, "--payload", JSON.stringify(scenario.changedPayload)]);
+    assert.equal(conflict.code, 1);
+    assert.match(conflict.json.error.message, /requestId conflict/);
+    assert.equal(commands.length, 1);
+    assert.deepEqual(h.relay.getJob(requestId).result, first.json.result);
+  });
+}
+
 test("busy CLI requests have correlated failure logs", async (t) => {
   const h = await harness(t);
   await plugin(t, h, "slow", () => {});

@@ -1,0 +1,6 @@
+interface:
+  display_name: "DXX Image"
+  short_description: "通过项目本地 DXX CLI 生图、编辑与拆层"
+  default_prompt: "使用 $dxx-image，按我的要求生成、编辑图片或拆分透明图层。"
+policy:
+  allow_implicit_invocation: true

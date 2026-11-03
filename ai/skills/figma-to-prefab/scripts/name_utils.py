@@ -13,6 +13,8 @@ _CN_TOKEN_MAP = {
 
 def sanitize_name(name):
     """清洗节点名为合法文件名：去空格、去 Figma 数字排序前缀、去特殊字符。"""
+    name = re.sub(r"^\d+\s*[-_—–]+\s*", "", str(name or "").strip())
+    name = extract_identifier_name(name)
     name = name.replace(" ", "_")
     # 去掉 Figma 图层排序编号前缀（如 "96_StickerPack" → "StickerPack"）
     name = re.sub(r"^\d+\s*[-_—–]+\s*", "", name)
@@ -20,20 +22,26 @@ def sanitize_name(name):
 
 
 def normalize_unity_display_name(name):
-    """清洗 Unity 显示名，只去掉 Figma 层级开头的数字排序前缀。"""
+    """保留标识名，去掉 Figma 排序前缀和附加说明，不翻译中文名。"""
     name = strip_outer_brackets(name)
     name = re.sub(r"^\d+\s*[-_—–]+\s*", "", name)
-    return name or strip_outer_brackets(name) or "Node"
+    return extract_identifier_name(name) or "Node"
 
 
 def strip_outer_brackets(name):
     """移除节点名最外层方括号。"""
     if not name:
         return ""
-    name = str(name)
-    if name.startswith("[") and name.endswith("]"):
-        return name[1:-1]
+    name = str(name).strip()
+    while name.startswith("[") and name.endswith("]"):
+        name = name[1:-1].strip()
     return name
+
+
+def extract_identifier_name(name):
+    """去掉外层括号和竖线后的说明，不翻译或改写标识本身。"""
+    value = strip_outer_brackets(name)
+    return strip_outer_brackets(re.split(r"[｜|]", value, maxsplit=1)[0].strip())
 
 
 def clamp(value, minimum, maximum):
@@ -41,16 +49,15 @@ def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
-def unity_node_name(raw_name, is_root, prefab_name):
-    """生成 Unity GameObject 名称，非根物体加方括号。"""
-    if is_root:
-        return normalize_unity_display_name(prefab_name)
-    return f"[{normalize_unity_display_name(raw_name)}]"
+def unity_node_name(raw_name, is_root, prefab_name, has_children=False):
+    """只有实际保留子节点的物体加方括号，根物体采用相同规则。"""
+    name = normalize_unity_display_name(prefab_name if is_root else raw_name)
+    return f"[{name}]" if has_children else name
 
 
 def infer_prefab_name_from_figma_root(root_name, prefix="UI"):
     """Infer a formal Unity Prefab name from a Figma root node name."""
-    value = strip_outer_brackets(str(root_name or "")).strip()
+    value = extract_identifier_name(root_name)
     value = re.sub(r"[_\-\s]+", "_", value).strip("_")
     raw_parts = [part for part in value.split("_") if part]
     parts = []

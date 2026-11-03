@@ -37,6 +37,8 @@ from unity_project_paths import normalize_asset_path, resolve_unity_project
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
@@ -67,6 +69,11 @@ MANIFEST_READER = SCRIPT_DIR / "figma_manifest_reader.py"
 VERIFY_PREFAB_REPORT = TMP_DIR / "verify_prefab_result.json"
 
 WALL_CLOCK_CONTEXT: dict = {}
+
+
+def diagnostic(*values, **kwargs) -> None:
+    """Keep progress and child output separate from the parent summary protocol."""
+    print(*values, file=sys.stderr, **kwargs)
 
 
 def parse_figma_url(url: str) -> tuple[str, str]:
@@ -123,6 +130,9 @@ def run(args: list[str], *, timeout: int = 120, cwd: Path | None = None) -> subp
 def run_timed(label: str, argv: list[str], *, timeout: int, cwd: Path | None = None) -> tuple[subprocess.CompletedProcess, dict]:
     started = time.perf_counter()
     result = run(argv, timeout=timeout, cwd=cwd)
+    for output in (result.stdout, result.stderr):
+        if output:
+            diagnostic(output, end="" if output.endswith("\n") else "\n")
     elapsed = time.perf_counter() - started
     return result, {
         "label": label,
@@ -140,13 +150,15 @@ def run_unity_bridge_import(
     *,
     timeout: int = 120,
     project_id: str = "",
+    skip_atlas: bool = False,
 ) -> dict:
     """Submit the import once through the project CLI and authenticated WebSocket."""
     payload = {
         "imageDir": str(image_dir).replace("\\", "/").rstrip("/"),
         "specPaths": [str(path).replace("\\", "/") for path in spec_paths],
-        "atlasDir": str(atlas_dir or "").replace("\\", "/").rstrip("/"),
-        "atlasName": str(atlas_name or "").strip(),
+        "atlasDir": "" if skip_atlas else str(atlas_dir or "").replace("\\", "/").rstrip("/"),
+        "atlasName": "" if skip_atlas else str(atlas_name or "").strip(),
+        "skipAtlas": bool(skip_atlas),
     }
     try:
         parsed = unity_command(str(UNITY_PROJECT), "unity.figma-to-prefab-import", payload,
@@ -155,6 +167,49 @@ def run_unity_bridge_import(
                 "stderr": str(parsed.get("error") or "")}
     except RelayCliError as error:
         return {"success": False, "stderr": f"Unity Bridge request failed: {error}"}
+
+
+def wait_for_unity_ready(
+    relay_url: str, *, project_id: str = "", timeout: float = 35, poll_interval: float = 0.4,
+) -> dict:
+    """Retry only read-only health checks while Unity reloads generated assets."""
+    if timeout <= 0 or poll_interval <= 0:
+        raise ValueError("Unity readiness timeout and polling interval must be positive")
+    deadline = time.monotonic() + timeout
+    healthy_reads = 0
+    last_reason = "Unity Bridge has not reported ready"
+    reported_reason = ""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Unity readiness timed out after {timeout:g}s: {last_reason}")
+        try:
+            health = unity_command(
+                str(UNITY_PROJECT), "unity.health", {}, project_id=project_id, relay_url=relay_url,
+                timeout=min(3.0, remaining),
+            )
+        except RelayCliError as error:
+            healthy_reads = 0
+            last_reason = str(error)
+        else:
+            if isinstance(health, dict) and health.get("isPlaying") is True:
+                raise RuntimeError("Unity is in PlayMode; switch to EditMode before exporting a Prefab.")
+            if not isinstance(health, dict) or health.get("ok") is False or health.get("connected") is not True:
+                healthy_reads = 0
+                last_reason = str(health.get("error") or "Unity Bridge is disconnected") if isinstance(health, dict) else "Invalid Unity health response"
+            elif health.get("isCompiling") is True or health.get("isChangingPlayMode") is True:
+                healthy_reads = 0
+                last_reason = "Unity is compiling or changing PlayMode"
+            else:
+                healthy_reads += 1
+                if healthy_reads >= 2 and time.monotonic() < deadline:
+                    diagnostic("  Unity Bridge ready in stable EditMode (2 consecutive health checks).")
+                    return health
+                last_reason = "Waiting for a second consecutive Unity health check"
+        if last_reason != reported_reason:
+            diagnostic(f"  Waiting for Unity Bridge: {last_reason}")
+            reported_reason = last_reason
+        time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
 
 def read_json(path: Path) -> dict:
@@ -210,14 +265,31 @@ def derive_formal_paths(base_asset_dir: str, root_name: str, layout: str = "spli
     return prefab_name, f"{base_dir}Prefab/{prefab_name}.prefab", f"{base_dir}Texture/", f"{base_dir}UiAtlas/"
 
 
-def validate_formal_import_paths(target_prefab: str, target_image_dir: str, prefab_name: str) -> None:
+def configure_output_paths(args: argparse.Namespace, root_name: str) -> None:
+    """Resolve formal names while allowing a Prefab/Texture-only export."""
+    if args.infer_formal_names:
+        base_output_dir = args.formal_output_dir or args.target_image_dir
+        args.prefab_name, args.target_prefab, args.target_image_dir, args.atlas_dir = derive_formal_paths(
+            base_output_dir, root_name, args.formal_layout,
+        )
+    elif not args.prefab_name:
+        args.prefab_name = Path(args.target_prefab).stem
+    if getattr(args, "no_atlas", False):
+        args.atlas_dir = ""
+
+
+def validate_formal_import_paths(
+    target_prefab: str, target_image_dir: str, prefab_name: str, *, allow_source_name: bool = False,
+) -> None:
     prefab_path = normalize_unity_asset_path(target_prefab)
     image_dir = normalize_unity_asset_dir(target_image_dir)
     if not prefab_path.startswith("Assets/") or not prefab_path.endswith(".prefab"):
         fail(f"target Prefab must be an Assets/*.prefab path: {target_prefab}")
     if not image_dir.startswith("Assets/"):
         fail(f"target image dir must be an Assets path: {target_image_dir}")
-    if is_placeholder_prefab_name(Path(prefab_path).stem) or is_placeholder_prefab_name(prefab_name):
+    if not allow_source_name and (
+        is_placeholder_prefab_name(Path(prefab_path).stem) or is_placeholder_prefab_name(prefab_name)
+    ):
         fail(f"formal import cannot use placeholder Prefab name: {Path(prefab_path).stem}")
     parts = prefab_path.split("/")
     if "FigmaImportBenchmark" in parts and "Prefabs" in parts:
@@ -353,13 +425,13 @@ def read_import_plan() -> tuple[str, list[str]]:
 
 
 def step(name: str) -> None:
-    print(f"\n{'=' * 60}")
-    print(f"  {name}")
-    print(f"{'=' * 60}")
+    diagnostic(f"\n{'=' * 60}")
+    diagnostic(f"  {name}")
+    diagnostic(f"{'=' * 60}")
 
 
 def fail(msg: str, code: int = 1) -> None:
-    print(f"\n[FAIL] {msg}")
+    diagnostic(f"\n[FAIL] {msg}")
     write_wall_clock_report("failed", code, msg)
     sys.exit(code)
 
@@ -377,6 +449,8 @@ def main():
                         help="Formal output layout: split into Prefab/Texture/UiAtlas (default) or legacy flat + Images")
     parser.add_argument("--formal-output-dir", default="",
                         help="Unity Assets directory for --infer-formal-names, e.g. Assets/FigmaImportBenchmark")
+    parser.add_argument("--no-atlas", action="store_true",
+                        help="Export Prefab and Texture only; do not create a SpriteAtlas or UiAtlas directory")
     parser.add_argument("--overwrite", default="create-new-only",
                         choices=["create-new-only", "overwrite"], help="覆盖策略（默认: create-new-only）")
     parser.add_argument("--prefab-name", default="", help="Prefab 根节点名称（默认从路径推断）")
@@ -482,7 +556,7 @@ def main():
 
     step("1/6 MCP export - Figma node manifest")
     if args.skip_relay_export:
-        print("  [skip] Reusing existing manifest-dir.")
+        diagnostic("  [skip] Reusing existing manifest-dir.")
     else:
         export_argv = [
             str(MCP_EXPORT),
@@ -498,10 +572,7 @@ def main():
             export_argv += ["--session-id", args.session_id.strip()]
         export_result, timing = run_timed("mcpExport", export_argv, timeout=args.mcp_timeout + 45, cwd=REPO_ROOT)
         timings.append(timing)
-        if export_result.stdout:
-            print(export_result.stdout)
         if export_result.returncode != 0:
-            print(export_result.stderr)
             fail("MCP export failed")
 
     if not node_manifest_path.exists() or not image_manifest_path.exists():
@@ -520,16 +591,13 @@ def main():
     target_errors = validate_manifest_target(snapshot, file_key, node_id, args)
     if target_errors:
         fail("Figma manifest target guard failed:\n    - " + "\n    - ".join(target_errors))
-    if args.infer_formal_names:
-        base_output_dir = args.formal_output_dir or args.target_image_dir
-        args.prefab_name, args.target_prefab, args.target_image_dir, args.atlas_dir = derive_formal_paths(
-            base_output_dir,
-            str(snapshot.get("rootName") or ""),
-            args.formal_layout,
-        )
-    elif not args.prefab_name:
-        args.prefab_name = Path(args.target_prefab).stem
-    validate_formal_import_paths(args.target_prefab, args.target_image_dir, args.prefab_name)
+    # An explicitly named source export may legitimately be called Test/Prefab/Import.
+    # Inferred or legacy imports retain the benchmark placeholder-name guard.
+    allow_source_name = args.no_atlas and not args.infer_formal_names and bool(args.prefab_name.strip())
+    configure_output_paths(args, str(snapshot.get("rootName") or ""))
+    validate_formal_import_paths(
+        args.target_prefab, args.target_image_dir, args.prefab_name, allow_source_name=allow_source_name,
+    )
     target_prefab_path = resolve_repo_path(args.target_prefab)
     target_image_path = resolve_repo_path(UNITY_PROJECT / args.target_image_dir if args.target_image_dir.startswith("Assets/") else args.target_image_dir)
     WALL_CLOCK_CONTEXT["targetPrefab"] = args.target_prefab
@@ -537,7 +605,7 @@ def main():
     WALL_CLOCK_CONTEXT["targetPrefabResolved"] = str(target_prefab_path)
     WALL_CLOCK_CONTEXT["targetImageDirResolved"] = str(target_image_path)
     write_export_request(request_path, args.figma_url, file_key, node_id, args)
-    print(
+    diagnostic(
         "  target: "
         f"fileKey={snapshot.get('fileKey') or file_key} "
         f"nodeId={snapshot.get('rootNodeId')} "
@@ -558,10 +626,7 @@ def main():
         cwd=REPO_ROOT,
     )
     timings.append(timing)
-    if reader_result.stdout:
-        print(reader_result.stdout)
     if reader_result.returncode != 0:
-        print(reader_result.stderr)
         fail("Manifest reader failed")
 
     step("2/6 gen_spec - Spec and audit report")
@@ -594,36 +659,23 @@ def main():
     gen_result, timing = run_timed("genSpec", gen_argv, timeout=60, cwd=REPO_ROOT)
     timings.append(timing)
 
-    if gen_result.stdout:
-        # 只打印非标题行（避免 Markdown 报告中的 # 被当成标题）
-        for line in gen_result.stdout.splitlines():
-            if line.startswith("=== ") or line.startswith("## "):
-                print(line)
-            elif "allPass" in line or "节点:" in line or "图片:" in line:
-                print(f"  {line.strip()}")
-            elif line.startswith("[BLOCKING]") or line.startswith("⚠") or line.startswith("❌"):
-                print(line)
-
-    if gen_result.returncode != 0:
-        print(gen_result.stderr)
-
     # 读取审核报告
     audit = read_json(audit_path)
     blocking = audit.get("blockingErrors", [])
 
     if blocking:
-        print(f"\n  [BLOCKING] gen_spec 审核报告包含 {len(blocking)} 个阻塞错误:")
+        diagnostic(f"\n  [BLOCKING] gen_spec 审核报告包含 {len(blocking)} 个阻塞错误:")
         for be in blocking:
-            print(f"    - {be.get('code', '?')}: {be.get('message', '?')}")
+            diagnostic(f"    - {be.get('code', '?')}: {be.get('message', '?')}")
             for d in be.get("details", [])[:5]:
-                print(f"       {d.get('expected', '?')} → 磁盘: {d.get('disk', '?')} (fix: {d.get('fix', '?')})")
+                diagnostic(f"       {d.get('expected', '?')} → 磁盘: {d.get('disk', '?')} (fix: {d.get('fix', '?')})")
         fail("gen_spec 审核未通过，停止。")
 
-    print(f"\n  allPass: {audit.get('allPass')}")
-    print(f"  warnings: {len(audit.get('warnings', []))}")
+    diagnostic(f"\n  allPass: {audit.get('allPass')}")
+    diagnostic(f"  warnings: {len(audit.get('warnings', []))}")
 
     if args.check_only:
-        print("\n  [check-only] 跳过阶段二。")
+        diagnostic("\n  [check-only] 跳过阶段二。")
         write_wall_clock_report(
             "check-only-completed",
             0,
@@ -644,20 +696,21 @@ def main():
 
     # ─── 步骤 2: 确认 ───
     project_root = extract_plan_field("projectRoot")
-    print(f"\n  projectRoot: {project_root}")
-    print(f"  Prefab: {args.target_prefab}")
-    print(f"  图片目录: {args.target_image_dir}")
+    diagnostic(f"\n  projectRoot: {project_root}")
+    diagnostic(f"  Prefab: {args.target_prefab}")
+    diagnostic(f"  图片目录: {args.target_image_dir}")
 
     if not args.yes:
         step("3/6 等待确认")
         try:
-            answer = input("  确认执行阶段二（写入图片 + 生成 Prefab）? [y/N] ").strip().lower()
+            diagnostic("  确认执行阶段二（写入图片 + 生成 Prefab）? [y/N] ", end="")
+            answer = input().strip().lower()
         except (EOFError, KeyboardInterrupt):
-            print("\n  已取消。")
+            diagnostic("\n  已取消。")
             write_wall_clock_report("cancelled", 0, "cancelled before Unity write")
             return 0
         if answer not in ("y", "yes"):
-            print("  已取消。")
+            diagnostic("  已取消。")
             write_wall_clock_report("cancelled", 0, "cancelled before Unity write")
             return 0
 
@@ -684,13 +737,18 @@ def main():
     if not img_report.get("allPass", False):
         fail(f"process_images 未通过: blockingErrors={img_report.get('blockingErrors', [])}")
 
-    print(f"  allPass: {img_report['allPass']}")
-    print(f"  summary: {json.dumps(img_report.get('summary', {}), ensure_ascii=False)}")
+    diagnostic(f"  allPass: {img_report['allPass']}")
+    diagnostic(f"  summary: {json.dumps(img_report.get('summary', {}), ensure_ascii=False)}")
 
     # ─── 步骤 4: Unity Bridge — 导入 Sprite 并生成 Prefab ───
     step("5/6 Unity Bridge - Sprite import + Prefab generation")
     image_dir, spec_paths = read_import_plan()
-    print("  -> Unity Bridge import_sprites_and_generate_prefabs...")
+    if args.no_atlas:
+        try:
+            wait_for_unity_ready(args.relay_url, project_id=args.unity_project_id)
+        except (RuntimeError, TimeoutError) as error:
+            fail(f"Unity readiness check failed: {error}")
+    diagnostic("  -> Unity Bridge import_sprites_and_generate_prefabs...")
     gen_result = run_unity_bridge_import(
         image_dir,
         spec_paths,
@@ -699,16 +757,19 @@ def main():
         getattr(args, "prefab_name", ""),
         timeout=120,
         project_id=args.unity_project_id,
+        skip_atlas=args.no_atlas,
     )
     if not gen_result.get("success"):
         fail(f"Unity Bridge import failed: {json.dumps(gen_result, ensure_ascii=False)[:500]}")
-    print(f"  结果: {gen_result.get('stdout', '').strip()}")
+    diagnostic(f"  结果: {gen_result.get('stdout', '').strip()}")
+    if gen_result.get("stderr"):
+        diagnostic(gen_result["stderr"])
 
     # ─── 步骤 5: 验证 ───
     step("6/6 verify - Prefab static checks + Console logs")
 
     # 5a: verify_prefab
-    print("  → verify_prefab.py...")
+    diagnostic("  → verify_prefab.py...")
     vp_result, timing = run_timed("verifyPrefab", [
         str(VERIFY_PREFAB),
         "--unity-project", str(UNITY_PROJECT),
@@ -720,7 +781,7 @@ def main():
     try:
         vp = json.loads(vp_result.stdout)
     except json.JSONDecodeError:
-        print(f"  [WARN] verify_prefab 输出无法解析: {vp_result.stdout[:200]}")
+        diagnostic(f"  [WARN] verify_prefab 输出无法解析: {vp_result.stdout[:200]}")
         vp = {"allPass": False}
     VERIFY_PREFAB_REPORT.write_text(json.dumps(vp, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -728,22 +789,22 @@ def main():
         msg = "verify_prefab 未通过"
         for be in vp.get("blockingErrors", []):
             msg += f"\n    - {be}"
-        print(f"  {msg}")
+        diagnostic(f"  {msg}")
     else:
-        print(f"  ✅ allPass=True")
+        diagnostic(f"  ✅ allPass=True")
 
     # ─── 最终报告 ───
-    print(f"\n{'=' * 60}")
-    print(f"  导入完成")
-    print(f"{'=' * 60}")
-    print(f"  Prefab: {args.target_prefab}")
-    print(f"  图片: {args.target_image_dir}")
-    print(f"  verify_prefab allPass: {vp.get('allPass', False)}")
-    print(f"  spriteNull: {vp.get('checks', {}).get('spriteNull', {}).get('count', '?')}")
-    print(f"  raycastTargetOn: {vp.get('checks', {}).get('raycastTargetOn', {}).get('count', '?')}")
-    print(f"  autoSizeOff: {vp.get('checks', {}).get('autoSizeOff', {}).get('count', '?')}")
-    print(f"  commonFont: {vp.get('checks', {}).get('commonFontExact', {}).get('count', '?')}/{vp.get('checks', {}).get('commonFontExact', {}).get('mismatch', '?')}")
-    print(f"  TMP材质: {vp.get('checks', {}).get('allowedMaterial', {}).get('count', '?')}/{vp.get('checks', {}).get('allowedMaterial', {}).get('mismatch', '?')}")
+    diagnostic(f"\n{'=' * 60}")
+    diagnostic(f"  导入完成")
+    diagnostic(f"{'=' * 60}")
+    diagnostic(f"  Prefab: {args.target_prefab}")
+    diagnostic(f"  图片: {args.target_image_dir}")
+    diagnostic(f"  verify_prefab allPass: {vp.get('allPass', False)}")
+    diagnostic(f"  spriteNull: {vp.get('checks', {}).get('spriteNull', {}).get('count', '?')}")
+    diagnostic(f"  raycastTargetOn: {vp.get('checks', {}).get('raycastTargetOn', {}).get('count', '?')}")
+    diagnostic(f"  autoSizeOff: {vp.get('checks', {}).get('autoSizeOff', {}).get('count', '?')}")
+    diagnostic(f"  commonFont: {vp.get('checks', {}).get('commonFontExact', {}).get('count', '?')}/{vp.get('checks', {}).get('commonFontExact', {}).get('mismatch', '?')}")
+    diagnostic(f"  TMP材质: {vp.get('checks', {}).get('allowedMaterial', {}).get('count', '?')}/{vp.get('checks', {}).get('allowedMaterial', {}).get('mismatch', '?')}")
 
     emit_summary(
         "completed" if vp.get("allPass") else "failed",

@@ -98,4 +98,9 @@ figma.ui.onmessage = async (message) => {
     return;
   }
 
+  if (message.type === "EXPORT_PSD_COLLECT") {
+    await handleExportPsdCollect(message);
+    return;
+  }
+
   if (message.type === "FIGMA_HIERARCHY_CLEANUP_ANALYZE") {

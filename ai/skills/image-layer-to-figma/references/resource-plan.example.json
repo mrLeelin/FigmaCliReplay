@@ -1,0 +1,29 @@
+{
+  "granularity": "resource",
+  "resources": [
+    {
+      "id": "background",
+      "name": "背景",
+      "members": [0],
+      "reason": "整体背景单独显隐和替换"
+    },
+    {
+      "id": "gift",
+      "name": "完整礼盒",
+      "members": [1, 2],
+      "reason": "礼盒主体与蝴蝶结作为一张完整图标使用"
+    },
+    {
+      "id": "button-artwork",
+      "name": "购买按钮底图",
+      "members": [3],
+      "reason": "可复用按钮底图"
+    },
+    {
+      "id": "price",
+      "name": "购买价格",
+      "members": [4],
+      "reason": "价格随商品独立变化；当前输入保留位图字形"
+    }
+  ]
+}

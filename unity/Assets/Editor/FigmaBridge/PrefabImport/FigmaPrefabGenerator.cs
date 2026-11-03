@@ -294,6 +294,7 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
             }
 
             // 10. 保存 Prefab
+            NormalizeGeneratedNodeNames(rootGo.transform, true);
             EditorUtility.DisplayProgressBar("FigmaPrefabGenerator", "Saving prefab...", 0.9f);
             GameObject savedPrefab = PrefabUtility.SaveAsPrefabAsset(rootGo, spec.prefabPath);
 
@@ -311,6 +312,26 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
             else
             {
                 ZLog.LogError("[FigmaPrefabGenerator] Failed to save prefab.");
+            }
+        }
+
+        /// <summary>
+        /// 生成完成后去掉设计备注，仅为实际有子节点的物体保留方括号。
+        /// 公共 Prefab 只调整实例根名称，保留源资产内部的节点名称和绑定约定。
+        /// </summary>
+        private static void NormalizeGeneratedNodeNames(Transform node, bool isRoot)
+        {
+            string name = node.name.Replace("[", string.Empty).Replace("]", string.Empty);
+            int separator = name.IndexOfAny(new[] { '｜', '|' });
+            if (separator >= 0) name = name.Substring(0, separator);
+            name = name.Trim();
+            if (string.IsNullOrEmpty(name)) name = "Node";
+            node.name = node.childCount > 0 ? $"[{name}]" : name;
+
+            if (!isRoot && PrefabUtility.IsAnyPrefabInstanceRoot(node.gameObject)) return;
+            foreach (Transform child in node)
+            {
+                NormalizeGeneratedNodeNames(child, false);
             }
         }
 
@@ -704,11 +725,9 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
                 return;
             }
 
-            string targetName = activeVariant.StartsWith("[", StringComparison.Ordinal)
-                ? activeVariant
-                : $"[{activeVariant}]";
+            string targetName = activeVariant.Trim().Trim('[', ']').Trim();
             var children = go.transform.Cast<Transform>()
-                .Where(child => child.name.StartsWith("[Variant_", StringComparison.Ordinal))
+                .Where(child => child.name.Trim('[', ']').StartsWith("Variant_", StringComparison.Ordinal))
                 .ToArray();
             if (children.Length == 0)
             {
@@ -719,7 +738,7 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
             bool matched = false;
             foreach (var child in children)
             {
-                bool active = string.Equals(child.name, targetName, StringComparison.Ordinal);
+                bool active = string.Equals(child.name.Trim('[', ']'), targetName, StringComparison.Ordinal);
                 child.gameObject.SetActive(active);
                 matched |= active;
             }

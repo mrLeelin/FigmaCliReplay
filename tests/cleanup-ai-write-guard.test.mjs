@@ -32,6 +32,9 @@ test("cleanup AI write guard enforces read, hierarchy, satisfaction, and variant
     () => assertCleanupAiJobAllowed("FIGMA_CREATE_COMPONENT_SET_VARIANTS", sessionId),
     /hierarchy|层级/i,
   );
+  // 通用设计编辑写入不属于任何整理阶段，整理会话中始终被拒绝；inspect 只读始终允许。
+  assert.throws(() => assertCleanupAiJobAllowed("FIGMA_APPLY_EDITS", sessionId), /hierarchy|层级/i);
+  assert.doesNotThrow(() => assertCleanupAiJobAllowed("FIGMA_INSPECT_NODES", sessionId));
 
   setCleanupAiWritePhase(sessionId, runId, "awaiting_satisfaction");
   assert.throws(

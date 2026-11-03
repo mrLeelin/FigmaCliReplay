@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 
 import { SERVER_VERSION, type GatewayConfig } from "./config.js";
 import { getLoggingRuntime, type LoggingRuntime } from "./logging/loggingRuntime.js";
+import { validateFigmaEditJob } from "./figmaEditSchema.js";
 import { cliHelloSchema, cliRequestSchema, RELAY_PROTOCOL_VERSION, RelayProtocolError } from "./relayProtocol.js";
 import { isFailedJobResult, type RuntimeRelay } from "./runtimeRelay.js";
 import { bearerToken, constantTimeEqual, isAllowedLocalRequest, isRecord, validOperationId } from "./utils.js";
@@ -212,12 +213,24 @@ export class RelayCliEndpoint {
         || !session.capabilities.includes("job.reconcile") || !session.capabilities.includes("job.cancel"))) {
         throw new RelayProtocolError("UPGRADE_REQUIRED", "Reload the updated Figma plugin with WebSocket result support.");
       }
+      let jobBody: Record<string, unknown> = request.action === "figma.command" ? request.payload.job ?? {} : {};
+      // 设计编辑 job 在派发前按白名单严格校验；不通过则不进入插件，画布不变。
+      // 首次提交和同 ID 重试必须使用同一份规范化数据，否则 schema 默认字段会导致任务指纹不一致。
+      const editValidation = validateFigmaEditJob(String(commandType), jobBody);
+      if (editValidation && !editValidation.ok) {
+        operation.step("edit-validate", "Design edit job rejected by schema", { requestId: request.requestId, jobType: commandType, issueCount: editValidation.issueCount });
+        throw new RelayProtocolError("INVALID_REQUEST", editValidation.message);
+      }
+      if (editValidation?.ok) {
+        jobBody = editValidation.job;
+        operation.step("edit-validate", "Design edit job passed schema", { requestId: request.requestId, jobType: commandType, editCount: editValidation.editCount, opCounts: editValidation.opCounts, dryRun: jobBody.dryRun === true });
+      }
       operation.step("dispatch", "Dispatch Figma WebSocket job", { sessionId: session.sessionId, requestId: request.requestId, jobType: commandType });
       this.relay.submitJob({
         requestId: request.requestId,
         operationId: operation.operationId,
         target: { sessionId: session.sessionId, fileKey: session.fileKey },
-        job: { ...(request.action === "figma.command" ? request.payload.job : {}), type: commandType },
+        job: { ...jobBody, type: commandType },
         assetPaths: request.payload.assetPaths,
       }, { transport: "websocket" });
       if (request.payload.detach) {

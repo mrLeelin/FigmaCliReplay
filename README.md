@@ -8,6 +8,7 @@
 
 ```powershell
 npm ci
+python -m pip install -r server/requirements.txt
 npm run build
 .\启动Relay.bat
 npm run doctor
@@ -41,5 +42,44 @@ node --test tests/unity-outbound-client.test.mjs
 AI 整理保留只读分析、确认整理、验证、满意确认、ComponentSet 的分阶段写入闸门。失败保留回滚及恢复产物。关闭插件后会话有短暂重连宽限期。
 
 `npm run build` 同步版本并生成插件；构建号不参与兼容性判断。打包是显式操作，不停止现有服务、不覆盖已有发布目录，也不修改全局 AI 配置。
+
+## 截图拆成 Figma 资源
+
+PNG / 截图拆层与已有结果的过细拆分修正使用 [Image Layer To Figma Skill](ai/skills/image-layer-to-figma/SKILL.md)。默认以可独立使用的资源为单位：完整礼盒、完整卡牌插画、按钮底图和独立价格等。该 Skill 负责资源规划与验收，外部拆层服务按需调用；离线合成脚本可复用已有图层生成完整透明资源，无需重新拆图。
+
+默认交付还包含业务嵌套层级：区域 → 功能组 → 独立资源。导入成功不是拆图任务的最终完成状态；使用 [资源层级流程](ai/skills/image-layer-to-figma/references/resource-hierarchy.md) 和 `ai/skills/image-layer-to-figma/scripts/structure_resources.py` 校验完整节点归属，再执行原生整理事务，验证节点守恒、位置和 RGBA 截图一致。明确要求原始平铺图层时才跳过；该阶段不会自动修改已有 Unity Prefab。
+
+[DXX Skill 与 Python 客户端](ai/skills/dxx-image/SKILL.md) 已随项目提供。在插件「设置 → DXX 图片拆层」输入 API Key，点击「保存」；关闭再打开插件会从本机配置读取并明文显示。若此前仅使用环境变量，点击保存也会将当前 Key 写入本机配置。「测试连接」仅进行鉴权与拆层服务可用性检查，不上传图片或创建任务，也不保存尚未提交的输入。设置页和 Python 共用 `.local/dxx-config.json`，项目保存值优先于兼容的 `GORILLA_API_KEY` / `GORILLA_API_BASE` 环境变量。`.local` 已被 Git 忽略，普通状态查询与日志不返回 Key。
+
+也可在项目根目录验证同一配置：
+
+```powershell
+python -X utf8 ai/skills/dxx-image/scripts/dxx_image.py Test
+```
+
+## 导出 Unity Prefab
+
+在 Figma 选择一个根节点，在 Unity Project 中选中输出文件夹，然后打开插件「导出 → 导出 Prefab」，点击「读取 Unity 选中目录」后导出。输出目录可以已有其他内容，也可以是 `Assets` 根目录。
+
+```text
+选中的目录/
+└─ 节点名/
+   ├─ Prefab/节点名.prefab
+   └─ Texture/
+```
+
+名称使用 `｜` 或 `|` 前的标识，例如 `[cat_header｜顶部白猫｜原图插画]` 导出为 `cat_header`；只有实际有子节点的 Unity 层级节点才保留 `[cat_header]` 形式。目录、Prefab 和 PNG 文件名不带方括号，文字正文保持原样。文件名中的非法字符会替换。已有同名目录或 `.meta` 时直接报冲突，不覆盖。此入口不生成 UiAtlas；文字、九宫图和已有公共资源引用沿用现有 Prefab 生成器规则。结果会报告实际 Prefab、Texture 和验证路径，进度经 Relay 推送。
+
+Unity Bridge 需要支持 `supportsPrefabExportWithoutAtlas`；旧 Bridge 会在写入前收到更新提示，可在插件设置里更新。「同步 Unity」仅保留「图片导出」和「字体同步」；Prefab 导出统一从「导出 → 导出 Prefab」进入。
+
+打开插件时会读取本机保存的上次 Unity 工程并自动连接。恢复和检查期间显示「连接中」，通过工程路径与 Bridge 版本校验后显示「已连接」；恢复失败才显示「未连接」及原因。手动断开后不会自行重连，重新打开插件或点击「自动连接」可再次尝试。
+
+## 导出分层 PSD
+
+在 Figma 选择节点，打开插件「导出 → 导出 PSD」。默认 1x 保持原始像素尺寸；2x、3x 同步放大画布、图层位置和位图一次，用于更高分辨率输出。阴影、描边超出节点边界时，画布会扩展以保留完整内容。
+
+文件写入本项目 `.tmp/exports/`，同时生成图层索引。保留中文名称、层序、分组、隐藏图层和透明度；文字当前输出为像素层。蒙版、容器裁切、布尔运算及复杂组效果保留完整合成图，原始子层放在对应组内隐藏的「源图层」中，避免重复叠加。需要分别编辑源子层时，先隐藏合成图，再显示「源图层」；这些效果不会转换成 Photoshop 原生效果。
+
+任何必需图片缺失、分片不完整或 PSD 回读验证失败都会报错，不交付部分成功文件。结果会显示实际图片数、缺失数及合成说明。当前边界为 5000 个清单节点（含虚拟根）、128 层嵌套、PSD 单边最多 30000 像素；超限需拆分选区或降低倍率。重新构建后须重新运行 Figma 开发插件以加载新版本。
 
 迁移记录见 [实施计划](docs/superpowers/plans/2026-09-18-cli-websocket-migration.md)。真实 Figma/Unity 资源与视觉验收属于 T7，构建通过不代表运行验收完成。

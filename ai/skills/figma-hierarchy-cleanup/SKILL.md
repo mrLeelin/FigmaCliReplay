@@ -5,6 +5,12 @@ description: Use when整理 Figma 节点层级、给 Figma 节点打组、生产
 
 # Figma Hierarchy Cleanup CLI + WebSocket Relay
 
+## Accepted image resources requiring nested hierarchy
+
+For an `image-layer-to-figma` delivery, follow its [resource hierarchy workflow](../image-layer-to-figma/references/resource-hierarchy.md). Its `scripts/structure_resources.py` compiles an explicit full ID-to-parent tree and calls this skill's existing native transaction helper through the project CLI. Standalone resource leaves may remain outside newly created groups; protected existing subtrees stay intact. This entrypoint does not infer or create ComponentSets and does not change the approval stages of plugin-launched cleanup conversations below.
+
+For a user-requested fixed horizontal strip, a legacy cleanup plan may set `layoutIntent: {"kind": "static-horizontal"}`. The verifier then checks actual horizontal spacing, alignment and unique ownership before accepting direct item groups without ScrollView wrappers. Item names alone do not establish scrolling behavior; a vertical list cannot use this exception. Keep the geometry evidence in the report.
+
 ## 插件窗口“AI 整理对话”边界
 
 当任务由 Figma 插件中的“开始 AI 整理对话”启动时，插件窗口就是与用户的多轮对话界面，必须保持同一个 Codex/Claude CLI 会话并完整使用本 Skill。由 Relay 接受任务本身完成服务预检，首轮只允许 `预检 → analyze → plan → 审阅完整目标树`，不得先用 `curl`、`Invoke-WebRequest` 或直接 `/health` 探测；不得写入 Figma；按钮点击不是写入授权。Relay 还会按会话阶段执行服务端写入闸门，提示词不得被当作唯一安全边界。必须在窗口中展示完整最终层级树并等待用户明确确认，才允许调用本 Skill 的 `run_cleanup_pipeline.py --apply-confirmed --no-auto-component-sets` 或等价脚本入口执行层级整理。

@@ -29,6 +29,26 @@ export class PythonAlgorithms {
     return this.execute({ action: "crop-jiugong", payload }, 120_000);
   }
 
+  /** PSD 导出：一次性内联（小选区）。 */
+  async exportPsd(payload: Record<string, unknown>): Promise<unknown> {
+    return this.execute({ action: "psd-export", payload }, 300_000);
+  }
+
+  /** PSD 导出：分批暂存的第一步，登记结构与画布尺寸。 */
+  async stagePsdExport(payload: Record<string, unknown>): Promise<unknown> {
+    return this.execute({ action: "psd-export-stage-meta", payload }, 60_000);
+  }
+
+  /** PSD 导出：分批写入图层 PNG，规避单帧 16 MiB 上限。 */
+  async stagePsdChunk(payload: Record<string, unknown>): Promise<unknown> {
+    return this.execute({ action: "psd-export-stage-chunk", payload }, 120_000);
+  }
+
+  /** PSD 导出：从暂存目录组装 PSD。 */
+  async assemblePsdExport(payload: Record<string, unknown>): Promise<unknown> {
+    return this.execute({ action: "psd-export-assemble", payload }, 300_000);
+  }
+
   startImport(payload: Record<string, unknown>): Record<string, unknown> {
     if (typeof payload.sessionId !== "string" || !payload.sessionId.trim()
       || typeof payload.fileKey !== "string" || !payload.fileKey.trim()) {

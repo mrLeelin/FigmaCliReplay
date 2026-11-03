@@ -12,6 +12,7 @@ import { callUnityBridge } from "./unityBridgeClient.js";
 import { unityProjectKey, unitySessionStatus } from "./unitySessionRegistry.js";
 import { isRecord } from "./utils.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
+import { DxxConfig } from "./dxxConfig.js";
 
 /** Shared CLI and authenticated plugin controls; capability checks stay in the controllers. */
 export function createRelayControlHandler(
@@ -20,6 +21,7 @@ export function createRelayControlHandler(
   ai = localAi,
   unityProjects = new UnityProjectRegistry(),
   bridgeToken = "",
+  dxx: Pick<DxxConfig, "get" | "set" | "test"> & Partial<Pick<DxxConfig, "readForSettings">> = new DxxConfig(),
 ) {
   return async (action: string, payload: Record<string, unknown>, parentOperationId?: string): Promise<unknown> => {
     const runId = typeof payload.runId === "string" ? payload.runId.trim() : "";
@@ -153,6 +155,11 @@ export function createRelayControlHandler(
         case "psd.import.adopt-baseline":
         case "image.crop":
         case "plugin.open-folder":
+        case "psd.export":
+        case "psd.export.stage-meta":
+        case "psd.export.stage-chunk":
+        case "psd.export.assemble":
+        case "psd.export.open-folder":
         case "prefab.import.start":
         case "figma.prefab.start":
         case "figma.prefab.get":
@@ -161,6 +168,13 @@ export function createRelayControlHandler(
           result = await relay.algorithmControl(action, payload, unityProjects);
           break;
         }
+        case "dxx.config.get": result = dxx.get(); break;
+        case "dxx.config.read":
+          if (!dxx.readForSettings) throw new Error("DXX 设置读取不可用。");
+          result = dxx.readForSettings();
+          break;
+        case "dxx.config.set": result = dxx.set(payload); break;
+        case "dxx.config.test": result = await dxx.test(payload); break;
         case "ai.providers": result = { ok: true, providers: await cleanup.providers.list() }; break;
         case "ai.status": result = ai.localAiRunnerStatus(); break;
         case "ai.config": result = ai.writeLocalAiRunnerConfig(payload); break;

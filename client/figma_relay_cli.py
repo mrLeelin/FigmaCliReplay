@@ -128,6 +128,20 @@ def query_components(library_node_ids: Optional[list[str]] = None, *, relay_url:
     return payload["result"] if isinstance(payload.get("result"), dict) else payload
 
 
+def wait_task(task_id: str, *, relay_url: str = "", timeout: float = 120) -> Dict[str, Any]:
+    """Read an existing task; this never submits or replays its job."""
+    if not task_id:
+        raise RelayCliError("An existing task ID is required")
+    return _run("task-wait", relay_url=relay_url, timeout=timeout, task_id=task_id)
+
+
+def inspect_nodes(node_ids: list[str], *, session_id: str, file_key: str, relay_url: str = "", timeout: float = 30) -> Dict[str, Any]:
+    """Read strict inspect payloads with routing fields only in the CLI envelope."""
+    return _run("figma-command", relay_url=relay_url, timeout=timeout, session_id=session_id,
+                file_key=file_key, job_type="FIGMA_INSPECT_NODES",
+                payload={"nodeIds": node_ids, "depth": 0, "includeText": False})
+
+
 def submit_grid_component_job(relay_url: str, root_node_id: str, component_name: str, slots: list[Any], property_defs: dict[str, Any], boolean_node_ids: Optional[list[Any]] = None, text_node_ids: Optional[list[Any]] = None, variant_node_id: Optional[str] = None, reference_slot_index: int = 0, timeout: float = 120) -> Dict[str, Any]:
     job: Dict[str, Any] = {"type": "CREATE_GRID_COMPONENT", "rootNodeId": root_node_id, "componentName": component_name, "slots": slots, "propertyDefs": property_defs, "referenceSlotIndex": reference_slot_index}
     for key, value in (("booleanNodeIds", boolean_node_ids), ("textNodeIds", text_node_ids), ("variantNodeId", variant_node_id)):

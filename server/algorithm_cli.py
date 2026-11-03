@@ -29,6 +29,14 @@ def execute(request: dict, progress) -> dict:
     action = request.get("action")
     if action == "crop-jiugong":
         return crop_jiugong_images(payload)
+    if action in ("psd-export", "psd-export-stage-meta", "psd-export-stage-chunk", "psd-export-assemble"):
+        try:
+            from psd_export import assemble_psd, assemble_staged, stage_chunk, stage_meta
+        except ModuleNotFoundError as error:
+            raise ValueError("PSD export dependencies are missing. Run: python -m pip install -r server/requirements.txt") from error
+        handlers = {"psd-export": assemble_psd, "psd-export-stage-meta": stage_meta,
+                    "psd-export-stage-chunk": stage_chunk, "psd-export-assemble": assemble_staged}
+        return handlers[action](payload)
     if action != "prefab-to-figma":
         raise ValueError("Unsupported algorithm action")
     task_id = request.get("taskId")

@@ -1,0 +1,1320 @@
+diff --git a/C:/Users/li182/.figma-relay-backup-20261102-step4/10_design_edit.mjs b/code/10_design_edit.mjs
+index a9653df..29ce4d7 100644
+--- a/C:/Users/li182/.figma-relay-backup-20261102-step4/10_design_edit.mjs
++++ b/code/10_design_edit.mjs
+@@ -99,9 +99,18 @@ function designEditText(node, mixed, includeText) {
+   return text;
+ }
+ 
++/** documentAccess 为 dynamic-page 时同步读 mainComponent 会抛错：这里只作兜底，正式值由 inspect 异步补齐。 */
++function designEditSyncMainComponentId(node) {
++  try {
++    return node.mainComponent && node.mainComponent.id ? node.mainComponent.id : "";
++  } catch (error) {
++    return "";
++  }
++}
++
+ function designEditInstance(node) {
+   if (node.type !== "INSTANCE") return undefined;
+-  const instance = { mainComponentId: node.mainComponent && node.mainComponent.id ? node.mainComponent.id : "" };
++  const instance = { mainComponentId: designEditSyncMainComponentId(node) };
+   const props = node.componentProperties;
+   if (props && typeof props === "object") {
+     instance.componentProperties = {};
+@@ -151,13 +160,14 @@ export function designEditDescribeNode(node, options) {
+ }
+ 
+ /** 按深度展开节点树；总节点数超过上限时停止展开并标记 truncated。 */
+-export async function designEditInspectNodes(job, getNodeById, mixed) {
++export async function designEditInspectNodes(job, getNodeById, mixed, getMainComponent) {
+   const nodeIds = Array.isArray(job && job.nodeIds) ? job.nodeIds.map(String) : [];
+   const depth = Math.max(0, Math.min(3, Number(job && job.depth !== undefined ? job.depth : 1) || 0));
+   const options = { mixed, includeText: !job || job.includeText !== false };
+   const state = { count: 0, truncated: false };
+   const missing = [];
+   const nodes = [];
++  const instances = [];
+ 
+   const visit = (node, level) => {
+     if (state.count >= DESIGN_EDIT_MAX_INSPECT_NODES) {
+@@ -166,6 +176,7 @@ export async function designEditInspectNodes(job, getNodeById, mixed) {
+     }
+     state.count += 1;
+     const info = designEditDescribeNode(node, options);
++    if (info.instance) instances.push({ info, node });
+     if (level < depth && "children" in node && Array.isArray(node.children)) {
+       info.children = [];
+       for (const child of node.children) {
+@@ -191,6 +202,12 @@ export async function designEditInspectNodes(job, getNodeById, mixed) {
+     if (!info) break;
+     nodes.push(info);
+   }
++  if (getMainComponent) {
++    for (const { info, node } of instances) {
++      const main = await getMainComponent(node);
++      if (main && main.id) info.instance.mainComponentId = main.id;
++    }
++  }
+ 
+   const status = nodes.length === 0 ? "error" : "completed";
+   return {
+@@ -204,19 +221,41 @@ export async function designEditInspectNodes(job, getNodeById, mixed) {
+ }
+ 
+ // ─── 通用设计编辑：白名单批量写入（FIGMA_APPLY_EDITS）───
+-// 流程：预检（不写入）→ 快照原值 → 逐条应用 → 失败则整批回滚并核对；成功后由 handler 调用 commitUndo 合并为一步撤销。
+-// runtime 注入：getNodeById、loadFont(fontName)、mixed、log(stage, data)。
++// 流程：模拟预检（按批次顺序推演状态，不写入）→ 逐条应用并记录每个已有节点首次被触碰前的原值
++// → 任一条失败则删除新建节点、恢复原值并核对；成功后由 handler 调用 commitUndo 合并为一步撤销。
++// runtime 注入：getNodeById、loadFont、getMainComponent、getVariableById、createFrame、createText、bindPaint、mixed、log。
+ 
+-export const DESIGN_EDIT_PROPERTY_OPS = [
++export const DESIGN_EDIT_SUPPORTED_OPS = [
+   "setFill", "setStroke", "setCornerRadius", "setOpacity", "setVisible", "rename",
+   "setText", "setTextStyle", "setAutoLayout", "setLayoutSizing",
++  "createFrame", "createText", "createInstance", "setInstanceProperties", "bindVariable",
+ ];
+ 
++const DESIGN_EDIT_CREATE_OPS = new Set(["createFrame", "createText", "createInstance"]);
+ const DESIGN_EDIT_AUTO_LAYOUT_TYPES = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"]);
+ const DESIGN_EDIT_STROKE_TYPES_EXCLUDED = new Set(["GROUP", "SLICE", "SECTION"]);
+ const DESIGN_EDIT_LOCKED_TYPES = new Set(["DOCUMENT", "PAGE"]);
++/** 新建节点允许挂载的父节点类型；PAGE 不在内，新节点只能建在已有容器里。 */
++const DESIGN_EDIT_CONTAINER_TYPES = new Set(["FRAME", "COMPONENT", "GROUP", "SECTION"]);
++/** figma.createText() 的默认字体；未指定字体时沿用它。 */
++const DESIGN_EDIT_DEFAULT_FONT = { family: "Inter", style: "Regular" };
++/** 可绑定数值变量的属性：快照时同时记录它们的原绑定，回滚时一并恢复。 */
++const DESIGN_EDIT_NUMERIC_BINDABLE = new Set([
++  "itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
++  "cornerRadius", "opacity", "width", "height", "strokeWeight",
++]);
++const DESIGN_EDIT_FRAME_KEYS = new Set([
++  "fills", "strokes", "strokeWeight", "cornerRadius", "opacity", "visible", "name", "width", "height",
++  "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
++  "layoutSizingHorizontal", "layoutSizingVertical",
++]);
++const DESIGN_EDIT_TEXT_KEYS = new Set([
++  "fills", "strokes", "strokeWeight", "opacity", "visible", "name", "width", "height",
++  "characters", "fontSize", "fontName", "textAlignHorizontal", "layoutSizingHorizontal", "layoutSizingVertical",
++]);
++const DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX = "componentProperty:";
+ 
+-/** 每种 op 会改动的节点属性；快照与回滚只处理这些键。 */
++/** 每种 op 会改动的节点属性；快照与回滚只处理这些键（尺寸与位置另由 geometry 记录）。 */
+ function designEditPropertyKeys(edit) {
+   switch (edit.op) {
+     case "setFill": return ["fills"];
+@@ -239,10 +278,21 @@ function designEditPropertyKeys(edit) {
+       ...(edit.horizontal ? ["layoutSizingHorizontal"] : []),
+       ...(edit.vertical ? ["layoutSizingVertical"] : []),
+     ];
++    case "setInstanceProperties": return Object.keys(edit.properties || {}).map((key) => DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX + key);
++    case "bindVariable":
++      if (edit.field === "fills" || edit.field === "strokes") return [edit.field];
++      return edit.field === "width" || edit.field === "height" ? [] : [edit.field];
+     default: return [];
+   }
+ }
+ 
++/** 需要同时快照变量绑定的键：被改动的可绑定数值属性，以及 bindVariable 的数值字段。 */
++function designEditBindingKeys(edit) {
++  const keys = designEditPropertyKeys(edit).filter((key) => DESIGN_EDIT_NUMERIC_BINDABLE.has(key));
++  if (edit.op === "bindVariable" && DESIGN_EDIT_NUMERIC_BINDABLE.has(edit.field) && !keys.includes(edit.field)) keys.push(edit.field);
++  return keys;
++}
++
+ function designEditHexToRgb(hex) {
+   const value = String(hex || "").replace("#", "");
+   return {
+@@ -262,66 +312,388 @@ function designEditCloneValue(value) {
+   return JSON.parse(JSON.stringify(value));
+ }
+ 
++function designEditSameValue(left, right) {
++  return JSON.stringify(designEditCloneValue(left)) === JSON.stringify(designEditCloneValue(right));
++}
++
+ function designEditFontKey(fontName) {
+   return fontName ? String(fontName.family) + "\u0000" + String(fontName.style) : "";
+ }
+ 
+-/** 预检单条 edit：返回阻塞原因（字符串）或 null。只读，不修改节点。 */
+-function designEditPrecheckEdit(edit, node, mixed, page) {
+-  if (!node) return "node not found: " + edit.nodeId;
+-  if (DESIGN_EDIT_LOCKED_TYPES.has(node.type)) return "refuse to edit " + node.type + " node " + node.id;
+-  if (page && designEditPageOf(node) !== page) return "node " + node.id + " is not on the same page as the first edit target";
++function designEditErrorMessage(error) {
++  return error && error.message ? error.message : String(error);
++}
++
++function designEditIsSingleSolid(paints) {
++  return Array.isArray(paints) && paints.length === 1 && paints[0] && paints[0].type === "SOLID";
++}
++
++function designEditPageOf(node) {
++  let current = node;
++  while (current && current.type !== "PAGE") current = current.parent;
++  return current || null;
++}
++
++function designEditInsideInstance(node) {
++  for (let current = node; current; current = current.parent) if (current.type === "INSTANCE") return true;
++  return false;
++}
++
++/** 读取快照键的当前值；组件属性键读 componentProperties。 */
++function designEditReadKey(node, key) {
++  if (key.startsWith(DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX)) {
++    const props = node.componentProperties || {};
++    const prop = props[key.slice(DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX.length)];
++    return prop ? prop.value : undefined;
++  }
++  return node[key];
++}
++
++function designEditHasKey(node, key) {
++  if (key.startsWith(DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX)) return designEditReadKey(node, key) !== undefined;
++  return key in node;
++}
++
++function designEditBoundId(node, field) {
++  const bound = node && node.boundVariables;
++  const alias = bound && typeof bound === "object" ? bound[field] : null;
++  return alias && !Array.isArray(alias) && alias.id ? String(alias.id) : null;
++}
++
++// ─── 模拟预检 ───
++// 每个被引用的节点对应一个 view：已有节点读真实值，新建节点读默认值；前序 edit 的效果记入 view.values，
++// 所以后续 edit 检查的是「执行到这一条时」的状态（例如先关掉父级 auto layout，再对子节点设 FILL，会在预检被拦下）。
++
++function designEditViewGet(view, key) {
++  if (view.values.has(key)) return view.values.get(key);
++  if (view.node) return view.node[key];
++  if (view.proto && key in view.proto) return view.proto[key];
++  return view.defaults ? view.defaults[key] : undefined;
++}
++
++function designEditViewHas(view, key) {
++  if (view.node) return key in view.node;
++  if (view.keys) return view.keys.has(key);
++  return Boolean(view.proto) && key in view.proto;
++}
++
++function designEditExistingView(sim, node) {
++  let view = sim.views.get(node.id);
++  if (view) return view;
++  view = {
++    ref: node.id, node, type: node.type, created: false, values: new Map(),
++    childCount: Array.isArray(node.children) ? node.children.length : 0,
++    insideInstance: designEditInsideInstance(node), page: designEditPageOf(node),
++  };
++  sim.views.set(node.id, view);
++  return view;
++}
++
++function designEditParentView(sim, view) {
++  if (view.created) return view.parentView;
++  return view.node.parent ? designEditExistingView(sim, view.node.parent) : null;
++}
++
++/** 解析 nodeId / parentId：真实节点或同批新建的 temp:<tempId>。返回 view 或阻塞原因字符串。 */
++async function designEditResolveRef(ref, ctx, asParent) {
++  const id = String(ref || "");
++  if (id.startsWith("temp:")) return ctx.sim.temps.get(id.slice(5)) || "temp reference used before creation: " + id;
++  const node = await ctx.runtime.getNodeById(id);
++  if (!node) return "node not found: " + id;
+   if (node.removed) return "node was removed: " + node.id;
++  if (!asParent && DESIGN_EDIT_LOCKED_TYPES.has(node.type)) return "refuse to edit " + node.type + " node " + node.id;
++  return designEditExistingView(ctx.sim, node);
++}
++
++function designEditCheckPage(view, ctx) {
++  if (!ctx.page) ctx.page = view.page;
++  return view.page === ctx.page ? null : "node " + view.ref + " is not on the same page as the first edit target";
++}
++
++/** 组件属性定义：变体组件要从所属 COMPONENT_SET 读取（直接读变体会抛错）。 */
++function designEditComponentDefinitions(component) {
++  try {
++    const owner = component.parent && component.parent.type === "COMPONENT_SET" ? component.parent : component;
++    return owner.componentPropertyDefinitions || {};
++  } catch (error) {
++    return null;
++  }
++}
++
++/** 实例可设置的属性：名称 → { type, variantOptions? }。已有实例读 componentProperties，新建实例读主组件定义。 */
++async function designEditInstancePropertyTypes(view, ctx) {
++  if (view.propertyTypes) return view.propertyTypes;
++  const types = {};
++  let definitions = null;
++  if (view.created) {
++    definitions = designEditComponentDefinitions(view.component) || {};
++    for (const key of Object.keys(definitions)) types[key] = { type: definitions[key].type };
++  } else {
++    const props = view.node.componentProperties || {};
++    for (const key of Object.keys(props)) types[key] = { type: props[key] && props[key].type };
++    const main = ctx.runtime.getMainComponent ? await ctx.runtime.getMainComponent(view.node) : null;
++    definitions = main ? designEditComponentDefinitions(main) : null;
++  }
++  for (const key of Object.keys(types)) {
++    const definition = definitions && definitions[key];
++    if (definition && Array.isArray(definition.variantOptions)) types[key].variantOptions = definition.variantOptions.map(String);
++  }
++  view.propertyTypes = types;
++  return types;
++}
++
++function designEditCheckInstanceValue(name, info, value) {
++  if (!info) return "instance has no component property " + JSON.stringify(name);
++  if (info.type === "BOOLEAN") return typeof value === "boolean" ? null : name + " expects a boolean";
++  if (typeof value !== "string") return name + " expects a string";
++  if (info.type === "VARIANT" && info.variantOptions && !info.variantOptions.includes(value)) {
++    return name + " has no variant " + JSON.stringify(value) + "; options: " + info.variantOptions.join(", ");
++  }
++  return null;
++}
++
++function designEditAddFont(ctx, font, index) {
++  if (font && font.family && font.style && !ctx.fonts.has(designEditFontKey(font))) ctx.fonts.set(designEditFontKey(font), { font, index });
++}
++
++function designEditCreatedView(ctx, edit, parentView, type, extra) {
++  const view = {
++    ref: "temp:" + edit.tempId, node: null, type, created: true, values: new Map(), childCount: 0,
++    insideInstance: false, page: parentView.page, parentView, ...extra,
++  };
++  ctx.sim.temps.set(edit.tempId, view);
++  parentView.childCount += 1;
++  return view;
++}
++
++/** 检查父容器并在模拟状态中登记一个新建节点。 */
++async function designEditSimulateCreate(edit, index, ctx, step) {
++  const parent = await designEditResolveRef(edit.parentId, ctx, true);
++  if (typeof parent === "string") return parent;
++  const pageReason = designEditCheckPage(parent, ctx);
++  if (pageReason) return pageReason;
++  if (!DESIGN_EDIT_CONTAINER_TYPES.has(parent.type)) return "parent must be FRAME/COMPONENT/GROUP/SECTION, got " + parent.type;
++  if (parent.insideInstance) return "cannot add children inside an instance: " + parent.ref;
++  if (edit.index !== undefined && edit.index > parent.childCount) return "index " + edit.index + " exceeds child count " + parent.childCount + " of " + parent.ref;
++  step.parentView = parent;
++  if (edit.op === "createFrame") {
++    step.view = designEditCreatedView(ctx, edit, parent, "FRAME", {
++      keys: DESIGN_EDIT_FRAME_KEYS,
++      defaults: {
++        name: edit.name, width: edit.width, height: edit.height, fills: designEditSolidPaint("#FFFFFF"), strokes: [], strokeWeight: 1,
++        cornerRadius: 0, opacity: 1, visible: true, layoutMode: "NONE", layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
++      },
++    });
++    return null;
++  }
++  if (edit.op === "createText") {
++    const font = { family: edit.fontFamily || DESIGN_EDIT_DEFAULT_FONT.family, style: edit.fontStyle || DESIGN_EDIT_DEFAULT_FONT.style };
++    designEditAddFont(ctx, font, index);
++    step.font = font;
++    step.view = designEditCreatedView(ctx, edit, parent, "TEXT", {
++      keys: DESIGN_EDIT_TEXT_KEYS,
++      defaults: {
++        name: edit.characters, characters: edit.characters, fontName: font, fontSize: edit.fontSize === undefined ? 12 : edit.fontSize,
++        fills: designEditSolidPaint("#000000"), strokes: [], strokeWeight: 1, opacity: 1, visible: true, textAlignHorizontal: "LEFT",
++        layoutSizingHorizontal: "FIXED", layoutSizingVertical: "FIXED",
++      },
++    });
++    return null;
++  }
++  const component = await ctx.runtime.getNodeById(edit.componentId);
++  if (!component) return "component not found: " + edit.componentId;
++  if (component.type !== "COMPONENT") return "componentId must be a COMPONENT (pick a variant, not the set), got " + component.type;
++  let anchor = parent;
++  while (anchor.created) anchor = anchor.parentView;
++  for (let node = anchor.node; node; node = node.parent) {
++    if (node.id === component.id) return "cannot place an instance inside its own component " + component.id;
++  }
++  step.component = component;
++  step.view = designEditCreatedView(ctx, edit, parent, "INSTANCE", { proto: component, component });
++  return null;
++}
++
++/** 模拟单条属性类 edit：检查「执行到这一条时」的状态，通过后把效果记入 view。返回阻塞原因或 null。 */
++async function designEditSimulateProperty(edit, index, ctx, step) {
++  const view = await designEditResolveRef(edit.nodeId, ctx, false);
++  if (typeof view === "string") return view;
++  const pageReason = designEditCheckPage(view, ctx);
++  if (pageReason) return pageReason;
++  step.view = view;
++  const get = (key) => designEditViewGet(view, key);
++  const set = (key, value) => view.values.set(key, value);
+   switch (edit.op) {
+     case "setFill":
+-      return "fills" in node ? null : node.type + " does not support fills";
++      if (!designEditViewHas(view, "fills")) return view.type + " does not support fills";
++      set("fills", designEditSolidPaint(edit.color, edit.opacity));
++      return null;
+     case "setStroke":
+-      return "strokes" in node && !DESIGN_EDIT_STROKE_TYPES_EXCLUDED.has(node.type) ? null : node.type + " does not support strokes";
++      if (!designEditViewHas(view, "strokes") || DESIGN_EDIT_STROKE_TYPES_EXCLUDED.has(view.type)) return view.type + " does not support strokes";
++      set("strokes", designEditSolidPaint(edit.color, 1));
++      return null;
+     case "setCornerRadius":
+-      return "cornerRadius" in node ? null : node.type + " does not support cornerRadius";
++      return designEditViewHas(view, "cornerRadius") ? null : view.type + " does not support cornerRadius";
+     case "setOpacity": case "setVisible": case "rename":
+       return null;
+     case "setText":
+-    case "setTextStyle":
+-      if (node.type !== "TEXT") return edit.op + " requires a TEXT node, got " + node.type;
+-      if (node.fontName === mixed && !(edit.op === "setTextStyle" && (edit.fontFamily || edit.fontStyle))) {
+-        return "text " + node.id + " uses mixed fonts; set fontFamily/fontStyle explicitly or edit it by hand";
++    case "setTextStyle": {
++      if (view.type !== "TEXT") return edit.op + " requires a TEXT node, got " + view.type;
++      const current = get("fontName");
++      const changesFont = edit.op === "setTextStyle" && (edit.fontFamily || edit.fontStyle);
++      if (current === ctx.runtime.mixed && !changesFont) return "text " + view.ref + " uses mixed fonts; set fontFamily/fontStyle explicitly or edit it by hand";
++      // Figma 写 characters/fontSize/fontName 前要求原字体已加载（回滚写回原字体也一样）；改字体还需新字体。
++      if (current && current !== ctx.runtime.mixed) designEditAddFont(ctx, current, index);
++      if (changesFont) {
++        const base = current && current !== ctx.runtime.mixed ? current : {};
++        const next = { family: edit.fontFamily || base.family, style: edit.fontStyle || base.style || "Regular" };
++        if (!next.family) return "text " + view.ref + " uses mixed fonts; set fontFamily explicitly";
++        designEditAddFont(ctx, next, index);
++        set("fontName", next);
+       }
+       return null;
++    }
+     case "setAutoLayout":
+-      return DESIGN_EDIT_AUTO_LAYOUT_TYPES.has(node.type) ? null : "setAutoLayout requires FRAME/COMPONENT/INSTANCE, got " + node.type;
++      if (!DESIGN_EDIT_AUTO_LAYOUT_TYPES.has(view.type)) return "setAutoLayout requires FRAME/COMPONENT/INSTANCE, got " + view.type;
++      set("layoutMode", edit.mode);
++      return null;
+     case "setLayoutSizing": {
+-      const parent = node.parent;
+-      const parentIsAutoLayout = parent && parent.layoutMode && parent.layoutMode !== "NONE";
+-      const selfIsAutoLayout = node.layoutMode && node.layoutMode !== "NONE";
+-      if (!("layoutSizingHorizontal" in node)) return node.type + " does not support layout sizing";
+-      if ((edit.horizontal === "FILL" || edit.vertical === "FILL") && !parentIsAutoLayout) return "FILL requires an auto layout parent for " + node.id;
+-      if ((edit.horizontal === "HUG" || edit.vertical === "HUG") && !selfIsAutoLayout && node.type !== "TEXT") return "HUG requires an auto layout frame or text for " + node.id;
++      if (!designEditViewHas(view, "layoutSizingHorizontal")) return view.type + " does not support layout sizing";
++      const parent = designEditParentView(ctx.sim, view);
++      const parentMode = parent ? designEditViewGet(parent, "layoutMode") : "NONE";
++      const selfMode = get("layoutMode");
++      if ((edit.horizontal === "FILL" || edit.vertical === "FILL") && (!parentMode || parentMode === "NONE")) {
++        return "FILL requires an auto layout parent for " + view.ref + " at this point in the batch";
++      }
++      if ((edit.horizontal === "HUG" || edit.vertical === "HUG") && (!selfMode || selfMode === "NONE") && view.type !== "TEXT") {
++        return "HUG requires an auto layout frame or text for " + view.ref + " at this point in the batch";
++      }
+       return null;
+     }
++    case "setInstanceProperties": {
++      if (view.type !== "INSTANCE") return "setInstanceProperties requires an INSTANCE, got " + view.type;
++      const types = await designEditInstancePropertyTypes(view, ctx);
++      for (const name of Object.keys(edit.properties)) {
++        const reason = designEditCheckInstanceValue(name, types[name], edit.properties[name]);
++        if (reason) return reason;
++      }
++      return null;
++    }
++    case "bindVariable":
++      return designEditSimulateBind(edit, view, ctx, step);
+     default:
+       return "unsupported op in this build: " + edit.op;
+   }
+ }
+ 
+-function designEditPageOf(node) {
+-  let current = node;
+-  while (current && current.type !== "PAGE") current = current.parent;
+-  return current || null;
++/** bindVariable：颜色变量绑到单一纯色填充/描边，数值变量绑到节点数值属性。 */
++async function designEditSimulateBind(edit, view, ctx, step) {
++  const variable = ctx.runtime.getVariableById ? await ctx.runtime.getVariableById(edit.variableId) : null;
++  if (!variable) return "variable not found: " + edit.variableId;
++  step.variable = variable;
++  if (edit.field === "fills" || edit.field === "strokes") {
++    if (variable.resolvedType !== "COLOR") return edit.field + " needs a COLOR variable, got " + variable.resolvedType;
++    if (!designEditViewHas(view, edit.field)) return view.type + " does not support " + edit.field;
++    if (!designEditIsSingleSolid(designEditViewGet(view, edit.field))) return edit.field + " of " + view.ref + " must be a single solid paint at this point in the batch; setFill/setStroke first";
++    return null;
++  }
++  if (variable.resolvedType !== "FLOAT") return edit.field + " needs a FLOAT variable, got " + variable.resolvedType;
++  if (!designEditViewHas(view, edit.field)) return view.type + " does not support " + edit.field;
++  if (typeof designEditViewGet(view, edit.field) !== "number" && view.node) return edit.field + " of " + view.ref + " is mixed; set a single value first";
++  return null;
++}
++
++/** 按批次顺序模拟全部 edit，收集阻塞原因和需要加载的字体；不写入任何节点。 */
++async function designEditPrecheck(edits, runtime) {
++  const ctx = { runtime, sim: { views: new Map(), temps: new Map() }, page: null, fonts: new Map() };
++  const steps = [];
++  const blockingErrors = [];
++  for (let index = 0; index < edits.length; index += 1) {
++    const edit = edits[index];
++    const step = { index, edit, view: null };
++    steps.push(step);
++    let reason;
++    if (!DESIGN_EDIT_SUPPORTED_OPS.includes(edit.op)) reason = "unsupported op in this build: " + edit.op;
++    else if (DESIGN_EDIT_CREATE_OPS.has(edit.op)) reason = await designEditSimulateCreate(edit, index, ctx, step);
++    else reason = await designEditSimulateProperty(edit, index, ctx, step);
++    if (reason) blockingErrors.push({ index, op: edit.op, nodeId: edit.nodeId || edit.parentId, message: reason });
++  }
++  for (const { font, index } of ctx.fonts.values()) {
++    try {
++      await runtime.loadFont(font);
++    } catch (error) {
++      const edit = edits[index];
++      blockingErrors.push({ index, op: edit.op, nodeId: edit.nodeId || edit.parentId, message: "font unavailable: " + font.family + " " + font.style });
++    }
++  }
++  blockingErrors.sort((left, right) => left.index - right.index);
++  return { steps, blockingErrors, fontCount: ctx.fonts.size, nodeCount: ctx.sim.views.size, createCount: ctx.sim.temps.size };
++}
++
++// ─── 执行 ───
++
++function designEditInsert(parent, node, index) {
++  if (index === undefined) parent.appendChild(node);
++  else parent.insertChild(index, node);
++}
++
++function designEditPlace(node, edit) {
++  if (edit.x !== undefined) node.x = edit.x;
++  if (edit.y !== undefined) node.y = edit.y;
++}
++
++/** 执行创建类 edit。节点一创建就登记到 created，即使后续插入失败也会在回滚时删除。 */
++function designEditApplyCreate(step, parent, state, runtime) {
++  const edit = step.edit;
++  let node;
++  if (edit.op === "createFrame") {
++    node = runtime.createFrame();
++    state.created.push(node);
++    node.name = edit.name;
++    node.resize(edit.width, edit.height);
++  } else if (edit.op === "createText") {
++    node = runtime.createText();
++    state.created.push(node);
++    node.fontName = step.font;
++    node.characters = edit.characters;
++    if (edit.fontSize !== undefined) node.fontSize = edit.fontSize;
++  } else {
++    node = step.component.createInstance();
++    state.created.push(node);
++  }
++  designEditInsert(parent, node, edit.index);
++  designEditPlace(node, edit);
++  state.temps.set(edit.tempId, node);
++  return node;
+ }
+ 
+-/** 需要加载的字体：Figma 写 characters/fontSize/fontName 前都要求原字体已加载（回滚也会写回原字体）；改字体还需新字体。 */
+-function designEditFontsFor(edit, node, mixed) {
+-  if (!node || node.type !== "TEXT" || (edit.op !== "setText" && edit.op !== "setTextStyle")) return [];
+-  const current = node.fontName === mixed ? null : node.fontName;
+-  const fonts = current ? [current] : [];
+-  if (edit.op === "setTextStyle" && (edit.fontFamily || edit.fontStyle)) {
+-    fonts.push({ family: edit.fontFamily || (current && current.family), style: edit.fontStyle || (current && current.style) || "Regular" });
++function designEditApplyAutoLayout(edit, node) {
++  node.layoutMode = edit.mode;
++  if (edit.mode === "NONE") return;
++  if (edit.itemSpacing !== undefined) node.itemSpacing = edit.itemSpacing;
++  if (edit.padding !== undefined) {
++    const padding = typeof edit.padding === "number"
++      ? { top: edit.padding, right: edit.padding, bottom: edit.padding, left: edit.padding }
++      : edit.padding;
++    if (padding.top !== undefined) node.paddingTop = padding.top;
++    if (padding.right !== undefined) node.paddingRight = padding.right;
++    if (padding.bottom !== undefined) node.paddingBottom = padding.bottom;
++    if (padding.left !== undefined) node.paddingLeft = padding.left;
+   }
+-  return fonts;
++  if (edit.primaryAlign) node.primaryAxisAlignItems = edit.primaryAlign;
++  if (edit.counterAlign) node.counterAxisAlignItems = edit.counterAlign;
++  if (edit.sizing && edit.sizing.primary) node.primaryAxisSizingMode = edit.sizing.primary;
++  if (edit.sizing && edit.sizing.counter) node.counterAxisSizingMode = edit.sizing.counter;
+ }
+ 
+-function designEditApplyOne(edit, node) {
++/** 颜色变量只能绑到 Paint 上：取当前唯一的纯色 Paint，生成绑定后的副本再整体写回。 */
++function designEditBindPaint(node, field, variable, runtime) {
++  const paints = node[field];
++  if (!designEditIsSingleSolid(paints)) throw new Error(field + " of " + node.id + " is not a single solid paint");
++  node[field] = [runtime.bindPaint(designEditCloneValue(paints[0]), "color", variable)];
++}
++
++function designEditApplyOne(step, node, runtime) {
++  const edit = step.edit;
+   switch (edit.op) {
+     case "setFill": node.fills = designEditSolidPaint(edit.color, edit.opacity); return;
+     case "setStroke":
+@@ -341,51 +713,46 @@ function designEditApplyOne(edit, node) {
+       if (edit.fontSize !== undefined) node.fontSize = edit.fontSize;
+       if (edit.align) node.textAlignHorizontal = edit.align;
+       return;
+-    case "setAutoLayout": {
+-      node.layoutMode = edit.mode;
+-      if (edit.mode === "NONE") return;
+-      if (edit.itemSpacing !== undefined) node.itemSpacing = edit.itemSpacing;
+-      if (edit.padding !== undefined) {
+-        const padding = typeof edit.padding === "number"
+-          ? { top: edit.padding, right: edit.padding, bottom: edit.padding, left: edit.padding }
+-          : edit.padding;
+-        if (padding.top !== undefined) node.paddingTop = padding.top;
+-        if (padding.right !== undefined) node.paddingRight = padding.right;
+-        if (padding.bottom !== undefined) node.paddingBottom = padding.bottom;
+-        if (padding.left !== undefined) node.paddingLeft = padding.left;
+-      }
+-      if (edit.primaryAlign) node.primaryAxisAlignItems = edit.primaryAlign;
+-      if (edit.counterAlign) node.counterAxisAlignItems = edit.counterAlign;
+-      if (edit.sizing && edit.sizing.primary) node.primaryAxisSizingMode = edit.sizing.primary;
+-      if (edit.sizing && edit.sizing.counter) node.counterAxisSizingMode = edit.sizing.counter;
+-      return;
+-    }
++    case "setAutoLayout": designEditApplyAutoLayout(edit, node); return;
+     case "setLayoutSizing":
+       if (edit.horizontal) node.layoutSizingHorizontal = edit.horizontal;
+       if (edit.vertical) node.layoutSizingVertical = edit.vertical;
+       return;
++    case "setInstanceProperties": node.setProperties(designEditCloneValue(edit.properties)); return;
++    case "bindVariable":
++      if (edit.field === "fills" || edit.field === "strokes") designEditBindPaint(node, edit.field, step.variable, runtime);
++      else node.setBoundVariable(edit.field, step.variable);
++      return;
+     default:
+       throw new Error("unsupported op in this build: " + edit.op);
+   }
+ }
+ 
+-/** 记录每个节点首次被触碰前的原值，以及几何信息（auto layout 会连带改变尺寸和子节点位置）。 */
+-function designEditCaptureSnapshot(entries, node, keys) {
+-  let entry = entries.get(node.id);
+-  if (!entry) {
+-    entry = { node, values: new Map(), geometry: { x: node.x, y: node.y, width: node.width, height: node.height }, children: null };
+-    entries.set(node.id, entry);
+-  }
+-  for (const key of keys) {
+-    if (!entry.values.has(key) && key in node) entry.values.set(key, designEditCloneValue(node[key]));
++// ─── 快照与回滚 ───
++// 回滚表只登记已有节点；新建节点记在 state.created，回滚时直接删除。
++
++function designEditSnapshotFor(node) {
++  return {
++    node, values: new Map(), bindings: new Map(),
++    geometry: { x: node.x, y: node.y, width: node.width, height: node.height }, children: null,
++  };
++}
++
++/** 记录单条 edit 将改动的键在执行前的原值、数值变量绑定，以及 auto layout 可能挪动的子节点几何。 */
++function designEditCaptureSnapshot(node, edit) {
++  const snapshot = designEditSnapshotFor(node);
++  for (const key of designEditPropertyKeys(edit)) {
++    if (designEditHasKey(node, key)) snapshot.values.set(key, designEditCloneValue(designEditReadKey(node, key)));
+   }
+-  if (keys.includes("layoutMode") && !entry.children && Array.isArray(node.children)) {
+-    entry.children = node.children.map((child) => ({ node: child, x: child.x, y: child.y, width: child.width, height: child.height }));
++  for (const key of designEditBindingKeys(edit)) snapshot.bindings.set(key, designEditBoundId(node, key));
++  // 改 auto layout、子节点尺寸模式、宽高都可能重排兄弟或子节点：记录相关容器的子节点位置。
++  if (Array.isArray(node.children) && (edit.op === "setAutoLayout" || edit.op === "bindVariable")) {
++    snapshot.children = node.children.map((child) => ({ node: child, x: child.x, y: child.y, width: child.width, height: child.height }));
+   }
+-  return entry;
++  return snapshot;
+ }
+ 
+-/** 把单条 edit 执行前的快照并入回滚表；节点首次入表时连同执行前的几何信息一起记录，已有的原值不覆盖。 */
++/** 把执行前快照并入回滚表；同一节点只保留最早的原值、绑定和几何信息。 */
+ function designEditMergeSnapshot(entries, snapshot) {
+   const existing = entries.get(snapshot.node.id);
+   if (!existing) {
+@@ -393,19 +760,64 @@ function designEditMergeSnapshot(entries, snapshot) {
+     return;
+   }
+   for (const [key, value] of snapshot.values) if (!existing.values.has(key)) existing.values.set(key, value);
++  for (const [key, value] of snapshot.bindings) if (!existing.bindings.has(key)) existing.bindings.set(key, value);
+   if (!existing.children && snapshot.children) existing.children = snapshot.children;
+ }
+ 
++/** 失败那条可能已写入部分属性：只保留实际发生变化的键，避免回滚时重写刚被 Figma 拒绝的属性。 */
++function designEditTrimUnchanged(snapshot) {
++  const node = snapshot.node;
++  for (const key of Array.from(snapshot.values.keys())) {
++    if (designEditSameValue(designEditReadKey(node, key), snapshot.values.get(key))) snapshot.values.delete(key);
++  }
++  for (const key of Array.from(snapshot.bindings.keys())) {
++    if (designEditBoundId(node, key) === snapshot.bindings.get(key)) snapshot.bindings.delete(key);
++  }
++}
++
+ function designEditResize(node, width, height) {
+   if (typeof node.resize === "function" && (node.width !== width || node.height !== height)) node.resize(width, height);
+ }
+ 
+-/** 回滚顺序：先恢复 layoutMode 等结构属性，再恢复尺寸/位置，最后其余属性；结束后逐项核对。 */
+-export function designEditRollback(entries, mixed) {
++const DESIGN_EDIT_RESTORE_FIRST = ["layoutMode", "primaryAxisSizingMode", "counterAxisSizingMode", "layoutSizingHorizontal", "layoutSizingVertical"];
++
++function designEditRestoreKey(node, key, value) {
++  if (key.startsWith(DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX)) {
++    node.setProperties({ [key.slice(DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX.length)]: value });
++    return;
++  }
++  node[key] = designEditCloneValue(value);
++}
++
++async function designEditRestoreBindings(entry, runtime, errors, phase) {
++  for (const [key, originalId] of entry.bindings) {
++    if (designEditBoundId(entry.node, key) === originalId) continue;
++    try {
++      if (phase === "unbind") entry.node.setBoundVariable(key, null);
++      else if (originalId) entry.node.setBoundVariable(key, await runtime.getVariableById(originalId));
++    } catch (error) {
++      errors.push(phase + " " + key + " on " + entry.node.id + ": " + designEditErrorMessage(error));
++    }
++  }
++}
++
++/**
++ * 回滚：先删除本批新建的节点（倒序），再恢复已有节点。
++ * 已有节点的顺序：解除新绑定 → 结构属性（layoutMode 等）→ 尺寸/位置 → 其余属性 → 重建原绑定 → 子节点位置；最后逐项核对。
++ */
++export async function designEditRollback(state, runtime) {
++  const mixed = runtime.mixed;
+   const errors = [];
+   const mismatches = [];
+-  const ordered = Array.from(entries.values()).reverse();
+-  const FIRST = ["layoutMode", "primaryAxisSizingMode", "counterAxisSizingMode", "layoutSizingHorizontal", "layoutSizingVertical"];
++  const created = state.created || [];
++  for (const node of created.slice().reverse()) {
++    try {
++      if (!node.removed) node.remove();
++    } catch (error) {
++      errors.push("remove created " + node.id + ": " + designEditErrorMessage(error));
++    }
++  }
++  const ordered = Array.from(state.entries.values()).reverse();
+   for (const entry of ordered) {
+     const node = entry.node;
+     const restore = (key) => {
+@@ -413,40 +825,45 @@ export function designEditRollback(entries, mixed) {
+       const value = entry.values.get(key);
+       if (value === mixed) return;
+       try {
+-        node[key] = designEditCloneValue(value);
++        designEditRestoreKey(node, key, value);
+       } catch (error) {
+-        errors.push("restore " + key + " on " + node.id + ": " + (error && error.message ? error.message : String(error)));
++        errors.push("restore " + key + " on " + node.id + ": " + designEditErrorMessage(error));
+       }
+     };
+-    FIRST.forEach(restore);
++    await designEditRestoreBindings(entry, runtime, errors, "unbind");
++    DESIGN_EDIT_RESTORE_FIRST.forEach(restore);
+     try {
+       designEditResize(node, entry.geometry.width, entry.geometry.height);
+       node.x = entry.geometry.x;
+       node.y = entry.geometry.y;
+     } catch (error) {
+-      errors.push("restore geometry on " + node.id + ": " + (error && error.message ? error.message : String(error)));
++      errors.push("restore geometry on " + node.id + ": " + designEditErrorMessage(error));
+     }
+-    for (const key of entry.values.keys()) if (!FIRST.includes(key)) restore(key);
++    for (const key of entry.values.keys()) if (!DESIGN_EDIT_RESTORE_FIRST.includes(key)) restore(key);
++    await designEditRestoreBindings(entry, runtime, errors, "rebind");
+     for (const child of entry.children || []) {
+       try {
+         designEditResize(child.node, child.width, child.height);
+         child.node.x = child.x;
+         child.node.y = child.y;
+       } catch (error) {
+-        errors.push("restore child geometry " + child.node.id + ": " + (error && error.message ? error.message : String(error)));
++        errors.push("restore child geometry " + child.node.id + ": " + designEditErrorMessage(error));
+       }
+     }
+   }
++  for (const node of created) if (!node.removed) mismatches.push({ nodeId: node.id, key: "removed" });
+   for (const entry of ordered) {
+     for (const [key, expected] of entry.values) {
+-      if (expected === mixed) continue;
+-      const actual = entry.node[key];
+-      if (JSON.stringify(designEditCloneValue(actual)) !== JSON.stringify(expected)) {
+-        mismatches.push({ nodeId: entry.node.id, key });
+-      }
++      if (expected !== mixed && !designEditSameValue(designEditReadKey(entry.node, key), expected)) mismatches.push({ nodeId: entry.node.id, key });
++    }
++    for (const [key, expected] of entry.bindings) {
++      if (designEditBoundId(entry.node, key) !== expected) mismatches.push({ nodeId: entry.node.id, key: "binding:" + key });
+     }
+   }
+-  return { pass: errors.length === 0 && mismatches.length === 0, restoredNodes: ordered.length, errors, mismatches };
++  return {
++    pass: errors.length === 0 && mismatches.length === 0,
++    restoredNodes: ordered.length, removedNodes: created.length, errors, mismatches,
++  };
+ }
+ 
+ function designEditBriefValue(key, value, mixed) {
+@@ -456,113 +873,124 @@ function designEditBriefValue(key, value, mixed) {
+   return designEditCloneValue(value);
+ }
+ 
+-/** 执行一批属性编辑。返回结果对象；不调用 commitUndo（由 handler 在成功后调用）。 */
++/** 单条 edit 的前/后值摘要；新建节点没有 before，只报告 tempId 与新 id。 */
++function designEditDescribeStep(step, node, mixed, phase) {
++  const edit = step.edit;
++  const item = { index: step.index, op: edit.op, nodeId: edit.nodeId || edit.parentId || "" };
++  if (DESIGN_EDIT_CREATE_OPS.has(edit.op)) {
++    item.tempId = edit.tempId;
++    if (node) item.createdId = node.id;
++    return item;
++  }
++  item.nodeName = node ? node.name : "";
++  if (node) {
++    const values = {};
++    for (const key of designEditPropertyKeys(edit)) if (designEditHasKey(node, key)) values[key] = designEditBriefValue(key, designEditReadKey(node, key), mixed);
++    if (edit.op === "bindVariable") values["binding:" + edit.field] = designEditBoundId(node, edit.field) || (edit.field === "fills" || edit.field === "strokes" ? designEditPaintBinding(node, edit.field) : null);
++    item[phase] = values;
++  }
++  return item;
++}
++
++function designEditPaintBinding(node, field) {
++  const paints = Array.isArray(node[field]) ? node[field] : [];
++  const bound = paints[0] && paints[0].boundVariables && paints[0].boundVariables.color;
++  return bound && bound.id ? String(bound.id) : null;
++}
++
++/** 返回 step 当前对应的真实节点：已有节点即 view.node，新建节点按 temp 映射查找。 */
++function designEditStepNode(step, state) {
++  if (DESIGN_EDIT_CREATE_OPS.has(step.edit.op)) return state.temps.get(step.edit.tempId) || null;
++  const view = step.view;
++  if (!view) return null;
++  return view.created ? state.temps.get(view.ref.slice(5)) || null : view.node;
++}
++
++function designEditBlockedResult(status, dryRun, preview, blockingErrors, editCount) {
++  return {
++    status, allPass: false, dryRun, applied: 0, edits: preview, blockingErrors,
++    errors: blockingErrors.slice(0, 5).map((item) => "edit " + item.index + " (" + item.op + "): " + item.message),
++    summary: { editCount, applied: 0, blocking: blockingErrors.length, dryRun },
++  };
++}
++
++/** 执行一批编辑。返回结果对象；不调用 commitUndo（由 handler 在成功后调用）。 */
+ export async function designEditApplyEdits(job, runtime) {
+   const edits = Array.isArray(job && job.edits) ? job.edits : [];
+   const dryRun = Boolean(job && job.dryRun);
+   const mixed = runtime.mixed;
+   const log = runtime.log || function () {};
+-  const blockingErrors = [];
+ 
+-  // 1. 预检：解析节点、检查类型、同页、字体；全部在写入前完成。
+-  const nodes = [];
+-  let page = null;
+-  for (let index = 0; index < edits.length; index += 1) {
+-    const edit = edits[index];
+-    if (!DESIGN_EDIT_PROPERTY_OPS.includes(edit.op)) {
+-      blockingErrors.push({ index, op: edit.op, message: "unsupported op in this build: " + edit.op });
+-      nodes.push(null);
+-      continue;
+-    }
+-    const node = String(edit.nodeId || "").startsWith("temp:") ? null : await runtime.getNodeById(edit.nodeId);
+-    if (node && !page) page = designEditPageOf(node);
+-    const reason = String(edit.nodeId || "").startsWith("temp:")
+-      ? "temp references require create ops, which are not available in this build"
+-      : designEditPrecheckEdit(edit, node, mixed, page);
+-    if (reason) blockingErrors.push({ index, op: edit.op, nodeId: edit.nodeId, message: reason });
+-    nodes.push(node);
+-  }
+-  const fonts = new Map();
+-  edits.forEach((edit, index) => {
+-    for (const font of designEditFontsFor(edit, nodes[index], mixed)) {
+-      if (font && font.family && font.style) fonts.set(designEditFontKey(font), { font, index });
+-    }
++  // 1. 模拟预检：全部在写入前完成。
++  const precheck = await designEditPrecheck(edits, runtime);
++  const { steps, blockingErrors } = precheck;
++  log("precheck", {
++    editCount: edits.length, nodeCount: precheck.nodeCount, createCount: precheck.createCount,
++    fontCount: precheck.fontCount, blockingCount: blockingErrors.length, dryRun,
+   });
+-  for (const { font, index } of fonts.values()) {
+-    try {
+-      await runtime.loadFont(font);
+-    } catch (error) {
+-      blockingErrors.push({ index, op: edits[index].op, nodeId: edits[index].nodeId, message: "font unavailable: " + font.family + " " + font.style });
+-    }
+-  }
+-  log("precheck", { editCount: edits.length, nodeCount: new Set(nodes.filter(Boolean).map((node) => node.id)).size, fontCount: fonts.size, blockingCount: blockingErrors.length, dryRun });
+-
+-  const preview = edits.map((edit, index) => {
+-    const node = nodes[index];
+-    const before = {};
+-    if (node) for (const key of designEditPropertyKeys(edit)) if (key in node) before[key] = designEditBriefValue(key, node[key], mixed);
+-    return { index, op: edit.op, nodeId: edit.nodeId, nodeName: node ? node.name : "", before };
+-  });
+-
+-  if (blockingErrors.length > 0) {
+-    return {
+-      status: "blocked", allPass: false, dryRun, applied: 0, edits: preview, blockingErrors,
+-      errors: blockingErrors.slice(0, 5).map((item) => "edit " + item.index + " (" + item.op + "): " + item.message),
+-      summary: { editCount: edits.length, applied: 0, blocking: blockingErrors.length, dryRun },
+-    };
+-  }
++  const preview = steps.map((step) => designEditDescribeStep(step, step.view && !step.view.created ? step.view.node : null, mixed, "before"));
++  if (blockingErrors.length > 0) return designEditBlockedResult("blocked", dryRun, preview, blockingErrors, edits.length);
+   if (dryRun) {
+     return {
+       status: "completed", allPass: true, dryRun: true, applied: 0, edits: preview, blockingErrors: [], errors: [],
+-      summary: { editCount: edits.length, applied: 0, blocking: 0, dryRun: true },
++      summary: { editCount: edits.length, applied: 0, created: 0, blocking: 0, dryRun: true },
+     };
+   }
+ 
+-  // 2. 快照 + 3. 逐条应用；任一失败即回滚。
+-  // 快照先记到临时表，只有该条 edit 成功后才并入回滚表：失败那条若有部分属性已写入，单独按其临时快照恢复，
+-  // 不会去重写那个刚刚拒绝写入的属性。
+-  const entries = new Map();
++  // 2. 逐条应用。已有节点：执行前快照，成功后并入回滚表；新建节点：登记到 created。任一失败即回滚。
++  const state = { entries: new Map(), created: [], temps: new Map() };
+   let applied = 0;
+-  for (let index = 0; index < edits.length; index += 1) {
+-    const edit = edits[index];
+-    const node = nodes[index];
+-    const keys = designEditPropertyKeys(edit);
+-    const pending = new Map();
+-    designEditCaptureSnapshot(pending, node, keys);
++  for (const step of steps) {
++    const edit = step.edit;
++    let pending = null;
+     try {
+-      designEditApplyOne(edit, node);
+-      designEditMergeSnapshot(entries, pending.get(node.id));
++      if (DESIGN_EDIT_CREATE_OPS.has(edit.op)) {
++        const parent = step.parentView.created ? state.temps.get(step.parentView.ref.slice(5)) : step.parentView.node;
++        // 插入新节点会改变 auto layout 父级的尺寸和其余子节点的位置：先记录父级几何。
++        if (!step.parentView.created) {
++          pending = designEditSnapshotFor(parent);
++          pending.children = Array.isArray(parent.children) ? parent.children.map((child) => ({ node: child, x: child.x, y: child.y, width: child.width, height: child.height })) : null;
++        }
++        designEditApplyCreate(step, parent, state, runtime);
++      } else {
++        const node = designEditStepNode(step, state);
++        if (!node) throw new Error("target node missing at apply time: " + edit.nodeId);
++        if (!step.view.created) pending = designEditCaptureSnapshot(node, edit);
++        designEditApplyOne(step, node, runtime);
++      }
++      if (pending) designEditMergeSnapshot(state.entries, pending);
+       applied += 1;
+     } catch (error) {
+-      // 失败那条可能已写入部分属性（如 setAutoLayout 写了 layoutMode 后在 padding 处出错）：只恢复实际变化的键。
+-      const partial = pending.get(node.id);
+-      for (const key of Array.from(partial.values.keys())) {
+-        if (JSON.stringify(designEditCloneValue(node[key])) === JSON.stringify(partial.values.get(key))) partial.values.delete(key);
++      if (pending) {
++        designEditTrimUnchanged(pending);
++        designEditMergeSnapshot(state.entries, pending);
+       }
+-      if (partial.values.size > 0) designEditMergeSnapshot(entries, partial);
+-      const message = error && error.message ? error.message : String(error);
+-      log("apply-failed", { index, op: edit.op, nodeId: edit.nodeId, applied, error: message });
+-      const rollback = designEditRollback(entries, mixed);
+-      log("rollback", { restoredNodes: rollback.restoredNodes, errorCount: rollback.errors.length, mismatchCount: rollback.mismatches.length, pass: rollback.pass });
++      const message = designEditErrorMessage(error);
++      log("apply-failed", { index: step.index, op: edit.op, nodeId: edit.nodeId || edit.parentId, applied, error: message });
++      const rollback = await designEditRollback(state, runtime);
++      log("rollback", {
++        restoredNodes: rollback.restoredNodes, removedNodes: rollback.removedNodes,
++        errorCount: rollback.errors.length, mismatchCount: rollback.mismatches.length, pass: rollback.pass,
++      });
+       return {
+-        status: "error", allPass: false, dryRun: false, applied: 0, failedIndex: index, edits: preview, rollback,
+-        blockingErrors: [{ index, op: edit.op, nodeId: edit.nodeId, message }],
+-        errors: ["edit " + index + " (" + edit.op + ") failed: " + message + (rollback.pass ? "; batch rolled back" : "; rollback incomplete")],
++        status: "error", allPass: false, dryRun: false, applied: 0, failedIndex: step.index, edits: preview, rollback,
++        blockingErrors: [{ index: step.index, op: edit.op, nodeId: edit.nodeId || edit.parentId, message }],
++        errors: ["edit " + step.index + " (" + edit.op + ") failed: " + message + (rollback.pass ? "; batch rolled back" : "; rollback incomplete")],
+         summary: { editCount: edits.length, applied: 0, attempted: applied + 1, rolledBack: rollback.pass, dryRun: false },
+       };
+     }
+   }
+ 
+-  const results = preview.map((item, index) => {
+-    const node = nodes[index];
+-    const after = {};
+-    for (const key of designEditPropertyKeys(edits[index])) if (key in node) after[key] = designEditBriefValue(key, node[key], mixed);
+-    return { ...item, after };
++  const results = steps.map((step, index) => {
++    const after = designEditDescribeStep(step, designEditStepNode(step, state), mixed, "after");
++    return { ...preview[index], ...after };
+   });
+-  log("applied", { applied, nodeCount: entries.size });
++  const createdIds = {};
++  for (const [tempId, node] of state.temps) createdIds[tempId] = node.id;
++  log("applied", { applied, nodeCount: state.entries.size, created: state.created.length });
+   return {
+-    status: "completed", allPass: true, dryRun: false, applied, edits: results, blockingErrors: [], errors: [],
+-    summary: { editCount: edits.length, applied, nodeCount: entries.size, dryRun: false },
++    status: "completed", allPass: true, dryRun: false, applied, edits: results, createdIds, blockingErrors: [], errors: [],
++    summary: { editCount: edits.length, applied, nodeCount: state.entries.size, created: state.created.length, dryRun: false },
+   };
+ }
+ 
+@@ -578,6 +1006,11 @@ async function handleFigmaApplyEdits(message) {
+     result = await designEditApplyEdits(job, {
+       getNodeById: (id) => figma.getNodeByIdAsync(id).catch(() => null),
+       loadFont: (font) => figma.loadFontAsync(font),
++      getMainComponent: (node) => node.getMainComponentAsync().catch(() => null),
++      getVariableById: (id) => figma.variables.getVariableByIdAsync(id).catch(() => null),
++      createFrame: () => figma.createFrame(),
++      createText: () => figma.createText(),
++      bindPaint: (paint, field, variable) => figma.variables.setBoundVariableForPaint(paint, field, variable),
+       mixed: figma.mixed,
+       log: (stage, data) => operation.step(stage, "设计编辑 " + stage, data),
+     });
+@@ -600,7 +1033,12 @@ async function handleFigmaInspectNodes(message) {
+   pluginLogger.info("设计编辑 inspect 开始", { requestId: message.requestId, nodeCount: Array.isArray(job.nodeIds) ? job.nodeIds.length : 0, depth: job.depth }, context);
+   let result;
+   try {
+-    result = await designEditInspectNodes(job, (id) => figma.getNodeByIdAsync(id).catch(() => null), figma.mixed);
++    result = await designEditInspectNodes(
++      job,
++      (id) => figma.getNodeByIdAsync(id).catch(() => null),
++      figma.mixed,
++      (node) => node.getMainComponentAsync().catch(() => null),
++    );
+     pluginLogger.info("设计编辑 inspect 完成", { requestId: message.requestId, ...result.summary }, context);
+   } catch (error) {
+     result = { status: "error", nodes: [], missing: [], truncated: false, errors: [error instanceof Error ? error.message : String(error)] };
+diff --git a/C:/Users/li182/.figma-relay-backup-20261102-step4/figma-design-edit-apply.test.mjs b/tests/figma-design-edit-apply.test.mjs
+index 7ff59be..b393ee2 100644
+--- a/C:/Users/li182/.figma-relay-backup-20261102-step4/figma-design-edit-apply.test.mjs
++++ b/tests/figma-design-edit-apply.test.mjs
+@@ -75,7 +75,47 @@ function runtime(roots, options = {}) {
+       loaded.add(key);
+     },
+     log: (stage, data) => logs.push({ stage, data }),
++    getMainComponent: async (node) => node.mainComponentNode || null,
++    getVariableById: async (id) => (options.variables && options.variables[id]) || null,
++    createFrame: () => {
++      return container(createdNode(frame("new:" + (map.size + 1)), map));
++    },
++    createText: () => createdNode(text("new:" + (map.size + 1), loaded), map),
++    bindPaint: (paint, field, variable) => ({ ...paint, boundVariables: { [field]: { type: "VARIABLE_ALIAS", id: variable.id } } }),
++  };
++}
++
++/** 模拟新建节点：可插入父容器、可删除（remove 后从父级摘除并标记 removed）。 */
++function createdNode(node, map) {
++  map.set(node.id, node);
++  node.removed = false;
++  node.remove = () => {
++    if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1);
++    node.parent = null;
++    node.removed = true;
++  };
++  return node;
++}
++
++/** 给模拟容器加上 appendChild/insertChild。 */
++function container(node) {
++  node.appendChild = (child) => adopt(node, child);
++  node.insertChild = (index, child) => {
++    if (index > node.children.length) throw new Error("index out of range");
++    child.parent = node;
++    node.children.splice(index, 0, child);
++  };
++  return node;
++}
++
++/** 模拟数值属性的变量绑定：setBoundVariable 写 boundVariables[field]。 */
++function bindable(node) {
++  node.boundVariables = {};
++  node.setBoundVariable = (field, variable) => {
++    if (variable) node.boundVariables[field] = { type: "VARIABLE_ALIAS", id: variable.id };
++    else delete node.boundVariables[field];
+   };
++  return node;
+ }
+ 
+ test("property edits apply and report before/after", async () => {
+@@ -159,7 +199,7 @@ test("pages, cross-page targets and temp references are refused", async () => {
+   const messages = result.blockingErrors.map((item) => item.message).join(" | ");
+   assert.match(messages, /not on the same page/);
+   assert.match(messages, /refuse to edit PAGE/);
+-  assert.match(messages, /temp references/);
++  assert.match(messages, /temp reference used before creation: temp:x/);
+   assert.equal(a.name, "1:2");
+ });
+ 
+@@ -286,11 +326,246 @@ test("rollback restores the original geometry when an auto layout edit resized t
+   assert.equal(child.y, 30);
+ });
+ 
+-test("rollback reports values that could not be restored", () => {
++test("rollback reports values that could not be restored", async () => {
+   const node = frame("1:2", { cornerRadius: 5 });
+-  const entries = new Map([["1:2", { node, values: new Map([["cornerRadius", 5]]), geometry: { x: 0, y: 0, width: 100, height: 50 }, children: null }]]);
++  const entries = new Map([["1:2", {
++    node, values: new Map([["cornerRadius", 5]]), bindings: new Map(), geometry: { x: 0, y: 0, width: 100, height: 50 }, children: null,
++  }]]);
+   Object.defineProperty(node, "cornerRadius", { enumerable: true, get: () => 99, set: () => {} });
+-  const rollback = designEditRollback(entries, MIXED);
++  const rollback = await designEditRollback({ entries, created: [] }, { mixed: MIXED });
+   assert.equal(rollback.pass, false);
+   assert.deepEqual(rollback.mismatches, [{ nodeId: "1:2", key: "cornerRadius" }]);
+ });
++
++/** 返回一个调用 name setter 就抛错的节点，用来在指定位置制造执行期失败。 */
++function lockedFrame(id) {
++  const node = frame(id);
++  Object.defineProperty(node, "name", { enumerable: true, get: () => id, set: () => { throw new Error("locked"); } });
++  return node;
++}
++
++test("precheck simulates earlier edits in the same batch", async () => {
++  const child = frame("1:7");
++  const box = frame("1:2", { layoutMode: "HORIZONTAL" });
++  adopt(box, child);
++  const rt = runtime([page(box)]);
++  // 先关掉父级 auto layout 再对子节点设 FILL：执行前就应被拦下，而不是执行时失败再回滚。
++  const blocked = await designEditApplyEdits({
++    edits: [
++      { op: "setAutoLayout", nodeId: "1:2", mode: "NONE" },
++      { op: "setLayoutSizing", nodeId: "1:7", horizontal: "FILL" },
++    ],
++  }, rt);
++  assert.equal(blocked.status, "blocked");
++  assert.deepEqual(blocked.blockingErrors.map((item) => item.index), [1]);
++  assert.match(blocked.errors[0], /at this point in the batch/);
++  assert.equal(box.layoutMode, "HORIZONTAL");
++
++  // 反过来：先开 auto layout 再设 FILL，预检应放行。
++  const loose = frame("1:3");
++  const holder = frame("1:4");
++  adopt(holder, loose);
++  const ok = await designEditApplyEdits({
++    dryRun: true,
++    edits: [
++      { op: "setAutoLayout", nodeId: "1:4", mode: "VERTICAL" },
++      { op: "setLayoutSizing", nodeId: "1:3", horizontal: "FILL" },
++    ],
++  }, runtime([page(holder)]));
++  assert.equal(ok.status, "completed", JSON.stringify(ok.errors));
++});
++
++test("create ops build a subtree, resolve temp ids and report created ids", async () => {
++  const loaded = new Set();
++  const root = container(frame("1:2"));
++  const rt = runtime([page(root)], { loaded });
++  const result = await designEditApplyEdits({
++    edits: [
++      { op: "createFrame", parentId: "1:2", tempId: "card", name: "卡片", width: 200, height: 80, x: 10, y: 20 },
++      { op: "setAutoLayout", nodeId: "temp:card", mode: "HORIZONTAL", itemSpacing: 6 },
++      { op: "createText", parentId: "temp:card", tempId: "title", characters: "标题", fontSize: 18 },
++      { op: "setFill", nodeId: "temp:title", color: "#FF0000" },
++      { op: "setLayoutSizing", nodeId: "temp:title", horizontal: "FILL" },
++    ],
++  }, rt);
++  assert.equal(result.status, "completed", JSON.stringify(result.errors));
++  assert.equal(root.children.length, 1);
++  const card = root.children[0];
++  assert.equal(card.name, "卡片");
++  assert.equal(card.width, 200);
++  assert.equal(card.x, 10);
++  assert.equal(card.layoutMode, "HORIZONTAL");
++  const title = card.children[0];
++  assert.equal(title.characters, "标题");
++  assert.equal(title.fontSize, 18);
++  assert.equal(title.layoutSizingHorizontal, "FILL");
++  assert.deepEqual(result.createdIds, { card: card.id, title: title.id });
++  assert.ok(loaded.has("Inter/Regular"), "default font must be loaded before writing characters");
++});
++
++test("create ops are refused under pages, inside instances and past the child count", async () => {
++  const inst = container(frame("1:5", { type: "INSTANCE" }));
++  const host = container(frame("1:2"));
++  const rt = runtime([page(host, inst)]);
++  const result = await designEditApplyEdits({
++    edits: [
++      { op: "createFrame", parentId: "0:1", tempId: "a", name: "a", width: 10, height: 10 },
++      { op: "createFrame", parentId: "1:5", tempId: "b", name: "b", width: 10, height: 10 },
++      { op: "createFrame", parentId: "1:2", tempId: "c", name: "c", width: 10, height: 10, index: 3 },
++    ],
++  }, rt);
++  assert.equal(result.status, "blocked");
++  const messages = result.blockingErrors.map((item) => item.message).join(" | ");
++  assert.match(messages, /parent must be FRAME/);
++  assert.match(messages, /got INSTANCE/);
++  assert.match(messages, /exceeds child count 0/);
++  assert.equal(host.children.length, 0);
++});
++
++test("a failure after create ops removes created nodes and restores the parent", async () => {
++  const sibling = frame("1:7", { x: 50, y: 0 });
++  const root = container(frame("1:2", { layoutMode: "HORIZONTAL", width: 300 }));
++  adopt(root, sibling);
++  const rt = runtime([page(root, lockedFrame("1:8"))]);
++  const result = await designEditApplyEdits({
++    edits: [
++      { op: "createFrame", parentId: "1:2", tempId: "box", name: "box", width: 40, height: 40, index: 0 },
++      { op: "createText", parentId: "temp:box", tempId: "t", characters: "x" },
++      { op: "rename", nodeId: "1:8", name: "y" },
++    ],
++  }, rt);
++  assert.equal(result.status, "error");
++  assert.equal(result.rollback.pass, true, JSON.stringify(result.rollback));
++  assert.equal(result.rollback.removedNodes, 2);
++  assert.deepEqual(root.children.map((child) => child.id), ["1:7"]);
++  assert.equal(root.width, 300);
++  assert.equal(sibling.x, 50);
++});
++/** 模拟组件集合：定义在 COMPONENT_SET 上，变体读定义会抛错（与 Figma 一致）。 */
++function componentSet() {
++  const set = { id: "5:1", type: "COMPONENT_SET", parent: null, componentPropertyDefinitions: {
++    State: { type: "VARIANT", variantOptions: ["Default", "Pressed"] },
++    "Label#1:0": { type: "TEXT" },
++    "Icon#2:0": { type: "BOOLEAN" },
++  } };
++  const created = [];
++  const variant = {
++    id: "5:2", type: "COMPONENT", parent: set, name: "State=Default",
++    get componentPropertyDefinitions() { throw new Error("read definitions from the component set"); },
++    createInstance() {
++      const props = { State: { type: "VARIANT", value: "Default" }, "Label#1:0": { type: "TEXT", value: "按钮" }, "Icon#2:0": { type: "BOOLEAN", value: true } };
++      const node = frame("9:" + (created.length + 1), { type: "INSTANCE", componentProperties: props, mainComponentNode: variant });
++      node.remove = () => { if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1); node.parent = null; node.removed = true; };
++      node.setProperties = (next) => { for (const key of Object.keys(next)) props[key] = { ...props[key], value: next[key] }; };
++      created.push(node);
++      return node;
++    },
++  };
++  return { set, variant, created };
++}
++
++test("createInstance and setInstanceProperties are checked against component definitions", async () => {
++  const { set, variant, created } = componentSet();
++  const root = container(frame("1:2"));
++  const rt = runtime([page(root), set, variant]);
++  const bad = await designEditApplyEdits({
++    edits: [
++      { op: "createInstance", parentId: "1:2", tempId: "btn", componentId: "5:1" },
++      { op: "createInstance", parentId: "1:2", tempId: "btn2", componentId: "5:2" },
++      { op: "setInstanceProperties", nodeId: "temp:btn2", properties: { State: "Hover" } },
++      { op: "setInstanceProperties", nodeId: "temp:btn2", properties: { "Icon#2:0": "yes" } },
++      { op: "setInstanceProperties", nodeId: "1:2", properties: { State: "Default" } },
++    ],
++  }, rt);
++  assert.equal(bad.status, "blocked");
++  const messages = bad.blockingErrors.map((item) => item.message).join(" | ");
++  assert.match(messages, /must be a COMPONENT/);
++  assert.match(messages, /no variant "Hover"; options: Default, Pressed/);
++  assert.match(messages, /Icon#2:0 expects a boolean/);
++  assert.match(messages, /requires an INSTANCE/);
++  assert.equal(created.length, 0, "blocked batch must not create instances");
++
++  const ok = await designEditApplyEdits({
++    edits: [
++      { op: "createInstance", parentId: "1:2", tempId: "btn", componentId: "5:2", x: 4 },
++      { op: "setInstanceProperties", nodeId: "temp:btn", properties: { State: "Pressed", "Label#1:0": "确定", "Icon#2:0": false } },
++    ],
++  }, rt);
++  assert.equal(ok.status, "completed", JSON.stringify(ok.errors));
++  const instance = root.children[0];
++  assert.equal(instance.x, 4);
++  assert.equal(instance.componentProperties.State.value, "Pressed");
++  assert.equal(instance.componentProperties["Icon#2:0"].value, false);
++});
++
++test("instance property edits on existing instances roll back", async () => {
++  const { set, variant } = componentSet();
++  const inst = variant.createInstance();
++  const rt = runtime([page(inst, lockedFrame("1:8")), set, variant]);
++  const result = await designEditApplyEdits({
++    edits: [
++      { op: "setInstanceProperties", nodeId: inst.id, properties: { State: "Pressed", "Label#1:0": "改" } },
++      { op: "rename", nodeId: "1:8", name: "y" },
++    ],
++  }, rt);
++  assert.equal(result.status, "error");
++  assert.equal(result.rollback.pass, true, JSON.stringify(result.rollback));
++  assert.equal(inst.componentProperties.State.value, "Default");
++  assert.equal(inst.componentProperties["Label#1:0"].value, "按钮");
++});
++
++const VARIABLES = {
++  "VariableID:1:1": { id: "VariableID:1:1", resolvedType: "COLOR" },
++  "VariableID:1:2": { id: "VariableID:1:2", resolvedType: "FLOAT" },
++  "VariableID:1:3": { id: "VariableID:1:3", resolvedType: "FLOAT" },
++};
++
++test("bindVariable checks types and binds colors to solid paints and numbers to fields", async () => {
++  const card = bindable(frame("1:2"));
++  const gradient = bindable(frame("1:3", { fills: [{ type: "GRADIENT_LINEAR", visible: true }] }));
++  const rt = runtime([page(card, gradient)], { variables: VARIABLES });
++  const bad = await designEditApplyEdits({
++    edits: [
++      { op: "bindVariable", nodeId: "1:2", field: "fills", variableId: "VariableID:1:2" },
++      { op: "bindVariable", nodeId: "1:2", field: "cornerRadius", variableId: "VariableID:1:1" },
++      { op: "bindVariable", nodeId: "1:3", field: "fills", variableId: "VariableID:1:1" },
++      { op: "bindVariable", nodeId: "1:2", field: "itemSpacing", variableId: "VariableID:9:9" },
++    ],
++  }, rt);
++  assert.equal(bad.status, "blocked");
++  const messages = bad.blockingErrors.map((item) => item.message).join(" | ");
++  assert.match(messages, /fills needs a COLOR variable, got FLOAT/);
++  assert.match(messages, /cornerRadius needs a FLOAT variable, got COLOR/);
++  assert.match(messages, /single solid paint at this point in the batch/);
++  assert.match(messages, /variable not found/);
++
++  // 渐变先改成纯色再绑颜色变量：预检按批次顺序推演，应放行。
++  const ok = await designEditApplyEdits({
++    edits: [
++      { op: "setFill", nodeId: "1:3", color: "#00FF00" },
++      { op: "bindVariable", nodeId: "1:3", field: "fills", variableId: "VariableID:1:1" },
++      { op: "bindVariable", nodeId: "1:2", field: "cornerRadius", variableId: "VariableID:1:2" },
++    ],
++  }, rt);
++  assert.equal(ok.status, "completed", JSON.stringify(ok.errors));
++  assert.equal(gradient.fills[0].boundVariables.color.id, "VariableID:1:1");
++  assert.equal(card.boundVariables.cornerRadius.id, "VariableID:1:2");
++  assert.equal(ok.edits[1].after["binding:fills"], "VariableID:1:1");
++});
++
++test("rollback unbinds new variables and restores the original binding", async () => {
++  const card = bindable(frame("1:2"));
++  card.boundVariables.cornerRadius = { type: "VARIABLE_ALIAS", id: "VariableID:1:3" };
++  const rt = runtime([page(card, lockedFrame("1:8"))], { variables: VARIABLES });
++  const result = await designEditApplyEdits({
++    edits: [
++      { op: "bindVariable", nodeId: "1:2", field: "cornerRadius", variableId: "VariableID:1:2" },
++      { op: "bindVariable", nodeId: "1:2", field: "opacity", variableId: "VariableID:1:2" },
++      { op: "rename", nodeId: "1:8", name: "y" },
++    ],
++  }, rt);
++  assert.equal(result.status, "error");
++  assert.equal(result.rollback.pass, true, JSON.stringify(result.rollback));
++  assert.equal(card.boundVariables.cornerRadius.id, "VariableID:1:3");
++  assert.equal(card.boundVariables.opacity, undefined);
++});
+diff --git a/C:/Users/li182/.figma-relay-backup-20261102-step4/figma-design-edit-inspect.test.mjs b/tests/figma-design-edit-inspect.test.mjs
+index e28490e..97d1b28 100644
+--- a/C:/Users/li182/.figma-relay-backup-20261102-step4/figma-design-edit-inspect.test.mjs
++++ b/tests/figma-design-edit-inspect.test.mjs
+@@ -99,6 +99,16 @@ test("instances report the main component and property values", () => {
+   });
+ });
+ 
++test("inspect resolves the main component asynchronously when sync access throws", async () => {
++  // dynamic-page 模式下同步读 mainComponent 会抛错，只能用 getMainComponentAsync。
++  const instance = frame("I5:6;7:8", { type: "INSTANCE", componentProperties: {} });
++  Object.defineProperty(instance, "mainComponent", { get: () => { throw new Error("use getMainComponentAsync"); } });
++  const root = frame("1:2", { children: [instance] });
++  const result = await designEditInspectNodes({ nodeIds: ["1:2"], depth: 1 }, lookup(root), MIXED, async () => ({ id: "7:8" }));
++  assert.equal(result.status, "completed");
++  assert.equal(result.nodes[0].children[0].instance.mainComponentId, "7:8");
++});
++
+ test("bound variables are reported as ids", () => {
+   const info = designEditDescribeNode(frame("1:2", {
+     boundVariables: { itemSpacing: { type: "VARIABLE_ALIAS", id: "VariableID:1:1" }, fills: [{ type: "VARIABLE_ALIAS", id: "VariableID:2:2" }] },

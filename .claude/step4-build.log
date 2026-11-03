@@ -1,0 +1,28 @@
+  prompt cleanup: cleanup.md, chars=359, placeholders=selectionBlock
+  prompt componentVariants: component-variants.md, chars=1083, placeholders=selectionBlock
+  prompt unity: unity.md, chars=1961, placeholders=selectionBlock,unityImageTargetFolder,unityProjectPath
+ui.html: synced 3 AI prompt templates from prompts/
+[FIGMA_RELAY_LOG] {"operation": "release_version_sync", "operationId": "release-version-0.1.48", "releaseVersion": "0.1.48", "result": "started", "stage": "started", "targetCount": 3}
+[FIGMA_RELAY_LOG] {"operation": "release_version_sync", "operationId": "release-version-0.1.48", "result": "in_progress", "stage": "progress", "target": "ui.html"}
+[FIGMA_RELAY_LOG] {"operation": "release_version_sync", "operationId": "release-version-0.1.48", "result": "in_progress", "stage": "progress", "target": "FigmaBridgeServer.cs"}
+[FIGMA_RELAY_LOG] {"operation": "release_version_sync", "operationId": "release-version-0.1.48", "result": "in_progress", "stage": "progress", "target": "src/config.ts"}
+[FIGMA_RELAY_LOG] {"operation": "release_version_sync", "operationId": "release-version-0.1.48", "releaseVersion": "0.1.48", "result": "succeeded", "stage": "succeeded", "targets": ["ui.html", "FigmaBridgeServer.cs", "src/config.ts"]}
+  + 03_image_health.mjs (48 lines)
+  + 00_logging.js (127 lines)
+  + 00_init.js (106 lines)
+  + 01_handlers.js (433 lines)
+  + 02_prefab_to_figma.js (976 lines)
+  + 03_figma_to_prefab.js (395 lines)
+  + 04_hierarchy.js (4516 lines)
+  + 05_utils.js (8140 lines)
+  + 06_psd_incremental.mjs (522 lines)
+  + 07_cleanup_snapshot.mjs (169 lines)
+  + 08_cleanup_transaction.mjs (748 lines)
+  + 09_export_psd.js (221 lines)
+  + 10_design_edit.mjs (1048 lines)
+  replacement: __BUILD_NUMBER__ -> 297 (5 occurrences)
+  manifest.json: ui path reverted to clean ui.html
+
+code.js: 17451 lines from 14 files (build #297)
+
+build exit 0
