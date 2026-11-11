@@ -1,4 +1,4 @@
-// Figma Relay build #327
+// Figma Relay build #329
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #327
+// Figma Relay build #329
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (327 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 327)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "327" });
+// DIAG: 插件启动标记 (329 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 329)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "329" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "327",
+        build: "329",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -14051,7 +14051,7 @@ async function handleExportImagesToUnity(message) {
 /**
  * 从选区中递归收集可导出的图片节点。
  * - 九宫父节点：返回父节点（附 nineSlice 信息）
- * - 普通图节点：导出自带 IMAGE fill 的节点
+ * - 普通图节点：导出自带 IMAGE fill 的节点，以及有可见填充或描边的非文本叶节点
  */
 function collectExportImageNodes(selection, diagnostics) {
   const visited = new Set();
@@ -14105,8 +14105,8 @@ function walkExportImageNodes(node, parentPath, visited, result, diagnostics, de
     return;
   }
 
-  // 普通图片节点
-  if (hasImageFill(node) && "exportAsync" in node && node.width > 0 && node.height > 0) {
+  // 位图填充与矢量图形均通过节点渲染导出 PNG，容器继续递归。
+  if ((hasImageFill(node) || shouldExportNodeAsImage(node)) && "exportAsync" in node && node.width > 0 && node.height > 0) {
     if (diagnostics) {
       diagnostics.push("识别普通图片：" + currentPath);
     }
@@ -14275,8 +14275,10 @@ async function handleExportSelectedTextStyleToUnity(message) {
 
     const fontSize = readFigmaFontSize(node);
     const fillColor = readFirstVisibleSolidPaintColor(node.fills);
+    const warnings = [];
+    // TMP 单色属性不能表达渐变或混合填充；跳过颜色，仍采集字号与材质。
     if (syncColor && !fillColor) {
-      throw new Error("当前文本没有可见的 SOLID 填充色，无法同步字体颜色。");
+      warnings.push("当前文本没有可同步的纯色填充（可能为渐变、混合颜色或无可见填充），已跳过颜色同步，保留 Unity 原颜色；字号、描边和阴影仍按选项同步。");
     }
 
     const strokeColor = readFirstVisibleSolidPaintColor(node.strokes);
@@ -14303,7 +14305,8 @@ async function handleExportSelectedTextStyleToUnity(message) {
       result: {
         status: "completed",
         style,
-        warnings: [],
+        syncColor: syncColor && !!fillColor,
+        warnings,
         errors: []
       }
     });
