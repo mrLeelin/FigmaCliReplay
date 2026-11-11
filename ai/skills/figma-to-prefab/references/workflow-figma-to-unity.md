@@ -218,7 +218,7 @@ anchoredPosition.y = pivotY - anchorMin.y * parentH - spanH * pivot.y
 
 ### 描边和阴影转换
 
-- Figma `strokeWeight` → TMP `_OutlineWidth`，公式：`_OutlineWidth = strokeWeight / (fontSize × 0.2)`，结果限制在 0 到 1。
+- Figma `strokeWeight` + `strokeAlign` → TMP `_OutlineWidth` / `_FaceDilate`，公式：`_OutlineWidth = strokeWeight × pointSize / (2 × padding × fontSize)`（限制在 0 到 1），外描边 `_FaceDilate = _OutlineWidth`；没有 `strokeAlign` 的旧清单保持 `7/3 × strokeWeight / fontSize` 与 `_OutlineWidth/2`。详见 `figma-ugui-import-conventions.md` §10。
 - Figma Stroke 颜色 → TMP `_OutlineColor`。该值通常在 Material Preset 中，不是 TMP 组件字段。
 - Figma Drop Shadow → TMP Underlay 时需要转换 `_UnderlayOffsetY`、`_UnderlaySoftness`、`_UnderlayColor`。这些通常也在 Material Preset 中。
 - 修改 Material Preset 属于资源写入，必须在计划中单独列出路径和风险，并等待确认。

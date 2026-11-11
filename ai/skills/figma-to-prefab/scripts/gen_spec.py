@@ -25,6 +25,7 @@ from common_texture import get_index
 import re
 import sys
 from auto_componentset_specs import apply_auto_componentsets_to_data
+from text_outline import cached_font_sdf_metrics, compute_text_outline, normalize_stroke_align, stroke_align_signature_token
 from name_utils import sanitize_name, normalize_unity_display_name, strip_outer_brackets, clamp, unity_node_name
 from constraints_utils import convert_figma_bounds_to_unity_rect, figma_constraints_to_rect_transform_spec
 from unity_project_paths import normalize_asset_path, resolve_unity_project
@@ -512,18 +513,28 @@ def color_to_hex(color):
     return f"{r:02x}{g:02x}{b:02x}{a:02x}"
 
 
-def build_text_material_spec(node, font_size):
+def current_font_sdf_metrics():
+    """读取当前 Unity 工程 CommonFont 的 SDF 采样参数（按工程路径缓存）。"""
+    return cached_font_sdf_metrics(str(UNITY_PROJECT))
+
+
+def build_text_material_spec(node, font_size, font_metrics=None):
     """根据 Figma 文本描边和投影生成可复用 TMP 材质需求。"""
     strokes = node.get("strokes", [])
     stroke_color = first_visible_solid_paint(strokes)
     stroke_weight = round_float(node.get("strokeWeight", 0), 2)
+    stroke_align = normalize_stroke_align(node.get("strokeAlign"))
     outline_width = 0.0
+    face_dilate = 0.0
     if stroke_color and stroke_weight > 0 and font_size > 0:
-        # OutlineWidth = 7/3 × strokeWeight/fontSize, FaceDilate = OutlineWidth/2
-        outline_width = round_float(clamp(7.0 / 3.0 * stroke_weight / max(font_size, 1), 0, 1), 2)
+        # 有 strokeAlign 时按字体 SDF 参数换算并由 FaceDilate 决定描边落点；旧清单保持 7/3 经验公式（见 text_outline.py）
+        metrics = (font_metrics or current_font_sdf_metrics()) if stroke_align else None
+        outline_width, face_dilate = compute_text_outline(stroke_weight, font_size, stroke_align, metrics)
     if outline_width <= 0.01:
         stroke_color = None
         outline_width = 0.0
+        face_dilate = 0.0
+        stroke_align = ""
 
     shadow = first_visible_drop_shadow(node.get("effects", []))
     underlay_color = None
@@ -554,7 +565,7 @@ def build_text_material_spec(node, font_size):
     outline_hex = color_to_hex(stroke_color) if stroke_color else "none"
     underlay_hex = color_to_hex(underlay_color) if underlay_color else "none"
     signature = (
-        f"o_{outline_hex}_w_{int(round(outline_width * 100)):03d}"
+        f"o_{outline_hex}_w_{int(round(outline_width * 100)):03d}{stroke_align_signature_token(stroke_align)}"
         f"_u_{underlay_hex}_x_{int(round((underlay_offset_x + 1) * 100)):03d}"
         f"_y_{int(round((underlay_offset_y + 1) * 100)):03d}"
         f"_s_{int(round(underlay_softness * 100)):03d}"
@@ -567,6 +578,8 @@ def build_text_material_spec(node, font_size):
         "materialName": material_name,
         "outlineColor": stroke_color or {"r": 0, "g": 0, "b": 0, "a": 1},
         "outlineWidth": outline_width,
+        "strokeAlign": stroke_align,
+        "faceDilate": face_dilate,
         "underlayColor": underlay_color or {"r": 0, "g": 0, "b": 0, "a": 1},
         "underlayOffsetX": underlay_offset_x,
         "underlayOffsetY": underlay_offset_y,
@@ -1305,10 +1318,11 @@ def generate_markdown_report(spec, dl_plan, node_types, sixed_summary, dedup_sum
     if material_summary:
         lines.append("### TMP 描边/投影材质复用")
         lines.append("")
-        lines.append("| 签名 | 节点数 | 材质名 |")
-        lines.append("|------|--------|--------|")
+        lines.append("| 签名 | 描边对齐 | 节点数 | 材质名 |")
+        lines.append("|------|----------|--------|--------|")
         for signature, info in sorted(material_summary.items()):
-            lines.append(f"| `{signature}` | {info['count']} | `{info['materialName']}` |")
+            align = info.get("strokeAlign") or ("旧规则" if info.get("hasOutline") else "—")
+            lines.append(f"| `{signature}` | {align} | {info['count']} | `{info['materialName']}` |")
         lines.append("")
     lines.append("### 九宫容器门禁表")
     lines.append("")
@@ -1570,6 +1584,14 @@ def build_audit_report(spec, dl_plan, node_types, sixed_summary, dedup_summary, 
             "message": "阶段一只生成九宫期望尺寸，实际 PNG 尺寸必须以 process_images.py 报告为准。",
             "details": {"slicedCount": len(sixed_summary)},
         })
+    aligned_materials = [s for s, info in dedup_summary.get("textMaterials", {}).items() if info.get("strokeAlign")]
+    font_metrics = current_font_sdf_metrics() if aligned_materials else {}
+    if aligned_materials and font_metrics.get("source") != "fontAsset":
+        warnings.append({
+            "code": "textOutlineFontMetricsFallback",
+            "message": "未读到项目 CommonFont 的 SDF 采样参数，描边宽度按默认 pointSize=58/padding=10 换算，字体不同时可能偏差。",
+            "details": {**font_metrics, "signatures": aligned_materials},
+        })
     if mismatch_report and mismatch_report.get("diskExtra"):
         warnings.append({
             "code": "diskExtraImages",
@@ -1591,6 +1613,7 @@ def build_audit_report(spec, dl_plan, node_types, sixed_summary, dedup_summary, 
             "commonTextureReuseCount": len(dedup_summary.get("commonTexture", [])),
             "textMaterialSignatureCount": len(dedup_summary.get("textMaterials", {})),
             "textMaterialNodeCount": sum(item.get("count", 0) for item in dedup_summary.get("textMaterials", {}).values()),
+            "textOutlineFontMetrics": font_metrics,
         },
         "checks": checks,
         "artifacts": artifacts,
@@ -1782,6 +1805,8 @@ def main():
         item = dedup_summary["textMaterials"].setdefault(signature, {
             "count": 0,
             "materialName": tm.get("materialName", ""),
+            "strokeAlign": tm.get("strokeAlign", ""),
+            "hasOutline": bool(tm.get("hasOutline")),
         })
         item["count"] += 1
 

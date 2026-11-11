@@ -78,6 +78,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             }
 
             options ??= TextStyleSyncOptions.Default;
+            CalibrateOutlineForFont(style.textMaterial, style.fontSize);
             var result = new TextStyleSyncResult
             {
                 ok = true,
@@ -315,6 +316,13 @@ namespace MagicWarrior.Editor.FigmaBridge
                 return false;
             }
 
+            // 描边落点由 _FaceDilate 决定：同宽但按旧规则（宽度/2）生成的材质会把外描边画细，不能复用
+            if (spec.hasOutline && HasStrokeAlign(spec)
+                && !MaterialFloatApprox(material, "_FaceDilate", ResolveFaceDilate(spec)))
+            {
+                return false;
+            }
+
             if (spec.hasUnderlay
                 && (!MaterialFloatApprox(material, "_UnderlayOffsetX", spec.underlayOffsetX)
                     || !MaterialFloatApprox(material, "_UnderlayOffsetY", spec.underlayOffsetY)
@@ -341,7 +349,7 @@ namespace MagicWarrior.Editor.FigmaBridge
             bool hasOutline = spec != null && spec.hasOutline && spec.outlineWidth > 0.001f;
             bool hasUnderlay = spec != null && spec.hasUnderlay;
             SetMaterialFloat(material, "_OutlineWidth", hasOutline ? spec.outlineWidth : 0f);
-            SetMaterialFloat(material, "_FaceDilate", hasOutline ? spec.outlineWidth * 0.5f : 0f);
+            SetMaterialFloat(material, "_FaceDilate", hasOutline ? ResolveFaceDilate(spec) : 0f);
             SetMaterialColor(material, "_OutlineColor", hasOutline ? ToColor(spec.outlineColor) : Color.black);
             SetMaterialFloat(material, "_UnderlayOffsetX", hasUnderlay ? spec.underlayOffsetX : 0f);
             SetMaterialFloat(material, "_UnderlayOffsetY", hasUnderlay ? spec.underlayOffsetY : 0f);
@@ -383,11 +391,108 @@ namespace MagicWarrior.Editor.FigmaBridge
 
             string outline = spec.hasOutline ? ColorUtility.ToHtmlStringRGBA(ToColor(spec.outlineColor)) : "none";
             string underlay = spec.hasUnderlay ? ColorUtility.ToHtmlStringRGBA(ToColor(spec.underlayColor)) : "none";
-            return $"o_{outline}_w_{Mathf.RoundToInt(spec.outlineWidth * 100):000}_u_{underlay}"
+            return $"o_{outline}_w_{Mathf.RoundToInt(spec.outlineWidth * 100):000}{StrokeAlignSignatureToken(spec)}_u_{underlay}"
                 + $"_x_{Mathf.RoundToInt((spec.underlayOffsetX + 1f) * 100f):000}"
                 + $"_y_{Mathf.RoundToInt((spec.underlayOffsetY + 1f) * 100f):000}"
                 + $"_s_{Mathf.RoundToInt(spec.underlaySoftness * 100f):000}"
                 + $"_d_{Mathf.RoundToInt(spec.underlayDilate * 100f):000}";
+        }
+
+        /// <summary>请求是否携带 Figma 描边对齐（由新版插件发送）。</summary>
+        private static bool HasStrokeAlign(TextMaterialPayload spec)
+        {
+            if (spec == null || string.IsNullOrEmpty(spec.strokeAlign))
+            {
+                return false;
+            }
+            // 只认规范值，未知值（如 MIXED）与 Python normalize_stroke_align 一致按旧规则处理
+            string align = spec.strokeAlign.ToUpperInvariant();
+            return align == "OUTSIDE" || align == "CENTER" || align == "INSIDE";
+        }
+
+        /// <summary>
+        /// 计算 TMP _FaceDilate。TMP_SDF 描边以膨胀后的字形边缘为中心向两侧各画一半：
+        /// 新请求直接使用 faceDilate（OUTSIDE = 宽度，字身不被描边侵蚀）；旧请求保持 outlineWidth/2。
+        /// </summary>
+        private static float ResolveFaceDilate(TextMaterialPayload spec)
+        {
+            if (spec == null || !spec.hasOutline)
+            {
+                return 0f;
+            }
+            return HasStrokeAlign(spec) ? Mathf.Clamp(spec.faceDilate, -1f, 1f) : spec.outlineWidth * 0.5f;
+        }
+
+        /// <summary>兜底签名中的对齐片段，与 Python text_outline 和 Prefab 生成器保持一致。</summary>
+        private static string StrokeAlignSignatureToken(TextMaterialPayload spec)
+        {
+            if (!HasStrokeAlign(spec))
+            {
+                return string.Empty;
+            }
+            switch (spec.strokeAlign.ToUpperInvariant())
+            {
+                case "OUTSIDE": return "_a_out";
+                case "CENTER": return "_a_ctr";
+                case "INSIDE": return "_a_in";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 按 Unity 中真实 CommonFont 的 SDF 参数校正描边：OutlineWidth = 描边px × pointSize / (2 × padding × 字号)。
+        /// Figma 插件只能按默认 58/10 估算；仅校正带 strokeAlign 的请求，旧请求保持原值。
+        /// 字号取 Figma 字号：描边按 Figma 设计比例换算，与插件生成的材质名一致，材质也可能被不同字号的文本共用。
+        /// </summary>
+        private static void CalibrateOutlineForFont(TextMaterialPayload spec, float fontSize)
+        {
+            if (spec == null || !spec.enabled || !spec.hasOutline || !HasStrokeAlign(spec)
+                || spec.sourceStrokeWeight <= 0f || fontSize <= 0f)
+            {
+                return;
+            }
+
+            var font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(CommonFontPath);
+            float pointSize = font != null ? (float)font.faceInfo.pointSize : 0f;
+            float padding = font != null ? font.atlasPadding : 0f;
+            if (pointSize <= 0f || padding <= 0f)
+            {
+                BridgeLogger.Warn($"[FigmaTextStyleSync] 未读到 CommonFont SDF 参数，沿用插件估算的描边宽度 {spec.outlineWidth:0.##}：{CommonFontPath}",
+                    operationName: "unity.text-style-sync");
+                return;
+            }
+
+            float width = Mathf.Round(Mathf.Clamp01(spec.sourceStrokeWeight * pointSize / (2f * padding * fontSize)) * 100f) / 100f;
+            if (width <= 0.01f)
+            {
+                // 与插件/Python 一致：换算后宽度过小视为无描边，只保留投影（若有）
+                BridgeLogger.Info($"[FigmaTextStyleSync] 描边换算宽度 {width:0.##} 过小，按无描边处理（fontSize={fontSize}）",
+                    operationName: "unity.text-style-sync");
+                spec.hasOutline = false;
+                spec.outlineWidth = 0f;
+                spec.faceDilate = 0f;
+                spec.strokeAlign = string.Empty;
+                spec.enabled = spec.hasUnderlay;
+                return;
+            }
+
+            if (Mathf.Abs(width - spec.outlineWidth) < 0.005f)
+            {
+                return;
+            }
+
+            // 宽度变化时同步改写签名与材质名里的宽度片段，避免材质名与实际参数不一致
+            string oldToken = $"_w_{Mathf.RoundToInt(spec.outlineWidth * 100f):000}";
+            string newToken = $"_w_{Mathf.RoundToInt(width * 100f):000}";
+            float oldWidth = spec.outlineWidth;
+            spec.outlineWidth = width;
+            spec.faceDilate = spec.strokeAlign.ToUpperInvariant() == "OUTSIDE" ? width
+                : spec.strokeAlign.ToUpperInvariant() == "INSIDE" ? -width : 0f;
+            spec.signature = spec.signature?.Replace(oldToken, newToken);
+            spec.materialName = spec.materialName?.Replace(oldToken, newToken);
+            BridgeLogger.Info($"[FigmaTextStyleSync] 按字体 SDF 参数校正描边宽度 {oldWidth:0.##} -> {width:0.##}"
+                + $"（pointSize={pointSize}, padding={padding}, fontSize={fontSize}, align={spec.strokeAlign}）",
+                operationName: "unity.text-style-sync");
         }
 
         /// <summary>
@@ -594,5 +699,9 @@ namespace MagicWarrior.Editor.FigmaBridge
         public bool hasOutline;
         public bool hasUnderlay;
         public float sourceStrokeWeight;
+        /// <summary>Figma 描边对齐：OUTSIDE / CENTER / INSIDE；为空表示旧请求，FaceDilate 沿用 outlineWidth/2</summary>
+        public string strokeAlign;
+        /// <summary>TMP _FaceDilate 目标值（-1~1），仅 strokeAlign 非空时生效</summary>
+        public float faceDilate;
     }
 }

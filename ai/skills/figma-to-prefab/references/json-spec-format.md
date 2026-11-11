@@ -182,7 +182,7 @@ FigmaPrefabGenerator.Generate(".tmp/prefab_spec.json")
 | `autoSize` | 否 | 默认不生成（AutoSize 关闭）。gen_spec.py 不再输出此字段，FigmaPrefabGenerator 在 ApplyPostProcessing 中强制关闭 enableAutoSizing |
 | `textMaterial` | 否 | TMP 材质需求。仅当 Figma 文本存在描边或 DropShadow 时生成，用于复用或新建近似 TMP 材质 |
 
-当前生成器的 Text 节点负责静态 `TextMeshProUGUI` 视觉还原；文本字体统一绑定 `CommonFont.asset`。当 `textMaterial` 存在时，生成器会优先扫描现有 `CommonFont*.mat` 是否近似匹配描边/投影参数，匹配则复用；找不到时才基于 `CommonFont.mat` 在 `Assets/MagicWarrior/_Resources/Font/Package/FigmaGenerated/` 下创建新材质。它仍不表达 `CustomLanguageText`、`CustomText` 或多语言 Key；涉及业务绑定时，必须复用现有 Prefab 或列为生成后处理计划。
+当前生成器的 Text 节点负责静态 `TextMeshProUGUI` 视觉还原；文本字体统一绑定 `CommonFont.asset`。当 `textMaterial` 存在时，生成器会优先扫描现有 `CommonFont*.mat` 是否近似匹配描边/投影参数，匹配则复用；找不到时才基于 `CommonFont.mat` 在 CommonFont 字体资产所在目录（`ProjectSettings/FigmaBridgeImportSettings.json` 的 `commonFontAsset` 同目录）下创建新材质。它仍不表达 `CustomLanguageText`、`CustomText` 或多语言 Key；涉及业务绑定时，必须复用现有 Prefab 或列为生成后处理计划。
 
 Text 节点的 `rect.w/h` 必须来自 Relay manifest 中该 Figma 文本节点自身的 `bounds.width/height`。生成后对应 `TextMeshProUGUI` 所在 `RectTransform.sizeDelta.x/y` 必须与 Spec 宽高一致，容差 0.5px；任何宽高不一致都视为阻塞失败。
 
@@ -191,10 +191,12 @@ Text 节点的 `rect.w/h` 必须来自 Relay manifest 中该 Figma 文本节点�
 ```json
 {
   "enabled": true,
-  "signature": "o_833411ff_w_010_u_833411ff_x_100_y_080_s_004_d_000",
-  "materialName": "CommonFont_figma_o_833411ff_w_010_u_833411ff_x_100_y_080_s_004_d_000",
+  "signature": "o_833411ff_w_010_a_out_u_833411ff_x_100_y_080_s_004_d_000",
+  "materialName": "CommonFont_figma_o_833411ff_w_010_a_out_u_833411ff_x_100_y_080_s_004_d_000",
   "outlineColor": {"r": 0.514, "g": 0.204, "b": 0.067, "a": 1},
   "outlineWidth": 0.1,
+  "strokeAlign": "OUTSIDE",
+  "faceDilate": 0.1,
   "underlayColor": {"r": 0.514, "g": 0.204, "b": 0.067, "a": 1},
   "underlayOffsetX": 0,
   "underlayOffsetY": -0.2,
@@ -211,7 +213,9 @@ Text 节点的 `rect.w/h` 必须来自 Relay manifest 中该 Figma 文本节点�
 | `enabled` | 是 | 是否启用专用 TMP 材质 |
 | `signature` | 是 | 归一化后的效果签名；相同签名只应复用或生成一个材质 |
 | `materialName` | 是 | 期望材质名，生成器会用 `AssetDatabase.GenerateUniqueAssetPath` 防止覆盖 |
-| `outlineColor` / `outlineWidth` | 否 | Figma 字体描边近似映射到 TMP `_OutlineColor` / `_OutlineWidth` |
+| `outlineColor` / `outlineWidth` | 否 | Figma 字体描边映射到 TMP `_OutlineColor` / `_OutlineWidth`，宽度按 `scripts/text_outline.py` 换算（见 figma-ugui-import-conventions.md §10） |
+| `strokeAlign` | 否 | Figma 描边对齐 `OUTSIDE` / `CENTER` / `INSIDE`；空字符串或缺失表示旧清单，生成器按 `outlineWidth/2` 设置 `_FaceDilate` |
+| `faceDilate` | 否 | TMP `_FaceDilate` 目标值（-1~1），仅 `strokeAlign` 非空时生效：OUTSIDE = `outlineWidth`，CENTER = 0，INSIDE = `-outlineWidth` |
 | `underlayColor` / `underlayOffsetX` / `underlayOffsetY` / `underlaySoftness` / `underlayDilate` | 否 | Figma DropShadow 近似映射到 TMP Underlay 参数 |
 | `hasOutline` / `hasUnderlay` | 是 | 控制 `OUTLINE_ON` / `UNDERLAY_ON` keyword |
 | `sourceStrokeWeight` | 否 | 原始 Figma strokeWeight，仅用于审核追踪 |

@@ -2531,6 +2531,7 @@ async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequ
     effects: node.type === "TEXT" ? serializeEffects(node.effects) : [],
     constraints: readFigmaPrefabConstraints(node),
     strokeWeight: node.type === "TEXT" ? readFigmaStrokeWeight(node) : 0,
+    strokeAlign: node.type === "TEXT" ? readFigmaTextStrokeAlign(node) : "",
     cornerRadius: typeof node.cornerRadius === "number" ? node.cornerRadius : 0,
     characters: node.type === "TEXT" ? String(node.characters || "") : "",
     fontSize: readFigmaFontSize(node),
@@ -3068,6 +3069,12 @@ function readFigmaStrokeWeight(node) {
     return 0;
   }
   return roundNumber(node.strokeWeight);
+}
+
+/** 读取文本描边对齐方式（CENTER/INSIDE/OUTSIDE），Unity 据此决定 TMP 描边落在字形内外；未知值返回空串走旧规则。 */
+function readFigmaTextStrokeAlign(node) {
+  const align = node && typeof node.strokeAlign === "string" ? node.strokeAlign.toUpperCase() : "";
+  return align === "CENTER" || align === "INSIDE" || align === "OUTSIDE" ? align : "";
 }
 
 /** 构建层级整理错误结果，保持 Relay 返回结构稳定。 */

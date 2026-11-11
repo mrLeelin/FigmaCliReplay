@@ -7511,6 +7511,7 @@ async function handleExportSelectedTextStyleToUnity(message) {
 
     const strokeColor = readFirstVisibleSolidPaintColor(node.strokes);
     const strokeWeight = readFigmaStrokeWeight(node);
+    const strokeAlign = readFigmaTextStrokeAlign(node);
     const effects = serializeEffects(node.effects);
     const style = {
       nodeId: node.id,
@@ -7520,8 +7521,9 @@ async function handleExportSelectedTextStyleToUnity(message) {
       fillColor: fillColor || { r: 0, g: 0, b: 0, a: 1 },
       strokeColor,
       strokeWeight,
+      strokeAlign,
       effects,
-      textMaterial: buildSelectedTextMaterialSpec(strokeColor, strokeWeight, effects, fontSize)
+      textMaterial: buildSelectedTextMaterialSpec(strokeColor, strokeWeight, effects, fontSize, strokeAlign)
     };
 
     figma.ui.postMessage({
@@ -7570,19 +7572,34 @@ function readFirstVisibleSolidPaintColor(paints) {
   return null;
 }
 
-/** 根据 figma-to-prefab 的规则构建 TMP 描边/投影材质需求。 */
-function buildSelectedTextMaterialSpec(strokeColor, strokeWeight, effects, fontSize) {
+/**
+ * 根据 figma-to-prefab 的规则构建 TMP 描边/投影材质需求。
+ * strokeAlign 非空时与 text_outline.py 同公式：W = 描边 × pointSize / (2 × padding × 字号)，
+ * 这里用 CommonFont 默认采样参数（58/10）估算，Unity 侧会按真实字体资产校正；为空时保持旧的 7/3 与 W/2。
+ */
+function buildSelectedTextMaterialSpec(strokeColor, strokeWeight, effects, fontSize, strokeAlign) {
   const safeFontSize = Math.max(Number(fontSize) || 0, 1);
+  const upperAlign = typeof strokeAlign === "string" ? strokeAlign.toUpperCase() : "";
+  const align = upperAlign === "OUTSIDE" || upperAlign === "CENTER" || upperAlign === "INSIDE" ? upperAlign : "";
   let outlineColor = strokeColor;
   let outlineWidth = 0;
+  let faceDilate = 0;
   const safeStrokeWeight = roundDigits(Number(strokeWeight) || 0, 2);
   if (outlineColor && safeStrokeWeight > 0) {
-    outlineWidth = roundDigits(clampNumber(7.0 / 3.0 * safeStrokeWeight / safeFontSize, 0, 1), 2);
+    if (align) {
+      outlineWidth = roundDigits(clampNumber(safeStrokeWeight * 58 / (2 * 10 * safeFontSize), 0, 1), 2);
+      faceDilate = align === "OUTSIDE" ? outlineWidth : align === "INSIDE" ? -outlineWidth : 0;
+    } else {
+      outlineWidth = roundDigits(clampNumber(7.0 / 3.0 * safeStrokeWeight / safeFontSize, 0, 1), 2);
+      faceDilate = roundDigits(outlineWidth * 0.5, 3);
+    }
   }
   if (outlineWidth <= 0.01) {
     outlineColor = null;
     outlineWidth = 0;
+    faceDilate = 0;
   }
+  const outlineAlign = outlineColor ? align : "";
 
   const shadow = findFirstVisibleDropShadow(effects);
   let underlayColor = null;
@@ -7617,6 +7634,8 @@ function buildSelectedTextMaterialSpec(strokeColor, strokeWeight, effects, fontS
       materialName: "",
       outlineColor: { r: 0, g: 0, b: 0, a: 1 },
       outlineWidth: 0,
+      strokeAlign: "",
+      faceDilate: 0,
       underlayColor: { r: 0, g: 0, b: 0, a: 1 },
       underlayOffsetX: 0,
       underlayOffsetY: 0,
@@ -7632,6 +7651,7 @@ function buildSelectedTextMaterialSpec(strokeColor, strokeWeight, effects, fontS
   const underlayHex = hasUnderlay ? colorToMaterialHex(underlayColor) : "none";
   const signature = "o_" + outlineHex
     + "_w_" + pad3(Math.round(outlineWidth * 100))
+    + (outlineAlign ? "_a_" + { OUTSIDE: "out", CENTER: "ctr", INSIDE: "in" }[outlineAlign] : "")
     + "_u_" + underlayHex
     + "_x_" + pad3(Math.round((underlayOffsetX + 1) * 100))
     + "_y_" + pad3(Math.round((underlayOffsetY + 1) * 100))
@@ -7644,6 +7664,8 @@ function buildSelectedTextMaterialSpec(strokeColor, strokeWeight, effects, fontS
     materialName: "CommonFont_figma_" + signature,
     outlineColor: outlineColor || { r: 0, g: 0, b: 0, a: 1 },
     outlineWidth,
+    strokeAlign: outlineAlign,
+    faceDilate,
     underlayColor: underlayColor || { r: 0, g: 0, b: 0, a: 1 },
     underlayOffsetX,
     underlayOffsetY,

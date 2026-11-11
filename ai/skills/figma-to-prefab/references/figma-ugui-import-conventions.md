@@ -128,28 +128,35 @@ Assets/MagicWarrior/_Resources/Font/Package/
 
 signature 编码：
 ```
-o_{outlineColor}_w_{outlineWidth×100}
+o_{outlineColor}_w_{outlineWidth×100}[_a_{out|ctr|in}]
 u_{underlayColor}_x_{offsetX}_y_{offsetY}_s_{softness}_d_{dilate}
 ```
 
-示例：`CommonFont_figma_o_471a03ff_w_017_u_none_x_100_y_100_s_000_d_000.mat`
+`_a_` 片段只在 Figma 导出了描边对齐（`strokeAlign`）时出现，用来和旧规则生成的同宽材质区分。
+
+示例：`CommonFont_figma_o_6d1515ff_w_028_a_out_u_none_x_100_y_100_s_000_d_000.mat`（外描边）；旧清单为 `CommonFont_figma_o_471a03ff_w_017_u_none_x_100_y_100_s_000_d_000.mat`
 
 ### 描边参数公式
 
-| 参数 | 公式 | 示例 (28pt/3px) |
-|------|------|:--------------:|
-| `_OutlineWidth` | `7/3 × strokeWeight / fontSize` | 0.25 |
-| `_FaceDilate` | `OutlineWidth × 0.5` | 0.12 |
-| `_OutlineColor` | Figma stroke 颜色 | #000000 |
+Figma 导出的 `strokeAlign`（OUTSIDE / CENTER / INSIDE）决定描边落点。TMP_SDF-Mobile 以膨胀后的字形边缘为中心向两侧各画一半描边，外扩像素 = `2 × padding × OutlineWidth × fontSize / pointSize`，因此：
 
-比例关系：`FaceDilate : OutlineWidth = 1 : 2`。
+| 参数 | 公式 | 示例（CommonFont 58/10，42 号字，4px 外描边） |
+|------|------|:--------------:|
+| `_OutlineWidth` | `strokeWeight × pointSize / (2 × padding × fontSize)` | 0.28 |
+| `_FaceDilate` | OUTSIDE = `OutlineWidth`；CENTER = 0；INSIDE = `-OutlineWidth` | 0.28 |
+| `_OutlineColor` | Figma stroke 颜色 | #6D1515 |
+
+- `pointSize` / `padding` 读自 `ProjectSettings/FigmaBridgeImportSettings.json` 指向的 CommonFont 资产（`m_FaceInfo.m_PointSize`、`m_AtlasPadding`）；读不到时按 58/10 计算，并在 `spec_audit_report.json` 写 `textOutlineFontMetricsFallback` 警告。实现见 `scripts/text_outline.py`。
+- 外描边时 `FaceDilate = OutlineWidth`，字身保持 Figma 原粗细，描边整圈落在字形外；旧规则 `FaceDilate = OutlineWidth/2` 会让描边侵蚀字身、看起来偏细。
+- 旧版插件导出的清单没有 `strokeAlign`，保持旧经验公式：`_OutlineWidth = 7/3 × strokeWeight / fontSize`，`_FaceDilate = OutlineWidth × 0.5`，签名不带 `_a_`，结果与历史导入一致。
+- 「字体同步」按钮使用同一规则：插件按 58/10 估算，Unity 侧 `FigmaTextStyleSyncUtility` 再按真实字体资产校正宽度。
 
 ### 复用逻辑
 
 `FigmaPrefabGenerator.Generate()` 每次运行时的材质查找顺序：
 
-1. **按 signature 查**：遍历 `Font/Package/` 下所有 `CommonFont*` 材质
-2. **参数近似匹配**：比较 `_OutlineWidth`、`_OutlineColor`、`_FaceDilate`
+1. **扫描候选**：遍历 `Assets/MagicWarrior/_Resources/Font/Package/` 与 `Assets/_Resources/Sharders/Font/`（存在时，含子目录）下名称含 `CommonFont` 的材质
+2. **参数近似匹配**（容差 0.015）：`OUTLINE_ON` / `UNDERLAY_ON` keyword、`_OutlineWidth`、`_OutlineColor` 和 Underlay 参数；Spec 带 `strokeAlign` 时额外比较 `_FaceDilate`，避免复用按旧规则生成的细描边材质
 3. **匹配 → 复用**：直接返回已有材质，不新建
 4. **不匹配 → 新建**：以 `CommonFont.mat` 为模板，调用 `AssetDatabase.CreateAsset`
 

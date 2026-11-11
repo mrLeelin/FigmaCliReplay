@@ -38,6 +38,17 @@ test("nine-slice pixels and text material math pass fixture-driven Python tests"
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
+test("text outline alignment drives TMP face dilate and material reuse", () => {
+  assert.match(generator, /public string strokeAlign;/);
+  assert.match(generator, /public float faceDilate;/);
+  assert.match(generator, /SetMaterialFloat\(material, "_FaceDilate", ResolveFaceDilate\(spec\)\)/);
+  assert.match(generator, /HasStrokeAlign\(spec\)\s*&& !MaterialFloatApprox\(material, "_FaceDilate", ResolveFaceDilate\(spec\)\)/);
+  assert.match(generator, /HasStrokeAlign\(spec\) \? Mathf\.Clamp\(spec\.faceDilate, -1f, 1f\) : spec\.outlineWidth \* 0\.5f/);
+  const script = new URL("../ai/skills/figma-to-prefab/scripts/tests/test_text_outline.py", import.meta.url);
+  const result = spawnSync("python", [script.pathname.slice(1)], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test("deterministic validation blocks image and Unity residue failures", () => {
   assert.match(verifyPrefab, /allPass/);
   assert.match(verifyPrefab, /spriteNull/);

@@ -172,6 +172,10 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
         public bool hasOutline;
         public bool hasUnderlay;
         public float sourceStrokeWeight;
+        /// <summary>Figma 描边对齐：OUTSIDE / CENTER / INSIDE；为空表示旧 Spec，FaceDilate 沿用 outlineWidth/2</summary>
+        public string strokeAlign;
+        /// <summary>TMP _FaceDilate 目标值（-1~1），仅 strokeAlign 非空时生效：OUTSIDE = 宽度，CENTER = 0，INSIDE = -宽度</summary>
+        public float faceDilate;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -910,7 +914,7 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
             Material existing = FindApproximateTextMaterial(materialSpec);
             if (existing != null)
             {
-                ZLog.Log($"[FigmaPrefabGenerator] 复用 TMP 材质: {AssetDatabase.GetAssetPath(existing)}");
+                ZLog.Log($"[FigmaPrefabGenerator] 复用 TMP 材质: {AssetDatabase.GetAssetPath(existing)} ({DescribeOutline(materialSpec)})");
                 return existing;
             }
 
@@ -933,7 +937,7 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
             ApplyMaterialProperties(material, materialSpec);
             AssetDatabase.CreateAsset(material, materialPath);
             AssetDatabase.SaveAssets();
-            ZLog.Log($"[FigmaPrefabGenerator] 新建 TMP 材质: {materialPath}");
+            ZLog.Log($"[FigmaPrefabGenerator] 新建 TMP 材质: {materialPath} ({DescribeOutline(materialSpec)})");
             return AssetDatabase.LoadAssetAtPath<Material>(materialPath);
         }
 
@@ -997,6 +1001,13 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
                 return false;
             }
 
+            // 描边落点由 _FaceDilate 决定：同宽但按旧规则（宽度/2）生成的材质会把外描边画细，不能复用
+            if (spec.hasOutline && HasStrokeAlign(spec)
+                && !MaterialFloatApprox(material, "_FaceDilate", ResolveFaceDilate(spec)))
+            {
+                return false;
+            }
+
             if (spec.hasUnderlay
                 && (!MaterialFloatApprox(material, "_UnderlayOffsetX", spec.underlayOffsetX)
                     || !MaterialFloatApprox(material, "_UnderlayOffsetY", spec.underlayOffsetY)
@@ -1032,7 +1043,7 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
             }
 
             SetMaterialFloat(material, "_OutlineWidth", spec.hasOutline ? spec.outlineWidth : 0f);
-            SetMaterialFloat(material, "_FaceDilate", spec.hasOutline ? spec.outlineWidth * 0.5f : 0f);
+            SetMaterialFloat(material, "_FaceDilate", ResolveFaceDilate(spec));
             SetMaterialColor(material, "_OutlineColor", spec.hasOutline ? ToColor(spec.outlineColor) : Color.black);
             SetMaterialFloat(material, "_UnderlayOffsetX", spec.hasUnderlay ? spec.underlayOffsetX : 0f);
             SetMaterialFloat(material, "_UnderlayOffsetY", spec.hasUnderlay ? spec.underlayOffsetY : 0f);
@@ -1054,11 +1065,59 @@ namespace MagicWarrior.Editor.FigmaBridge.PrefabImport
 
             string outline = spec.hasOutline ? ColorUtility.ToHtmlStringRGBA(ToColor(spec.outlineColor)) : "none";
             string underlay = spec.hasUnderlay ? ColorUtility.ToHtmlStringRGBA(ToColor(spec.underlayColor)) : "none";
-            return $"o_{outline}_w_{Mathf.RoundToInt(spec.outlineWidth * 100):000}_u_{underlay}"
+            return $"o_{outline}_w_{Mathf.RoundToInt(spec.outlineWidth * 100):000}{StrokeAlignSignatureToken(spec)}_u_{underlay}"
                 + $"_x_{Mathf.RoundToInt((spec.underlayOffsetX + 1f) * 100f):000}"
                 + $"_y_{Mathf.RoundToInt((spec.underlayOffsetY + 1f) * 100f):000}"
                 + $"_s_{Mathf.RoundToInt(spec.underlaySoftness * 100f):000}"
                 + $"_d_{Mathf.RoundToInt(spec.underlayDilate * 100f):000}";
+        }
+
+        /// <summary>Spec 是否携带 Figma 描边对齐（由新版插件导出）。</summary>
+        private static bool HasStrokeAlign(TextMaterialSpec spec)
+        {
+            if (spec == null || string.IsNullOrEmpty(spec.strokeAlign))
+            {
+                return false;
+            }
+            // 只认规范值，未知值（如 MIXED）与 Python normalize_stroke_align 一致按旧规则处理
+            string align = spec.strokeAlign.ToUpperInvariant();
+            return align == "OUTSIDE" || align == "CENTER" || align == "INSIDE";
+        }
+
+        /// <summary>
+        /// 计算 TMP _FaceDilate。TMP_SDF 描边以膨胀后的字形边缘为中心向两侧各画一半：
+        /// 新 Spec 直接使用 faceDilate（OUTSIDE = 宽度，字身不被描边侵蚀）；旧 Spec 保持 outlineWidth/2。
+        /// </summary>
+        private static float ResolveFaceDilate(TextMaterialSpec spec)
+        {
+            if (spec == null || !spec.hasOutline)
+            {
+                return 0f;
+            }
+            return HasStrokeAlign(spec) ? Mathf.Clamp(spec.faceDilate, -1f, 1f) : spec.outlineWidth * 0.5f;
+        }
+
+        /// <summary>兜底签名中的对齐片段，与 Python text_outline.stroke_align_signature_token 保持一致。</summary>
+        private static string StrokeAlignSignatureToken(TextMaterialSpec spec)
+        {
+            if (!HasStrokeAlign(spec))
+            {
+                return string.Empty;
+            }
+            switch (spec.strokeAlign.ToUpperInvariant())
+            {
+                case "OUTSIDE": return "_a_out";
+                case "CENTER": return "_a_ctr";
+                case "INSIDE": return "_a_in";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>日志用的描边参数摘要，便于从 Console 核对宽度、膨胀量和对齐来源。</summary>
+        private static string DescribeOutline(TextMaterialSpec spec)
+        {
+            string align = HasStrokeAlign(spec) ? spec.strokeAlign : "legacy";
+            return $"outline={spec.outlineWidth:0.###}, faceDilate={ResolveFaceDilate(spec):0.###}, align={align}";
         }
 
         /// <summary>创建 Unity 资源目录，逐级创建可避免 AssetDatabase 目录缺失。</summary>

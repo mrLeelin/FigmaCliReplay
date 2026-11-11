@@ -52,6 +52,7 @@ from nine_slice_common import detect_type_and_border
 from name_utils import sanitize_name, normalize_unity_display_name, strip_outer_brackets, clamp, unity_node_name
 from constraints_utils import convert_figma_bounds_to_unity_rect, figma_constraints_to_rect_transform_spec
 from unity_project_paths import resolve_unity_project
+from text_outline import cached_font_sdf_metrics, compute_text_outline, normalize_stroke_align, stroke_align_signature_token
 from image_output import prepare_png_bytes
 
 
@@ -173,21 +174,27 @@ def color_hex(color: dict | None) -> str:
 
 
 def build_text_material_spec(node: dict, font_size: int) -> dict | None:
-    """根据 Figma 文本描边生成 TMP 材质需求。"""
+    """根据 Figma 文本描边生成 TMP 材质需求（描边换算与 gen_spec 共用 text_outline）。"""
     stroke_color = color_from_paints(node.get("strokes", []), 1)
     stroke_weight = float(node.get("strokeWeight", 0) or 0)
     if not stroke_color or stroke_weight <= 0 or font_size <= 0:
         return None
-    outline_width = round(clamp(7.0 / 3.0 * stroke_weight / max(font_size, 1), 0, 1), 2)
+    stroke_align = normalize_stroke_align(node.get("strokeAlign"))
+    # 工程路径由调用方（gen_spec / main）写入 FIGMA_UNITY_PROJECT；读不到字体时用 CommonFont 默认参数
+    metrics = cached_font_sdf_metrics(os.environ.get("FIGMA_UNITY_PROJECT", "")) if stroke_align else None
+    outline_width, face_dilate = compute_text_outline(stroke_weight, font_size, stroke_align, metrics)
     if outline_width <= 0.01:
         return None
-    signature = f"o_{color_hex(stroke_color)}_w_{int(round(outline_width * 100)):03d}_u_none_x_100_y_100_s_000_d_000"
+    signature = (f"o_{color_hex(stroke_color)}_w_{int(round(outline_width * 100)):03d}{stroke_align_signature_token(stroke_align)}"
+                 "_u_none_x_100_y_100_s_000_d_000")
     return {
         "enabled": True,
         "signature": signature,
         "materialName": f"CommonFont_figma_{signature}",
         "outlineColor": stroke_color,
         "outlineWidth": outline_width,
+        "strokeAlign": stroke_align,
+        "faceDilate": face_dilate,
         "underlayColor": {"r": 0, "g": 0, "b": 0, "a": 1},
         "underlayOffsetX": 0,
         "underlayOffsetY": 0,
