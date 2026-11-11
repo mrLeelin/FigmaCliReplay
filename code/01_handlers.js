@@ -203,6 +203,23 @@ await handleFigmaHierarchyCleanupAnalyze(message);
     return;
   }
 
+  // 一键最小化/还原：最小化时绕过 RESIZE_PLUGIN_UI 的 420×480 下限，还原尺寸由 UI 回传
+  if (message.type === "SET_PLUGIN_UI_MINIMIZED") {
+    if (message.minimized) {
+      figma.ui.resize(280, 44);
+      return;
+    }
+    const width = Math.round(Number(message.width));
+    const height = Math.round(Number(message.height));
+    const restoreW = Number.isFinite(width) ? width : 1120;
+    const restoreH = Number.isFinite(height) ? height : 800;
+    figma.ui.resize(
+      Math.max(420, Math.min(1600, restoreW)),
+      Math.max(480, Math.min(1200, restoreH))
+    );
+    return;
+  }
+
   if (message.type === "SUGGEST_NINE_SLICE_FROM_SELECTION") {
     await handleSuggestNineSliceFromSelection(message);
     return;
@@ -346,7 +363,9 @@ async function handleCollectComponents(message) {
 /** 一次性读取当前选中根节点的紧凑层级快照；此命令严格只读。 */
 async function handleQueryCleanupSnapshot(message) {
   try {
-    const requestedRootId = typeof message.rootNodeId === "string" ? message.rootNodeId.trim() : "";
+    // 插件 UI 直接传 rootNodeId；经 Relay/CLI 的任务参数在 message.job 里。
+    const rawRootId = message.rootNodeId || (message.job && message.job.rootNodeId);
+    const requestedRootId = typeof rawRootId === "string" ? rawRootId.trim() : "";
     const requestedRoot = requestedRootId ? await figma.getNodeByIdAsync(requestedRootId) : null;
     if (requestedRootId && !requestedRoot) {
       throw new Error("AI 整理原始根节点已不存在，请重新开始一次整理会话。");

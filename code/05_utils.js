@@ -2343,26 +2343,28 @@ function isBackupFrame(node) {
   return name.startsWith("[Backup]") || name.startsWith("[ComponentSourceBackup_") || name.startsWith("[ComponentLibrary_");
 }
 
-/** 把原始节点移动到新分组后，恢复它相对新分组的局部坐标，避免视觉漂移。 */
+/** 把原始节点移动到新分组后，按移动前后外接包围盒的偏差平移回原位，避免视觉漂移。 */
 function preserveHierarchyChildAbsoluteBounds(child, groupNode, beforeBounds) {
   if (!child || typeof child.x !== "number" || typeof child.y !== "number") {
     return;
   }
-  const groupBounds = getNodeBounds(groupNode);
-  const newX = numericOr(beforeBounds.x, 0) - numericOr(groupBounds.x, 0);
-  const newY = numericOr(beforeBounds.y, 0) - numericOr(groupBounds.y, 0);
-  child.x = newX;
-  child.y = newY;
+  // 旋转/翻转节点和 Group 的 x/y 不等于外接包围盒，不能直接用包围盒换算；
+  // 在未旋转的容器之间移动只改变平移量，所以按包围盒偏差平移即可还原。
+  const afterBounds = getNodeBounds(child);
+  const deltaX = numericOr(beforeBounds.x, 0) - numericOr(afterBounds.x, 0);
+  const deltaY = numericOr(beforeBounds.y, 0) - numericOr(afterBounds.y, 0);
+  child.x += deltaX;
+  child.y += deltaY;
   // 坐标合理性检查：超过 ±5000 大概率是坐标系污染，记录日志
-  if (Math.abs(newX) > 5000 || Math.abs(newY) > 5000) {
+  if (Math.abs(deltaX) > 5000 || Math.abs(deltaY) > 5000) {
     pluginLogger.warn("层级 preserve 坐标异常", {
       childName: child.name || "?",
-      newX: newX,
-      newY: newY,
+      deltaX: deltaX,
+      deltaY: deltaY,
       beforeX: numericOr(beforeBounds.x, 0),
       beforeY: numericOr(beforeBounds.y, 0),
-      groupX: numericOr(groupBounds.x, 0),
-      groupY: numericOr(groupBounds.y, 0)
+      afterX: numericOr(afterBounds.x, 0),
+      afterY: numericOr(afterBounds.y, 0)
     });
   }
 }

@@ -184,21 +184,30 @@ def validate_snapshot(plan, analysis, snapshot):
         if any(node.get(field) != original.get(field) for field in ("parentId", "name", "type", "visible", "opacity", "childCount")):
             raise HierarchyError("Resource properties changed between analysis and snapshot")
         box = bounds(original)
-        if node_id == root_id:
+        observed = node
+        if node_id != root_id:
+            parent = before.get(original["parentId"])
+            if parent is None or node.get("siblingIndex") != original.get("index"):
+                raise HierarchyError("Protected subtree parent/order changed between analysis and snapshot")
+        if isinstance(node.get("abs"), dict):
+            # Absolute bounds share the analysis basis and stay comparable for rotated or flipped nodes.
+            observed, local = node["abs"], box
+        elif node_id == root_id:
             local = analysis.get("rootLocalBounds")
             if local is None and original["parentId"] == plan["target"]["pageId"]:
                 local = box
             if local is None:
                 raise HierarchyError("Nested roots require local geometry evidence")
         else:
-            parent = before.get(original["parentId"])
-            if parent is None or node.get("siblingIndex") != original.get("index"):
-                raise HierarchyError("Protected subtree parent/order changed between analysis and snapshot")
-            parent_box = bounds(parent)
+            # Figma GROUP / BOOLEAN_OPERATION do not define a coordinate space; x/y are relative to the nearest non-group ancestor.
+            origin = parent
+            while origin.get("type") in ("GROUP", "BOOLEAN_OPERATION") and origin["id"] != root_id:
+                origin = before[origin["parentId"]]
+            parent_box = bounds(origin)
             local = {"x": box["x"]-parent_box["x"], "y": box["y"]-parent_box["y"],
                      "width": box["width"], "height": box["height"]}
         for field, source_field in (("x", "x"), ("y", "y"), ("w", "width"), ("h", "height")):
-            value = node.get(field)
+            value = observed.get(field)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value - local[source_field]) > 0.01:
                 raise HierarchyError("Resource geometry changed between analysis and snapshot")
 

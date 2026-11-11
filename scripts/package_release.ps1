@@ -9,9 +9,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PluginRoot = Split-Path -Parent $ScriptDir
 $PluginRoot = (Resolve-Path -LiteralPath $PluginRoot).Path
 $LocalNodeDir = Join-Path $PluginRoot ".local\node"
+. (Join-Path $ScriptDir 'relay_logging.ps1')
+$packageLog = [RelayScriptLogger]::new('relay.package')
+$packageLog.Write('started', 'Build and assemble a distributable Relay archive')
 
 function Write-Step {
     param([string]$Message)
+    $packageLog.Write('progress', $Message)
     Write-Host ""
     Write-Host "== $Message ==" -ForegroundColor Cyan
 }
@@ -61,7 +65,8 @@ function Copy-ReleaseItem {
     }
     # Copy source files only; stale Python bytecode must never ship retired servers.
     Get-ChildItem -LiteralPath $source -Recurse -File | Where-Object {
-        $_.FullName -notmatch '[\\/](__pycache__|\.git|node_modules)[\\/]' -and $_.Extension -notin @('.pyc', '.pyo')
+        $_.FullName -notmatch '[\\/](__pycache__|\.git|node_modules|\.venv|\.local|\.logs)[\\/]' -and
+        $_.Name -notmatch '^\.env(?:\.|$)' -and $_.Extension -notin @('.pyc', '.pyo')
     } | ForEach-Object {
         $relativeFile = $_.FullName.Substring($source.Length).TrimStart([char[]]'\/')
         $targetFile = Join-Path $destination $relativeFile
@@ -106,6 +111,7 @@ function Ensure-NpmDependencies {
     }
 }
 
+try {
 $unityBridge = Join-Path $PluginRoot "unity\Assets\Editor\FigmaBridge"
 $unityBridgeMeta = Join-Path $PluginRoot "unity\Assets\Editor\FigmaBridge.meta"
 if (-not (Test-Path -LiteralPath $unityBridge -PathType Container) -or -not (Test-Path -LiteralPath $unityBridgeMeta -PathType Leaf)) {
@@ -146,7 +152,6 @@ $releaseName = "figma-relay-$releaseVersion"
 $releaseRoot = Join-Path $outputRoot $releaseName
 $zipPath = Join-Path $outputRoot "$releaseName.zip"
 $relayRoot = Join-Path $releaseRoot "figma-relay"
-$unityRoot = Join-Path $releaseRoot "unity"
 
 Assert-PathInside -Path $releaseRoot -Root $outputRoot
 Assert-PathInside -Path $zipPath -Root $outputRoot
@@ -155,15 +160,16 @@ if (Test-Path -LiteralPath $releaseRoot) {
     throw "Release directory already exists; choose a new version or remove the reviewed output manually."
 }
 if (Test-Path -LiteralPath $zipPath) {
-    Remove-Item -LiteralPath $zipPath -Force
+    throw "Release archive already exists; choose a new version."
 }
-New-Item -ItemType Directory -Force -Path $relayRoot, $unityRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $relayRoot | Out-Null
 
 Write-Step "Assembling release package"
 $releaseItems = @(
-    "ai", "client", "code", "dist", "prompts", "scripts", "server", "src",
+    "ai", "client", "code", "dist", "docs", "prompts", "scripts", "server", "src",
     ".build_version", ".gitignore", "build.bat", "code.js", "manifest.json", "package-lock.json",
-    "package.json", "README.md", "tsconfig.json", "ui.html"
+    "package.json", "README.md", "LICENSE", "tsconfig.json", "ui.html",
+    "unity\Assets\Editor\FigmaBridge", "unity\Assets\Editor\FigmaBridge.meta"
 )
 foreach ($item in $releaseItems) {
     Copy-ReleaseItem -RelativePath $item -DestinationRoot $relayRoot
@@ -172,19 +178,11 @@ Get-ChildItem -LiteralPath $PluginRoot -Filter "*.bat" -File | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $relayRoot $_.Name) -Force
 }
 
-$unityAssetsRoot = Join-Path $unityRoot "Assets\Editor"
-New-Item -ItemType Directory -Force -Path $unityAssetsRoot | Out-Null
-Copy-Item -LiteralPath $unityBridge -Destination (Join-Path $unityAssetsRoot "FigmaBridge") -Recurse -Force
-Copy-Item -LiteralPath $unityBridgeMeta -Destination (Join-Path $unityAssetsRoot "FigmaBridge.meta") -Force
-$unityReadme = Join-Path $unityRoot "README.md"
-@(
-    "# Unity FigmaBridge Installation",
-    "",
-    "Copy Assets/Editor/FigmaBridge and Assets/Editor/FigmaBridge.meta together into the target Unity project's Assets/Editor/ directory.",
-    "This plugin contains only an Editor Assembly and does not enter the game Runtime."
-) | Set-Content -LiteralPath $unityReadme -Encoding UTF8
+Copy-Item -LiteralPath (Join-Path $PluginRoot 'docs\distribution.md') -Destination (Join-Path $releaseRoot 'README.md')
 
-Compress-Archive -Path (Join-Path $releaseRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal -Force
+Write-Step "Validating assembled release versions and runtime layout"
+Invoke-Checked -FilePath 'node' -Arguments @((Join-Path $ScriptDir 'check_release.mjs'), $relayRoot)
+Compress-Archive -Path (Join-Path $releaseRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
 Write-Host "Release directory: $releaseRoot" -ForegroundColor Green
 Write-Host "Release archive:   $zipPath" -ForegroundColor Green
 
@@ -197,4 +195,9 @@ if (-not $NoLaunch) {
         throw "Packaged Relay launcher failed with exit code $LASTEXITCODE"
     }
     Write-Host "Packaged Relay is ready: $launcher" -ForegroundColor Green
+}
+$packageLog.Write('succeeded', "Release $releaseVersion archive created: $zipPath")
+} catch {
+    $packageLog.Write('failed', $_.Exception.Message)
+    throw
 }

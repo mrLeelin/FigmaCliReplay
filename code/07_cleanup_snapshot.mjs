@@ -115,6 +115,8 @@ function buildCleanupSnapshotNode(node, depth, maxTextCharacters) {
       psdSource: Object.keys(psd).length > 0,
     },
   };
+  const absolute = cleanupAbsoluteBounds(node);
+  if (absolute) record.abs = absolute;
   if (node.type === "TEXT") {
     record.characters = String(node.characters || "").slice(0, maxTextCharacters);
   }
@@ -128,6 +130,18 @@ function cleanupSiblingIndex(node) {
     : [];
   const index = siblings.indexOf(node);
   return index >= 0 ? index : 0;
+}
+
+// 绝对包围盒与 analysis 的 bounds 同口径；旋转/翻转节点的 x/y/width/height 无法与之换算，不参与快照哈希。
+function cleanupAbsoluteBounds(node) {
+  const box = node && node.absoluteBoundingBox;
+  if (!box) return null;
+  return {
+    x: finiteCleanupNumber(box.x),
+    y: finiteCleanupNumber(box.y),
+    w: finiteCleanupNumber(box.width),
+    h: finiteCleanupNumber(box.height),
+  };
 }
 
 function finiteCleanupNumber(value) {

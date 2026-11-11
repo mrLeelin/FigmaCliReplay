@@ -16,6 +16,7 @@ import base64
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 from copy import deepcopy
 from copy import deepcopy
@@ -24,7 +25,7 @@ from nine_slice_common import detect_type_and_border, validate_spec
 from common_texture import get_index
 import re
 import sys
-from auto_componentset_specs import apply_auto_componentsets_to_data
+from auto_componentset_specs import apply_auto_componentsets_to_data, text_alignment
 from text_outline import cached_font_sdf_metrics, compute_text_outline, normalize_stroke_align, stroke_align_signature_token
 from name_utils import sanitize_name, normalize_unity_display_name, strip_outer_brackets, clamp, unity_node_name
 from constraints_utils import convert_figma_bounds_to_unity_rect, figma_constraints_to_rect_transform_spec
@@ -331,11 +332,12 @@ def resolve_asset_path_collisions(images_spec, dl_images, spec_nodes):
     asset_path_to_content = {}
     remap_image_ids = {}
     used_paths = set()
+    images_by_id = {image["id"]: image for image in images_spec}
 
     for index, dl_item in enumerate(dl_images):
-        if index >= len(images_spec):
+        image = images_by_id.get(dl_item.get("imageId"))
+        if image is None:
             continue
-        image = images_spec[index]
         target_asset_path = str(dl_item.get("targetAssetPath") or "").replace("\\", "/")
         image_id = image.get("id") or dl_item.get("imageId")
         if not target_asset_path or not image_id:
@@ -382,16 +384,57 @@ def resolve_asset_path_collisions(images_spec, dl_images, spec_nodes):
     return remap_image_ids
 
 
+def resolve_existing_generated_images(images_spec, dl_images):
+    """Reuse generated PNGs only when their final bytes match the current export."""
+    images_by_id = {image["id"]: image for image in images_spec}
+    for item in dl_images:
+        expected_md5 = item.get("expectedMD5")
+        if not expected_md5 or item.get("reuseReason") == "CommonTexture":
+            continue
+        image = images_by_id[item["imageId"]]
+        asset_path = item["targetAssetPath"]
+
+        def matches(path):
+            disk = UNITY_PROJECT / normalize_asset_path(path)
+            if not disk.is_file():
+                return False
+            raw = disk.read_bytes()
+            expected_size = image_plan_size_key(item)
+            if min(expected_size) > 0:
+                if len(raw) < 24 or raw[:8] != b"\x89PNG\r\n\x1a\n":
+                    return False
+                actual_size = (int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big"))
+                if actual_size != expected_size:
+                    return False
+            return hashlib.md5(raw).hexdigest() == expected_md5
+
+        if _unity_asset_exists(asset_path) and not matches(asset_path):
+            stem = Path(strip_hash_suffix_from_png(image["fileName"])).stem
+            suffix = expected_md5[:8]
+            counter = 1
+            while True:
+                name = f"{stem}_{suffix}{'_' + str(counter) if counter > 1 else ''}.png"
+                candidate = unity_asset_join(image["targetDir"], name)
+                if not _unity_asset_exists(candidate) or matches(candidate):
+                    break
+                counter += 1
+            image["fileName"] = item["fileName"] = name
+            item["targetAssetPath"] = asset_path = candidate
+        item["reuseExistingAsset"] = matches(asset_path)
+        item["reuseReason"] = "ExistingUnityAsset" if item["reuseExistingAsset"] else ""
+
+
 def apply_name_size_fallback_dedup(spec_nodes, images_spec, dl_images):
     """在所有精确判断后，按基础文件名+尺寸兜底合并图片，并输出人工审核数据。"""
     canonical_by_name_size = {}
     remap_image_ids = {}
     review_items = []
+    downloads_by_id = {item["imageId"]: item for item in dl_images}
 
     for index, img in enumerate(images_spec):
-        if index >= len(dl_images):
+        dl_item = downloads_by_id.get(img["id"])
+        if dl_item is None:
             continue
-        dl_item = dl_images[index]
         if dl_item.get("reuseExistingAsset"):
             continue
         base_name = strip_hash_suffix_from_png(img.get("fileName", ""))
@@ -405,7 +448,7 @@ def apply_name_size_fallback_dedup(spec_nodes, images_spec, dl_images):
 
         canonical_index = canonical_by_name_size[key]
         canonical_img = images_spec[canonical_index]
-        canonical_dl = dl_images[canonical_index]
+        canonical_dl = downloads_by_id[canonical_img["id"]]
         current_identity = _image_content_identity(dl_item)
         canonical_identity = _image_content_identity(canonical_dl)
         # A matching name and dimensions are not enough to prove pixels match.
@@ -964,25 +1007,16 @@ def build_spec(
     HASH_TO_IMAGE_ID = {}
     img_counter = [0]
 
-    def get_image_hash_for_node(node_id):
-        result = None
-        for e in export_by_node.get(node_id, []):
-            h = e.get("imageHash", "")
-            if h:
-                if not result:
-                    result = h
-                if h in HASH_TO_IMAGE_ID:
-                    return h
-        if not result:
-            for cid in children_map.get(node_id, []):
-                for e in export_by_node.get(cid, []):
-                    h = e.get("imageHash", "")
-                    if h:
-                        if not result:
-                            result = h
-                        if h in HASH_TO_IMAGE_ID:
-                            return h
-        return result if (result and result in HASH_TO_IMAGE_ID) else None
+    def image_reuse_key(export, node_id):
+        native_hash = export.get("imageHash", "")
+        if not native_hash:
+            return None
+        source_id = export.get("nodeId") or node_id
+        source = node_map.get(source_id, node_map.get(node_id, {}))
+        styled = bool(export.get("exportBounds")) or any(
+            effect.get("visible", True) for effect in source.get("effects", [])
+        ) or any(stroke.get("visible", True) for stroke in source.get("strokes", []))
+        return native_hash, source_id if styled else ""
 
     def register_image(node_id, nine_slice_data=None):
         if nine_slice_data:
@@ -991,19 +1025,20 @@ def build_spec(
             return img_id
 
         for e in export_by_node.get(node_id, []):
-            h = e.get("imageHash", "")
+            h = image_reuse_key(e, node_id)
             if h and h in HASH_TO_IMAGE_ID:
                 return HASH_TO_IMAGE_ID[h]
 
         img_id = "img_" + str(img_counter[0]); img_counter[0] += 1
         for e in export_by_node.get(node_id, []):
-            h = e.get("imageHash", "")
+            h = image_reuse_key(e, node_id)
             if h:
                 HASH_TO_IMAGE_ID[h] = img_id
         return img_id
 
     # ── Phase 5: 生成节点树 ──
     spec_nodes = []
+    image_source_nodes = {}
 
     def convert_coords(child_bounds, parent_bounds, rect_transform=None):
         return convert_figma_bounds_to_unity_rect(child_bounds, parent_bounds, rect_transform)
@@ -1011,20 +1046,42 @@ def build_spec(
     def figma_constraints_to_rect_transform(node):
         return figma_constraints_to_rect_transform_spec(node.get("constraints") or {})
 
+    visual_rect_transform = figma_constraints_to_rect_transform_spec({"horizontal": "CENTER", "vertical": "CENTER"})
+
+    def exported_visual_rect(node_id, bounds):
+        for export in export_by_node.get(node_id, []):
+            exported_bounds = export.get("exportBounds")
+            if not exported_bounds:
+                continue
+            rendered = {key: float(exported_bounds[key]) for key in ("x", "y", "width", "height")}
+            if not all(math.isfinite(value) for value in rendered.values()) or min(rendered["width"], rendered["height"]) <= 0:
+                raise ValueError(f"Invalid PNG export bounds: {node_id}")
+            if rendered["width"] != export.get("width") or rendered["height"] != export.get("height"):
+                raise ValueError(f"PNG export bounds differ from its pixel size: {node_id}")
+            if any(abs(rendered[key] - bounds[key]) > 0.01 for key in rendered):
+                return convert_coords(rendered, bounds, visual_rect_transform)
+        return None
+
     def process_node(node_id, parent_bounds, idx_map):
         if node_id in SKIP_IDS:
             return None
         node = node_map.get(node_id)
         if not node:
             return None
+        # A Figma mask clips later siblings; it is never visible artwork itself.
+        if node.get("isMask"):
+            return None
 
         ntype, nname, bounds = node["type"], node["name"], node["bounds"]
+        rasterize = bool(node.get("rasterize"))
+        if rasterize and not export_by_node.get(node_id):
+            raise ValueError(f"Rasterized node has no composite PNG export: {node_id}")
         rect_transform = figma_constraints_to_rect_transform(node)
         rect = convert_coords(bounds, parent_bounds, rect_transform)
 
         if node_id == nodes_list[0]["id"]:
             spec_type, spec_fields = "Root", {}
-            ch_ids = [c for c in children_map.get(node_id, []) if c not in SKIP_IDS]
+            ch_ids = [] if rasterize else [c for c in children_map.get(node_id, []) if c not in SKIP_IDS]
         elif ntype == "TEXT":
             fs = int(node.get("fontSize", 24)) or 24
             # 读取 manifest 中文本实际填充颜色，替代硬编码白色
@@ -1038,7 +1095,7 @@ def build_spec(
             spec_type, spec_fields = "Text", {
                 "text": node.get("characters", ""), "fontSize": fs,
                 "color": _fill_color,
-                "alignment": "Center",
+                "alignment": text_alignment(node),
             }
             text_material = build_text_material_spec(node, fs)
             if text_material:
@@ -1059,12 +1116,13 @@ def build_spec(
                 iid = register_image(node_id)
                 spec_type, spec_fields = "Image", {"imageId": iid, "imageType": "Simple", "color": {"r": 1, "g": 1, "b": 1, "a": node.get("opacity", 1)}}
                 ch_ids = []
-        elif ntype in ("RECTANGLE", "FRAME"):
+        elif rasterize or ntype in ("RECTANGLE", "FRAME", "BOOLEAN_OPERATION", "ELLIPSE", "VECTOR"):
             has_own_export = len(export_by_node.get(node_id, [])) > 0
             # 只查节点自身的导出，不递归子节点（避免把子节点有图的 FRAME 容器误判为 Image）
             if has_own_export:
                 # 纯色无效果节点 → 共享白像素 + color，不导出 PNG
-                if is_solid_only_no_effects(node):
+                if (not rasterize and not any(export.get("exportBounds") for export in export_by_node[node_id])
+                        and ntype in ("RECTANGLE", "FRAME") and is_solid_only_no_effects(node)):
                     spec_type, spec_fields = "Image", {
                         "imageId": WHITE_PIXEL_IMAGE_ID,
                         "imageType": "Simple",
@@ -1078,10 +1136,20 @@ def build_spec(
                     }
             else:
                 spec_type, spec_fields = "Panel", {}
-            ch_ids = [c for c in children_map.get(node_id, []) if c not in SKIP_IDS]
+            # Boolean operands are geometry inputs, not independently rendered UI.
+            ch_ids = [] if (rasterize or ntype == "BOOLEAN_OPERATION") and has_own_export else [
+                c for c in children_map.get(node_id, []) if c not in SKIP_IDS
+            ]
         else:
             spec_type, spec_fields = "Panel", {}
             ch_ids = [c for c in children_map.get(node_id, []) if c not in SKIP_IDS]
+
+        visual_fields = None
+        visual_rect = exported_visual_rect(node_id, bounds)
+        if visual_rect and spec_type == "Image" and spec_fields.get("imageType") != "Sliced":
+            # Keep layout and descendant coordinates on the original node; only artwork includes the outset pixels.
+            visual_fields = spec_fields
+            spec_type, spec_fields = "Panel", {}
 
         # 先添加到数组（确保 Root 在 index 0）
         idx = len(spec_nodes)
@@ -1096,6 +1164,24 @@ def build_spec(
 
         # 再处理子节点
         child_indices = []
+        if visual_fields:
+            image_source_nodes[visual_fields["imageId"]] = node_id
+            child_indices.append(len(spec_nodes))
+            spec_nodes.append({
+                "name": "Visual", "type": "Image", **visual_fields,
+                "rect": visual_rect, "rectTransform": deepcopy(visual_rect_transform), "childIndices": [],
+            })
+        if spec_type == "Root" and rasterize:
+            iid = register_image(node_id)
+            image_source_nodes[iid] = node_id
+            child_indices.append(len(spec_nodes))
+            spec_nodes.append({
+                "name": unity_node_name(nname, False, prefab_name, has_children=False),
+                "type": "Image", "imageId": iid, "imageType": "Simple", "childIndices": [],
+                "rect": visual_rect or {"x": 0, "y": 0, "w": bounds["width"], "h": bounds["height"]},
+                "rectTransform": deepcopy(visual_rect_transform),
+                "color": {"r": 1, "g": 1, "b": 1, "a": node.get("opacity", 1)},
+            })
         # Instance 节点通常不处理子节点（由 PrefabInstance/CommonTexture 处理）
         # 但如果 Instance 内部有九宫图，需要处理这些子节点
         should_process_children = ntype != "INSTANCE"
@@ -1136,7 +1222,7 @@ def build_spec(
             continue
 
         # 找代表性节点
-        rep_nid = None
+        rep_nid = image_source_nodes.get(iid)
         for nid, ix in idx_map.items():
             if ix < len(spec_nodes) and spec_nodes[ix].get("imageId") == iid:
                 rep_nid = nid; break
@@ -1190,16 +1276,17 @@ def build_spec(
     # 图片文件名去重：同名不同图的节点追加唯一后缀，防止 process_images.py 覆盖
     canonical_by_content = {}
     remap_image_ids = {}
-    for i, dl_item in enumerate(dl_images):
+    images_by_id = {image["id"]: image for image in images_spec}
+    for dl_item in dl_images:
+        image = images_by_id[dl_item["imageId"]]
         content_md5 = dl_item.get("expectedMD5") or dl_item.get("imageHash") or ""
         if not content_md5:
             continue
-        key = (images_spec[i]["fileName"], content_md5)
+        key = (image["fileName"], content_md5)
         if key in canonical_by_content:
-            canonical_index = canonical_by_content[key]
-            remap_image_ids[images_spec[i]["id"]] = images_spec[canonical_index]["id"]
+            remap_image_ids[image["id"]] = canonical_by_content[key]
             continue
-        canonical_by_content[key] = i
+        canonical_by_content[key] = image["id"]
     if remap_image_ids:
         for sn in spec_nodes:
             image_id = sn.get("imageId")
@@ -1209,18 +1296,21 @@ def build_spec(
         images_spec = [img for img in images_spec if img["id"] in keep_ids]
         dl_images = [img for img in dl_images if img["imageId"] in keep_ids]
 
+    resolve_existing_generated_images(images_spec, dl_images)
     resolve_asset_path_collisions(images_spec, dl_images, spec_nodes)
+    resolve_existing_generated_images(images_spec, dl_images)
 
+    downloads_by_id = {item["imageId"]: item for item in dl_images}
     fname_counts = Counter(
         img["fileName"]
-        for i, img in enumerate(images_spec)
-        if not (i < len(dl_images) and dl_images[i].get("reuseExistingAsset"))
+        for img in images_spec
+        if not downloads_by_id.get(img["id"], {}).get("reuseExistingAsset")
     )
     if any(v > 1 for v in fname_counts.values()):
         # 为每个重复图片准备唯一后缀：优先用 imageHash 前 8 位，否则用序号
         fname_seq = {fname: 0 for fname, v in fname_counts.items() if v > 1}
-        for i, img in enumerate(images_spec):
-            dl_item = dl_images[i] if i < len(dl_images) else {}
+        for img in images_spec:
+            dl_item = downloads_by_id.get(img["id"], {})
             if dl_item.get("reuseExistingAsset"):
                 continue
             fname = img["fileName"]
@@ -1232,9 +1322,9 @@ def build_spec(
                 base, ext = fname.rsplit(".", 1)
                 new_fname = f"{base}_{hash_suffix}.{ext}"
                 img["fileName"] = new_fname
-                if i < len(dl_images):
-                    dl_images[i]["fileName"] = new_fname
-                    dl_images[i]["targetAssetPath"] = unity_asset_join(img.get("targetDir", ""), new_fname)
+                if dl_item:
+                    dl_item["fileName"] = new_fname
+                    dl_item["targetAssetPath"] = unity_asset_join(img.get("targetDir", ""), new_fname)
 
     images_spec, dl_images, name_size_dedup_review = apply_name_size_fallback_dedup(spec_nodes, images_spec, dl_images)
 

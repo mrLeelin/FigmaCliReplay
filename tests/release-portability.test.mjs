@@ -9,7 +9,7 @@ const hiddenStartScript = fs.readFileSync(new URL("../scripts/start_relay.ps1", 
 const installScriptUrl = new URL("../scripts/install_unity_bridge.ps1", import.meta.url);
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname.slice(1));
 
-test("release packaging owns its Unity bridge and stops it before replacing a release", () => {
+test("release packaging owns its Unity bridge and refuses to overwrite an existing release", () => {
   assert.doesNotMatch(packageScript, /Find-RepositoryRoot/);
   assert.doesNotMatch(packageScript, /JellybeanUnity\\Assets\\Editor\\FigmaBridge/);
   assert.match(packageScript, /Join-Path \$PluginRoot "unity\\Assets\\Editor\\FigmaBridge"/);
@@ -24,10 +24,13 @@ test("background Relay launch cannot open a visible console window", () => {
   assert.match(startProcessLine, /-RedirectStandardError/);
 });
 
-test("Unity bridge installer copies only the editor plugin and preserves ProjectSettings", () => {
+test("standalone Unity installer uses the shared GUID-preserving installer", () => {
   assert.equal(fs.existsSync(installScriptUrl), true);
   const installer = fs.readFileSync(installScriptUrl, "utf8");
-  assert.match(installer, /Assets\\Editor\\FigmaBridge/);
+  assert.match(installer, /install_unity_bridge\.mjs/);
+  const sharedEntry = fs.readFileSync(new URL('../scripts/install_unity_bridge.mjs', import.meta.url), 'utf8');
+  assert.match(sharedEntry, /dist\/unityBridgeInstaller\.js/);
+  assert.match(sharedEntry, /admin-token\.txt/);
   assert.doesNotMatch(installer, /Remove-Item.*ProjectSettings/i);
   assert.doesNotMatch(installer, /Copy-Item.*ProjectSettings/i);
 });

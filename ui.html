@@ -1739,6 +1739,35 @@
     }
     body.is-resizing-plugin { user-select: none; cursor: nwse-resize; }
 
+    /* 一键最小化：仅保留迷你栏，其余 body 子元素只隐藏不销毁，还原后状态不丢 */
+    .workspace-header .plugin-minimize-btn {
+      flex: 0 0 auto;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+    }
+    .plugin-mini-bar { display: none; }
+    body.is-minimized > *:not(.plugin-mini-bar) { display: none !important; }
+    body.is-minimized { overflow: hidden; }
+    body.is-minimized .plugin-mini-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 100vh;
+      padding: 0 8px 0 10px;
+      background: var(--sidebar);
+      color: var(--text);
+      font-size: 12px;
+    }
+    .plugin-mini-bar .brand-mark { width: 22px; height: 22px; border-radius: 6px; font-size: 10px; box-shadow: none; }
+    .plugin-mini-bar .mini-status { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+    .plugin-mini-bar .mini-status .dot { width: 7px; height: 7px; border-radius: 50%; background: #5c6778; }
+    .plugin-mini-bar .mini-status.online .dot { background: var(--ok); }
+    .plugin-mini-bar .mini-status.offline .dot { background: var(--danger); }
+    .plugin-mini-bar .mini-status.pending .dot { background: var(--accent); }
+    .plugin-mini-bar .plugin-restore-btn { margin-left: auto; padding: 4px 10px; font-size: 12px; border-radius: var(--radius-sm); }
+
     .modal-card {
       width: min(560px, 94%);
       border-radius: var(--radius);
@@ -1808,6 +1837,12 @@
 <body>
   <div class="psd-window-drop-overlay" id="psdWindowDropOverlay">松开鼠标放入 PSD / Prefab</div>
   <div class="plugin-resize-handle" id="pluginResizeHandle" title="拖动缩放插件窗口" aria-label="拖动缩放插件窗口"></div>
+  <div class="plugin-mini-bar" id="pluginMiniBar" title="双击还原插件窗口">
+    <div class="brand-mark" aria-hidden="true">LR</div>
+    <span class="mini-status offline" id="miniRelayStatus" title="Relay 未连接"><span class="dot"></span>Relay</span>
+    <span class="mini-status pending" id="miniUnityStatus" title="Unity 连接中"><span class="dot"></span>Unity</span>
+    <button class="secondary plugin-restore-btn" id="pluginRestoreBtn" type="button" title="还原插件窗口">还原</button>
+  </div>
 
   <div class="shell">
     <aside class="sidebar">
@@ -1817,7 +1852,7 @@
           <div>
             <h1>LKS Figma Relay</h1>
           </div>
-          <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.48<!-- END_RELEASE_VERSION --></span>
+          <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.49<!-- END_RELEASE_VERSION --></span>
           <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
         </div>
         <div class="brand-meta">Figma ↔ Unity 工作台</div>
@@ -1861,6 +1896,7 @@
           <div class="workspace-eyebrow">Workspace</div>
           <h2 class="workspace-title" id="workspaceTitle">同步 Unity</h2>
         </div>
+        <button class="secondary plugin-minimize-btn" id="pluginMinimizeBtn" type="button" title="最小化插件窗口">最小化</button>
       </header>
 
       <main class="main">
@@ -9023,6 +9059,66 @@
         document.body.classList.add("is-resizing-plugin");
         window.addEventListener("mousemove", onMove);
         window.addEventListener("mouseup", onUp);
+      });
+    })();
+
+    // ─── 插件窗口一键最小化/还原 ───
+    (function setupPluginWindowMinimize() {
+      var minimizeBtn = document.getElementById("pluginMinimizeBtn");
+      var restoreBtn = document.getElementById("pluginRestoreBtn");
+      var miniBar = document.getElementById("pluginMiniBar");
+      if (!minimizeBtn || !restoreBtn || !miniBar) return;
+      // 最小化前的窗口尺寸，还原时回传给主线程
+      var restoreSize = null;
+
+      function minimize() {
+        if (document.body.classList.contains("is-minimized")) return;
+        restoreSize = { width: window.innerWidth, height: window.innerHeight };
+        document.body.classList.add("is-minimized");
+        parent.postMessage({ pluginMessage: { type: "SET_PLUGIN_UI_MINIMIZED", minimized: true } }, "*");
+      }
+
+      function restore() {
+        if (!document.body.classList.contains("is-minimized")) return;
+        document.body.classList.remove("is-minimized");
+        parent.postMessage({
+          pluginMessage: {
+            type: "SET_PLUGIN_UI_MINIMIZED",
+            minimized: false,
+            width: restoreSize ? restoreSize.width : 1120,
+            height: restoreSize ? restoreSize.height : 800
+          }
+        }, "*");
+      }
+
+      // 迷你栏状态点跟随侧栏连接芯片的 online/offline/pending 类
+      function syncMiniStatus(miniEl, chipId) {
+        var chip = document.getElementById(chipId);
+        if (!miniEl || !chip) return;
+        ["online", "offline", "pending"].forEach(function (name) {
+          miniEl.classList.toggle(name, chip.classList.contains(name));
+        });
+        miniEl.title = String(chip.textContent || "").trim();
+      }
+
+      function refreshMiniStatus() {
+        syncMiniStatus(document.getElementById("miniRelayStatus"), "headerRelayChip");
+        syncMiniStatus(document.getElementById("miniUnityStatus"), "headerUnityChip");
+      }
+
+      ["headerRelayChip", "headerUnityChip"].forEach(function (id) {
+        var chip = document.getElementById(id);
+        if (chip && typeof MutationObserver !== "undefined") {
+          new MutationObserver(refreshMiniStatus).observe(chip, { attributes: true, attributeFilter: ["class"] });
+        }
+      });
+      refreshMiniStatus();
+
+      minimizeBtn.addEventListener("click", minimize);
+      restoreBtn.addEventListener("click", restore);
+      miniBar.addEventListener("dblclick", function (event) {
+        if (event.target === restoreBtn) return;
+        restore();
       });
     })();
 

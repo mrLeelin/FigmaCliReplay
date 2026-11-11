@@ -1,4 +1,5 @@
 node_modules/
+.venv/
 dist/
 .logs/
 .local/
@@ -8,3 +9,4 @@ output/
 __pycache__/
 client/__pycache__/
 server/__pycache__/
+.omc

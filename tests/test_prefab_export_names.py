@@ -95,6 +95,28 @@ class PrefabExportNamingTests(unittest.TestCase):
         self.assertEqual(plan["images"][0]["expectedMD5"], hashlib.md5(image_raw).hexdigest())
         self.assertEqual(plan["manifestProvenance"]["rootName"], "[screen_root｜主页]")
 
+    def test_builtin_white_pixel_does_not_shift_download_ids_or_image_content(self):
+        solid, _ = self.image_export("1:2", (255, 255, 255, 255))
+        first, first_raw = self.image_export("1:3", (255, 0, 0, 255))
+        second, second_raw = self.image_export("1:4", (0, 255, 0, 255))
+        nodes = [
+            self.node("1:1", "Screen", children=("1:2", "1:3", "1:4")),
+            self.node("1:2", "Solid", "RECTANGLE", fills=[{
+                "type": "SOLID", "color": {"r": 1, "g": 1, "b": 1}, "opacity": 1,
+            }]),
+            self.node("1:3", "Icon", "RECTANGLE", fills=[{"type": "IMAGE"}]),
+            self.node("1:4", "Icon", "RECTANGLE", fills=[{"type": "IMAGE"}]),
+        ]
+        spec, plan, _ = self.build(nodes, [solid, first, second])
+        _, download_check, _ = gen_spec.validate_image_references(spec, plan)
+        self.assertTrue(download_check["pass"], download_check["details"])
+        self.assertEqual(len(spec["images"]), 3)
+        self.assertEqual(len(plan["images"]), 2)
+        self.assertEqual({item["expectedMD5"] for item in plan["images"]}, {
+            hashlib.md5(first_raw).hexdigest(), hashlib.md5(second_raw).hexdigest(),
+        })
+        self.assertEqual(len({item["targetAssetPath"] for item in plan["images"]}), 2)
+
     def test_folded_nine_slice_is_a_leaf_even_though_figma_had_children(self):
         image, _ = self.image_export("2:2", (0, 255, 0, 255))
         nodes = [

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 import {
   CleanupSnapshotLimits,
   buildCleanupSnapshot,
 } from "../code/07_cleanup_snapshot.mjs";
+import { computeCleanupSnapshotHashFromNodes } from "../code/08_cleanup_transaction.mjs";
 
 const MetadataNamespace = "psd_layer_to_figma_bridge";
 
@@ -183,4 +185,40 @@ test("plugin exposes one read-only cleanup snapshot command", () => {
   assert.match(handlers, /buildCleanupSnapshot\(selection\[0\]\)/);
   assert.match(handlers, /type: "QUERY_CLEANUP_SNAPSHOT_RESULT"/);
   assert.match(buildScript, /"07_cleanup_snapshot\.mjs"/);
+});
+
+test("records absolute bounds for rotated nodes without changing the snapshot hash", () => {
+  const flipped = fakeNode({ id: "1:2", type: "ELLIPSE", x: 10, y: 52, width: 32, height: 32 });
+  flipped.absoluteBoundingBox = { x: 110, y: 120, width: 32, height: 32 };
+  const root = fakeNode({ id: "1:1", children: [flipped] });
+
+  const snapshot = buildCleanupSnapshot(root);
+  assert.equal(snapshot.nodes[0].abs, undefined);
+  assert.deepEqual(snapshot.nodes[1].abs, { x: 110, y: 120, w: 32, h: 32 });
+  assert.equal(snapshot.nodes[1].y, 52);
+
+  const withoutAbs = snapshot.nodes.map(({ abs, ...rest }) => rest);
+  assert.equal(computeCleanupSnapshotHashFromNodes(snapshot.nodes), computeCleanupSnapshotHashFromNodes(withoutAbs));
+});
+
+test("snapshot query honors rootNodeId sent through relay job payload", async () => {
+  const handlers = fs.readFileSync(new URL("../code/01_handlers.js", import.meta.url), "utf8");
+  const start = handlers.indexOf("async function handleQueryCleanupSnapshot(");
+  const end = handlers.indexOf("\n/**", start);
+  const posted = [];
+  const target = { id: "69:162", type: "FRAME" };
+  const sandbox = {
+    figma: {
+      getNodeByIdAsync: async (id) => (id === target.id ? target : null),
+      currentPage: { selection: [{ id: "9:9", type: "RECTANGLE" }] },
+      ui: { postMessage: (message) => posted.push(message) },
+    },
+    buildCleanupSnapshot: (root) => ({ rootNodeId: root.id, nodes: [] }),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(handlers.slice(start, end), sandbox);
+
+  await sandbox.handleQueryCleanupSnapshot({ requestId: "r1", job: { rootNodeId: "69:162" } });
+  assert.equal(posted[0].result.status, "completed");
+  assert.equal(posted[0].result.snapshot.rootNodeId, "69:162");
 });

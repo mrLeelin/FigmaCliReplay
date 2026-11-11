@@ -2457,6 +2457,12 @@ async function exportFigmaToPrefabJob(job) {
   if (!root) {
     throw new Error(`Figma node not found: ${nodeId}`);
   }
+  if (root.isMask === true) {
+    throw new Error("A mask cannot be the Prefab export root; select its containing frame and export again.");
+  }
+  if (root.type === "BOOLEAN_OPERATION") {
+    throw new Error("BOOLEAN_OPERATION cannot be the Prefab export root; select its containing frame and export again.");
+  }
   await setCurrentPageForNode(root);
 
   const warnings = [];
@@ -2507,6 +2513,29 @@ async function exportFigmaToPrefabJob(job) {
   };
 }
 
+/** 仅合成没有文字、组件或九宫复用语义的视觉遮罩组。 */
+function shouldRasterizeFigmaPrefabMaskGroup(node) {
+  if (!node || (node.type !== "GROUP" && node.type !== "FRAME") || !hasPositiveBounds(node)) {
+    return false;
+  }
+  const children = "children" in node && Array.isArray(node.children) ? node.children : [];
+  if (!children.some(child => child && !child.removed && child.visible !== false
+    && !isCleanupRecoveryNode(child) && child.isMask === true)) {
+    return false;
+  }
+
+  const visualTypes = new Set(["GROUP", "FRAME", "RECTANGLE", "ELLIPSE", "VECTOR", "LINE", "POLYGON", "STAR", "BOOLEAN_OPERATION"]);
+  const pending = [node];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || current.removed || current.visible === false || isCleanupRecoveryNode(current)) continue;
+    // 不烘焙可编辑文字、实例/组件或专用九宫 Sprite。
+    if (!visualTypes.has(current.type) || buildFigmaPrefabNineSliceInfo(current)) return false;
+    if ("children" in current && Array.isArray(current.children)) pending.push(...current.children);
+  }
+  return true;
+}
+
 /** 递归收集 Figma 节点树，并转换为相对父节点的数据记录。 */
 async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequests, warnings, parentId, parentBounds) {
   if (!node || node.removed || node.visible === false || isCleanupRecoveryNode(node)) {
@@ -2523,14 +2552,15 @@ async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequ
     type: node.type,
     path: buildNodePath(node, root),
     visible: node.visible !== false,
+    isMask: node.isMask === true,
     opacity: typeof node.opacity === "number" ? node.opacity : 1,
     bounds: boundsToManifest(bounds),
     relativeBounds: boundsToRelativeManifest(bounds, refBounds),
     fills: serializePaints(node.fills),
     strokes: serializePaints(node.strokes),
-    effects: node.type === "TEXT" ? serializeEffects(node.effects) : [],
+    effects: serializeEffects(node.effects),
     constraints: readFigmaPrefabConstraints(node),
-    strokeWeight: node.type === "TEXT" ? readFigmaStrokeWeight(node) : 0,
+    strokeWeight: readFigmaStrokeWeight(node),
     strokeAlign: node.type === "TEXT" ? readFigmaTextStrokeAlign(node) : "",
     cornerRadius: typeof node.cornerRadius === "number" ? node.cornerRadius : 0,
     characters: node.type === "TEXT" ? String(node.characters || "") : "",
@@ -2539,11 +2569,18 @@ async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequ
     textAlignVertical: node.type === "TEXT" ? String(node.textAlignVertical || "") : "",
     childIds: []
   };
+  const renderBounds = node.absoluteRenderBounds;
+  if (renderBounds && [renderBounds.x, renderBounds.y, renderBounds.width, renderBounds.height].every(Number.isFinite)
+    && renderBounds.width > 0 && renderBounds.height > 0) {
+    record.renderBounds = boundsToManifest(renderBounds);
+  }
   const componentInfo = await buildFigmaPrefabComponentInfo(node, warnings);
   if (componentInfo && componentInfo.source) {
     record.component = componentInfo;
   }
   output.push(record);
+  // 遮罩只参与父级组合渲染，不作为独立可见图像导出；其操作数也不单独收集。
+  if (record.isMask) return;
 
   const nineSliceInfo = buildFigmaPrefabNineSliceInfo(node);
   if (nineSliceInfo) {
@@ -2558,14 +2595,31 @@ async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequ
     };
   }
 
+  const isBooleanImage = node.type === "BOOLEAN_OPERATION" && !nineSliceInfo;
+  const isMaskGroupImage = !nineSliceInfo && shouldRasterizeFigmaPrefabMaskGroup(node);
+  if (isMaskGroupImage) {
+    record.rasterize = true;
+    record.rasterizeReason = "maskGroup";
+  }
   const imageHash = findFirstImageHash(node, !!nineSliceInfo);
-  if (imageHash) {
+  if (isBooleanImage || isMaskGroupImage) {
+    // 布尔操作数和遮罩组需要组合渲染，不能作为独立可见图片导出。
+    imageRequests.push({
+      id: `img_${imageRequests.length}`,
+      nodeId: node.id,
+      nodePath: record.path,
+      source: "nodeExport"
+    });
+  } else if (imageHash) {
     const request = {
       id: `img_${imageRequests.length}`,
       nodeId: node.id,
       nodePath: record.path,
       source: "imageHash",
-      imageHash
+      imageHash,
+      effects: record.effects,
+      strokes: record.strokes,
+      strokeWeight: record.strokeWeight
     };
     if (nineSliceInfo) {
       Object.assign(request, {
@@ -2606,7 +2660,7 @@ async function collectFigmaPrefabNodes(node, root, rootBounds, output, imageRequ
     });
   }
 
-  if ("children" in node && Array.isArray(node.children)) {
+  if (!isBooleanImage && !isMaskGroupImage && "children" in node && Array.isArray(node.children)) {
     for (const child of node.children) {
       if (child && child.visible !== false && !isCleanupRecoveryNode(child)) {
         record.childIds.push(child.id);
@@ -2713,8 +2767,12 @@ async function exportFigmaPrefabImages(imageRequests, warnings) {
       if (request.source === "imageHash" && request.imageHash) {
         const exportKey = buildFigmaPrefabImageExportKey(request);
         if (seenHash[exportKey]) {
+          const sourceExport = exports.find(item => item.id === seenHash[exportKey]);
           exports.push(Object.assign({}, request, {
             duplicateOf: seenHash[exportKey],
+            width: sourceExport.width,
+            height: sourceExport.height,
+            ...(sourceExport.exportBounds ? { exportBounds: sourceExport.exportBounds } : {}),
             byteLength: 0,
             base64: "",
             health: createImageHealth("repaired", "duplicateReused", { sourceExportId: seenHash[exportKey] })
@@ -2736,6 +2794,7 @@ async function exportFigmaPrefabImages(imageRequests, warnings) {
           mimeType: "image/png",
           width: exportResult.width || 0,
           height: exportResult.height || 0,
+          ...(exportResult.exportBounds ? { exportBounds: exportResult.exportBounds } : {}),
           byteLength: exportResult.bytes.length,
           base64: bytesToBase64(exportResult.bytes),
           health: createImageHealth(exportResult.fallbackReason ? "repaired" : "healthy", exportResult.fallbackReason || "exported", {
@@ -2752,13 +2811,12 @@ async function exportFigmaPrefabImages(imageRequests, warnings) {
         exports.push(Object.assign({}, request, { width: 0, height: 0, byteLength: 0, base64: "", health: createImageHealth("blocked", "nodeCannotExport") }));
         continue;
       }
-      const bounds = getNodeBounds(node);
-      // contentOnly+SCALE×1 防止投影/描边外扩使 PNG 尺寸超出节点帧尺寸
-      const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 }, contentsOnly: true });
+      const { bytes, width, height, exportBounds } = await exportFigmaPrefabNodePng(node);
       exports.push(Object.assign({}, request, {
         mimeType: "image/png",
-        width: Math.round(bounds.width || 0),
-        height: Math.round(bounds.height || 0),
+        width,
+        height,
+        ...(exportBounds ? { exportBounds } : {}),
         byteLength: bytes.length,
         base64: bytesToBase64(bytes),
         health: createImageHealth("healthy", "exported")
@@ -2780,6 +2838,14 @@ async function exportFigmaPrefabImages(imageRequests, warnings) {
 
 function buildFigmaPrefabImageExportKey(request) {
   if (!request || request.imageType !== "Sliced") {
+    const effects = Array.isArray(request && request.effects)
+      ? request.effects.filter(effect => effect && effect.visible !== false) : [];
+    const strokes = Array.isArray(request && request.strokes)
+      ? request.strokes.filter(stroke => stroke && stroke.visible !== false) : [];
+    if (effects.length > 0 || strokes.length > 0) {
+      return [request.imageHash || "", "composed", request.nodeId || "",
+        JSON.stringify(effects), JSON.stringify(strokes), request.strokeWeight || 0].join(":");
+    }
     return String(request && request.imageHash || "");
   }
   const border = request.border || {};
@@ -2951,8 +3017,82 @@ function validateFigmaPrefabSlicedExports(exports) {
   return errors;
 }
 
+/** 从 PNG 文件头读取真实像素尺寸，避免将节点几何尺寸误记为图片尺寸。 */
+function readFigmaPrefabPngSize(bytes) {
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (!bytes || bytes.length < 24 || !signature.every((value, index) => bytes[index] === value)
+    || bytes[12] !== 73 || bytes[13] !== 72 || bytes[14] !== 68 || bytes[15] !== 82) {
+    throw new Error("Node export did not return a PNG with an IHDR header");
+  }
+  const readUint32 = offset => bytes[offset] * 16777216 + bytes[offset + 1] * 65536
+    + bytes[offset + 2] * 256 + bytes[offset + 3];
+  const width = readUint32(16);
+  const height = readUint32(20);
+  if (width < 1 || height < 1) throw new Error("Node export returned an empty PNG size");
+  return { width, height };
+}
+
+/** 将外扩投影、模糊或描边的渲染范围转换为完整整数像素边界。 */
+function getFigmaPrefabEffectExportBounds(node) {
+  const effects = Array.isArray(node && node.effects) ? node.effects : [];
+  const hasOuterEffect = effects.some(effect => effect && effect.visible !== false
+    && (effect.type === "DROP_SHADOW" || effect.type === "LAYER_BLUR"));
+  const hasVisibleStroke = hasRenderablePaint(node && node.strokes);
+  if (!hasOuterEffect && !hasVisibleStroke) return null;
+  const rendered = node.absoluteRenderBounds;
+  if (!rendered || ![rendered.x, rendered.y, rendered.width, rendered.height].every(Number.isFinite)
+    || rendered.width <= 0 || rendered.height <= 0) return null;
+  const body = getNodeBounds(node);
+  if (rendered.x >= body.x && rendered.y >= body.y
+    && rendered.x + rendered.width <= body.x + body.width
+    && rendered.y + rendered.height <= body.y + body.height) return null;
+  const x = Math.floor(rendered.x);
+  const y = Math.floor(rendered.y);
+  return { x, y, width: Math.ceil(rendered.x + rendered.width) - x,
+    height: Math.ceil(rendered.y + rendered.height) - y,
+    renderBounds: { x: rendered.x, y: rendered.y, width: rendered.width, height: rendered.height } };
+}
+
+/** 导出完整 PNG；外扩效果保留渲染范围并核验，不裁切效果像素。 */
+async function exportFigmaPrefabNodePng(node) {
+  const exportBounds = getFigmaPrefabEffectExportBounds(node);
+  const bytes = await node.exportAsync({
+    format: "PNG", constraint: { type: "SCALE", value: 1 }, contentsOnly: true, useAbsoluteBounds: !exportBounds
+  });
+  let size;
+  try {
+    size = readFigmaPrefabPngSize(bytes);
+  } catch (error) {
+    if (exportBounds) error.code = "exportRenderBoundsMismatch";
+    throw error;
+  }
+  if (exportBounds) {
+    // Figma 会对小数边界量化一像素；保留实际 PNG 尺寸和原渲染中心，不裁切或缩放像素。
+    if (Math.abs(size.width - exportBounds.width) > 1 || Math.abs(size.height - exportBounds.height) > 1) {
+      const error = new Error(`PNG render bounds size mismatch: expected ${exportBounds.width}x${exportBounds.height} at (${exportBounds.x}, ${exportBounds.y}), actual ${size.width}x${size.height}`);
+      error.code = "exportRenderBoundsMismatch";
+      throw error;
+    }
+    const rendered = exportBounds.renderBounds;
+    return { bytes, width: size.width, height: size.height, exportBounds: {
+      x: roundNumber(rendered.x + (rendered.width - size.width) / 2),
+      y: roundNumber(rendered.y + (rendered.height - size.height) / 2),
+      width: size.width,
+      height: size.height
+    } };
+  }
+  const bounds = getNodeBounds(node);
+  const expectedWidth = Math.round(bounds.width || 0);
+  const expectedHeight = Math.round(bounds.height || 0);
+  if (size.width < expectedWidth || size.height < expectedHeight) {
+    const error = new Error(`Node PNG is smaller than its bounds: expected ${expectedWidth}x${expectedHeight}, actual ${size.width}x${size.height}`);
+    error.code = "exportFrameSizeMismatch";
+    throw error;
+  }
+  return { bytes, width: size.width, height: size.height };
+}
+
 /** 导出图片节点在其自身帧尺寸下的渲染结果，而非源图原生分辨率。 */
-// 按帧尺寸导出图片；contentOnly + SCALE×1 防止投影/描边外扩导致 PNG > 帧尺寸。
 async function exportImageAtFrameSize(request, sourceImage, sourceSize, warnings) {
   let fallbackReason = "frameExportFailed";
   let originalWidth = 0;
@@ -2962,11 +3102,11 @@ async function exportImageAtFrameSize(request, sourceImage, sourceSize, warnings
     originalWidth = Number(node && node.width) || 0;
     originalHeight = Number(node && node.height) || 0;
     if (node && "exportAsync" in node && node.width >= 1 && node.height >= 1) {
-      const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 }, contentsOnly: true });
-      return { width: Math.round(node.width), height: Math.round(node.height), bytes };
+      return await exportFigmaPrefabNodePng(node);
     }
     if (node && originalWidth > 0 && originalHeight > 0) fallbackReason = "tinyFrameFallback";
   } catch (e) {
+    if (e && (e.code === "exportFrameSizeMismatch" || e.code === "exportRenderBoundsMismatch")) throw e;
     warnings.push(`Frame-size export failed for ${request.nodePath || request.nodeId}, falling back to source native.`);
   }
   const sourceBytes = await sourceImage.getBytesAsync();
@@ -3063,9 +3203,9 @@ function readFigmaFontSize(node) {
   return node.fontSize;
 }
 
-/** 读取文本描边粗细，供 Unity TMP 材质近似还原描边。 */
+/** 读取节点描边粗细，供导出元数据和 Unity 文本材质使用。 */
 function readFigmaStrokeWeight(node) {
-  if (!node || node.type !== "TEXT" || typeof node.strokeWeight !== "number") {
+  if (!node || typeof node.strokeWeight !== "number") {
     return 0;
   }
   return roundNumber(node.strokeWeight);

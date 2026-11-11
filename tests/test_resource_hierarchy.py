@@ -305,6 +305,46 @@ class ResourceHierarchyTests(unittest.TestCase):
                     hierarchy.execute(args, backend, hierarchy.PythonLogger("test", stream=io.StringIO()))
                 self.assertEqual(backend.writes, [])
 
+    def test_group_descendants_use_nearest_frame_coordinates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan, before = case(directory)
+            source = next(node for node in before["nodes"] if node["id"] == "a")
+            source.update(type="GROUP", childCount=1)
+            inner = deepcopy(source)
+            inner.update(id="inner", parentId="a", index=0, type="BOOLEAN_OPERATION", childCount=1)
+            leaf = deepcopy(source)
+            leaf.update(id="leaf", parentId="inner", index=0, type="RECTANGLE", childCount=0,
+                        bounds={"x": 12, "y": 14, "width": 5, "height": 6})
+            before["nodes"] += [inner, leaf]
+            snapshot = {"rootNodeId": "R", "nodes": []}
+            for original in before["nodes"]:
+                box = original["bounds"]
+                snapshot["nodes"].append({**{key: original[key] for key in ["id", "parentId", "name", "type", "childCount", "visible", "opacity"]},
+                                          "siblingIndex": original["index"],
+                                          "x": box["x"], "y": box["y"], "w": box["width"], "h": box["height"]})
+            hierarchy.validate_snapshot(plan, before, snapshot)
+            next(node for node in snapshot["nodes"] if node["id"] == "leaf")["x"] += 1
+            with self.assertRaisesRegex(ValueError, "geometry changed"):
+                hierarchy.validate_snapshot(plan, before, snapshot)
+
+    def test_absolute_snapshot_bounds_accept_rotated_nodes_and_still_detect_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan, before = case(directory)
+            snapshot = {"rootNodeId": "R", "nodes": []}
+            for original in before["nodes"]:
+                box = original["bounds"]
+                snapshot["nodes"].append({**{key: original[key] for key in ["id", "parentId", "name", "type", "childCount", "visible", "opacity"]},
+                                          "siblingIndex": original["index"], "x": -999, "y": -999, "w": box["height"], "h": box["width"],
+                                          "abs": {"x": box["x"], "y": box["y"], "w": box["width"], "h": box["height"]}})
+            hierarchy.validate_snapshot(plan, before, snapshot)
+            next(node for node in snapshot["nodes"] if node["id"] == "a")["abs"]["y"] += 1
+            with self.assertRaisesRegex(ValueError, "geometry changed"):
+                hierarchy.validate_snapshot(plan, before, snapshot)
+            next(node for node in snapshot["nodes"] if node["id"] == "a")["abs"]["y"] -= 1
+            next(node for node in snapshot["nodes"] if node["id"] == "b")["siblingIndex"] = 0
+            with self.assertRaisesRegex(ValueError, "parent/order changed"):
+                hierarchy.validate_snapshot(plan, before, snapshot)
+
     def test_nested_root_on_authorized_page_is_accepted(self):
         with tempfile.TemporaryDirectory() as directory:
             plan, before = case(directory)

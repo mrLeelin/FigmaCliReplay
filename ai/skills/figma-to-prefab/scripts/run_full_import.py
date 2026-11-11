@@ -573,7 +573,37 @@ def main():
         export_result, timing = run_timed("mcpExport", export_argv, timeout=args.mcp_timeout + 45, cwd=REPO_ROOT)
         timings.append(timing)
         if export_result.returncode != 0:
-            fail("MCP export failed")
+            # The child emits a pretty-printed summary. Line-based process-tail
+            # diagnostics can retain only the array heading and lose its errors.
+            # Promote that summary to the parent's single-line output contract.
+            export_summary = {}
+            marker = "[SUMMARY_JSON]"
+            if marker in export_result.stdout:
+                try:
+                    parsed = json.loads(export_result.stdout.rsplit(marker, 1)[1].strip())
+                    if isinstance(parsed, dict):
+                        export_summary = parsed
+                except (ValueError, TypeError):
+                    pass
+            blocking = export_summary.get("blockingErrorSamples", [])
+            errors = export_summary.get("errorSamples", [])
+            warnings = export_summary.get("warningSamples", [])
+            blocking = [item for item in blocking if isinstance(item, dict)] if isinstance(blocking, list) else []
+            errors = [item for item in errors if isinstance(item, dict)] if isinstance(errors, list) else []
+            warnings = [item for item in warnings if isinstance(item, str)] if isinstance(warnings, list) else []
+            if not blocking and not errors:
+                blocking = [{"code": "figmaExportFailed", "message": "Figma export failed; see child process diagnostics"}]
+            details = json.dumps(blocking + errors, ensure_ascii=False)
+            message = f"Figma export failed: {details}"
+            if warnings:
+                message += "; " + " | ".join(warnings)
+            # Existing task logging records this summary and diagnostic, including
+            # node IDs/paths and the original Figma exception. No Unity writes run.
+            emit_summary("failed", verifyAllPass=False, blockingErrors=blocking,
+                         errors=errors, warnings=warnings,
+                         exportStatus=export_summary.get("status", "failed"),
+                         exportResultPath=export_summary.get("resultPath", ""))
+            fail(message)
 
     if not node_manifest_path.exists() or not image_manifest_path.exists():
         fail(f"MCP manifests missing: {node_manifest_path} / {image_manifest_path}")

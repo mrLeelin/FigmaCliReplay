@@ -2,7 +2,13 @@
 
 项目 CLI + WebSocket 连接 AI、Figma 插件与 Unity Editor。MCP 服务、SDK 和配置写入已移除，旧业务 HTTP 返回升级提示；HTTP 仅提供登记资源下载。
 
-## 安装与启动
+## 分发给其他人
+
+Windows ZIP 分发包的首次安装和使用步骤见 [分发说明](docs/distribution.md)。执行 `npm run package:release -- -NoLaunch` 会提升 patch 版本、同步各端版本、完整构建并生成 `output/figma-relay-<版本>.zip`。包内的 `figma-relay/unity` 与 Relay 的 Bridge 安装器使用同一目录约定；包根目录附带给接收者的 README。该操作不提交或推送 Git。
+
+接收者先安装 Node.js 18+ 和 Python 3.10+，再运行包内 `首次安装.bat` 安装依赖，随后运行 `start_relay.bat`。首次安装需要联网，Python 依赖使用包内独立 `.venv`。
+
+## 从源码安装与启动
 
 需要 Node.js 18+、Python；Unity 真值采集还需要 Unity CLI。
 

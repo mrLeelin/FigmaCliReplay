@@ -48,6 +48,7 @@ export async function rollbackCleanupTransaction(journal) {
   const entries = Array.isArray(journal && journal.entries) ? journal.entries : [];
 
   for (const entry of entries) {
+    if (entry.insideInstance) continue;
     try {
       if (!entry.node || !entry.parent || typeof entry.parent.insertChild !== "function") {
         throw new Error("missing original parent for node " + entry.id);
@@ -59,6 +60,7 @@ export async function rollbackCleanupTransaction(journal) {
   }
 
   for (const entry of entries) {
+    if (entry.insideInstance) continue;
     try {
       cleanupRestoreNodeProperties(entry);
     } catch (error) {
@@ -77,7 +79,8 @@ export async function rollbackCleanupTransaction(journal) {
 
   for (const entry of entries) {
     const actualIndex = cleanupNodeIndex(entry.node);
-    if (entry.node.parent !== entry.parent || actualIndex !== entry.index || String(entry.node.name || "") !== entry.name) {
+    const boundsDrift = cleanupBoundsDrift(entry.bounds, cleanupReadBounds(entry.node));
+    if (entry.node.parent !== entry.parent || actualIndex !== entry.index || String(entry.node.name || "") !== entry.name || boundsDrift > 0.01) {
       mismatches.push({
         nodeId: entry.id,
         expectedParentId: entry.parent && entry.parent.id ? String(entry.parent.id) : "",
@@ -86,6 +89,7 @@ export async function rollbackCleanupTransaction(journal) {
         actualIndex: actualIndex,
         expectedName: entry.name,
         actualName: String(entry.node.name || ""),
+        boundsDrift: boundsDrift,
       });
     }
   }
@@ -543,8 +547,10 @@ function cleanupRemoveBackup(journal) {
   if (journal) journal.backupNode = null;
 }
 
-function cleanupCollectRollbackEntries(parent, depth, output) {
+function cleanupCollectRollbackEntries(parent, depth, output, insideInstance) {
   const children = Array.isArray(parent && parent.children) ? parent.children.slice() : [];
+  // 实例内部子层不能被移动或改坐标，回滚时只核对不写入。
+  const childInsideInstance = insideInstance === true || (parent && parent.type === "INSTANCE");
   for (let index = 0; index < children.length; index += 1) {
     const node = children[index];
     output.push({
@@ -555,12 +561,14 @@ function cleanupCollectRollbackEntries(parent, depth, output) {
       depth: depth + 1,
       name: String(node.name || ""),
       bounds: cleanupReadBounds(node),
+      size: { width: Number(node.width), height: Number(node.height) },
+      insideInstance: childInsideInstance,
       layout: cleanupCaptureLayout(node),
       psd: cleanupReadPsdMetadata(node),
       visible: node.visible,
       opacity: node.opacity,
     });
-    cleanupCollectRollbackEntries(node, depth + 1, output);
+    cleanupCollectRollbackEntries(node, depth + 1, output, childInsideInstance);
   }
 }
 
@@ -580,11 +588,19 @@ function cleanupRestoreNodeProperties(entry) {
   entry.node.name = entry.name;
   if (typeof entry.visible === "boolean" && "visible" in entry.node) entry.node.visible = entry.visible;
   if (typeof entry.opacity === "number" && "opacity" in entry.node) entry.node.opacity = entry.opacity;
-  if (typeof entry.node.resize === "function" && entry.bounds.width >= 0 && entry.bounds.height >= 0) {
-    entry.node.resize(Math.max(entry.bounds.width, 0.01), Math.max(entry.bounds.height, 0.01));
+  // GROUP / BOOLEAN_OPERATION 的尺寸由子节点决定，resize 会连带缩放全部子层；其余节点只在尺寸确实变化时恢复。
+  const size = entry.size || {};
+  const derivedSize = entry.node.type === "GROUP" || entry.node.type === "BOOLEAN_OPERATION";
+  if (!derivedSize && typeof entry.node.resize === "function" && size.width > 0 && size.height > 0
+    && (Math.abs(entry.node.width - size.width) > 0.01 || Math.abs(entry.node.height - size.height) > 0.01)) {
+    entry.node.resize(size.width, size.height);
   }
-  if (typeof entry.node.x === "number") entry.node.x = entry.bounds.x - cleanupParentAbsoluteOrigin(entry.parent).x;
-  if (typeof entry.node.y === "number") entry.node.y = entry.bounds.y - cleanupParentAbsoluteOrigin(entry.parent).y;
+  // 旋转/翻转节点与 Group 子节点的 x/y 不等于外接包围盒，按包围盒偏差平移回原位；条目按先序排列，父级先于子级还原。
+  if (typeof entry.node.x === "number" && typeof entry.node.y === "number") {
+    const current = cleanupReadBounds(entry.node);
+    entry.node.x += entry.bounds.x - current.x;
+    entry.node.y += entry.bounds.y - current.y;
+  }
 }
 
 function cleanupReadBounds(node) {
@@ -596,12 +612,6 @@ function cleanupReadBounds(node) {
     width: Number(absolute && absolute.width !== undefined ? absolute.width : node && node.width || 0),
     height: Number(absolute && absolute.height !== undefined ? absolute.height : node && node.height || 0),
   };
-}
-
-function cleanupParentAbsoluteOrigin(parent) {
-  if (!parent || parent.type === "PAGE" || parent.type === "DOCUMENT") return { x: 0, y: 0 };
-  const bounds = cleanupReadBounds(parent);
-  return { x: bounds.x, y: bounds.y };
 }
 
 function cleanupBoundsDrift(before, after) {
