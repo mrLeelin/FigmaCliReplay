@@ -4,9 +4,28 @@
     {
       "name": "psd-preview",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8801", "--directory", ".tmp"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8801",
+        "--directory",
+        ".tmp"
+      ],
       "port": 8801,
       "url": "http://localhost:8801"
+    },
+    {
+      "name": "battlepass-prototype",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8802",
+        "--directory",
+        "output/battlepass-prototype"
+      ],
+      "port": 8802,
+      "url": "http://localhost:8802"
     }
   ]
 }

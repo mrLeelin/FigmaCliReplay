@@ -61,7 +61,15 @@ test("version card, automatic-check default and header shortcut are wired into e
   for (const id of ids) assert.ok(html.includes(`id="${id}"`), id);
   assert.match(html, /id="relayUpdateAutoCheck" type="checkbox" checked disabled/);
   assert.doesNotMatch(html, /id="relayUpdateBridgeCheck"[^>]* checked/);
-  assert.ok(html.indexOf('id="relay-update-settings-section"') < html.indexOf('id="ai-skill-settings-section"'));
+  const settingsPage = html.slice(html.indexOf('class="tab-page" id="settings-tab"'), html.indexOf("<!-- SETTINGS_TAB_END -->"));
+  const updatesPage = html.slice(html.indexOf('class="tab-page" id="updates-tab"'), html.indexOf('class="tab-page active" id="sync-unity-tab"'));
+  assert.match(html, /data-tab="updates-tab"[^>]*>版本与更新<\/button>/);
+  assert.doesNotMatch(settingsPage, /relayUpdate/);
+  for (const id of ids.filter(id => id !== "relayUpdateNoticeBtn")) assert.ok(updatesPage.includes(`id="${id}"`), id);
+  assert.match(html, /"updates-tab": "版本与更新"/);
+  assert.match(html, /if \(tabId === "updates-tab"\) refreshRelayUpdateStatus\(\)/);
+  assert.doesNotMatch(html, /if \(tabId === "settings-tab"\) refreshRelayUpdateStatus\(\)/);
+  assert.match(block, /relayUpdateNoticeBtn\.addEventListener\("click", function \(\) \{\s*switchTab\("updates-tab"\)/);
   const registered = html.slice(html.indexOf('message.type === "plugin.registered"'), html.indexOf('message.type === "command.cancel"'));
   assert.match(registered, /startRelayUpdateConnection\(\)/);
   assert.match(html.slice(html.indexOf("function setAiBadge"), html.indexOf("function setUnityBadge")), /resetRelayUpdateSettings/);

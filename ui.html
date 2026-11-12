@@ -1306,20 +1306,20 @@
       background: rgba(110,168,255,0.12);
     }
     .update-notice[hidden], #relayUpdateProgress[hidden], #relayUpdateNotes[hidden] { display: none; }
-    #relay-update-settings-section .flex { justify-content: space-between; gap: 12px; }
-    #relay-update-settings-section h2 { margin: 0; }
+    #relay-update-section .flex { justify-content: space-between; gap: 12px; }
+    #relay-update-section h2 { margin: 0; }
     .update-versions { display: flex; flex-wrap: wrap; gap: 12px 28px; padding: 15px 0 10px; }
     .update-version { display: grid; gap: 4px; }
     .update-version span { color: var(--muted); font-size: 11px; }
     .update-version strong { color: var(--text); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
     .update-options { display: grid; gap: 10px; padding: 10px 0 14px; }
     .update-option { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--text); }
-    #relay-update-settings-section .update-option input { flex: 0 0 14px; width: 14px; height: 14px; min-height: 14px; margin: 1px 0 0; padding: 0; accent-color: var(--accent); }
+    #relay-update-section .update-option input { flex: 0 0 14px; width: 14px; height: 14px; min-height: 14px; margin: 1px 0 0; padding: 0; accent-color: var(--accent); }
     .update-option span { flex: 1; min-width: 0; line-height: 1.5; }
     #relayUpdateNotes { margin: 0 0 12px; padding: 12px; border-left: 2px solid var(--accent); background: rgba(110,168,255,0.05); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
     #relayUpdateProgress { display: block; width: 100%; height: 6px; margin: 14px 0 4px; accent-color: var(--accent); }
     #relayUpdateStatus { overflow-wrap: anywhere; }
-    #relay-update-settings-section .hint { line-height: 1.6; }
+    #relay-update-section .hint { line-height: 1.6; }
 
     /* Workspace */
     .workspace {
@@ -1995,6 +1995,7 @@
         <button class="tab-button" data-tab="ai-execution-tab" type="button">AI 执行</button>
         <button class="tab-button" data-tab="export-tab" type="button">导出</button>
         <button class="tab-button" data-tab="tools-tab" type="button">工具</button>
+        <button class="tab-button" data-tab="updates-tab" type="button">版本与更新</button>
         <button class="tab-button" id="settingsTabBtn" data-tab="settings-tab" type="button" aria-label="设置">设置</button>
       </div>
 
@@ -2031,30 +2032,6 @@
         <button id="openServerBtn" class="secondary">插件目录</button>
       </div>
       <div class="status-box" id="ai-status">等待连接本地 Relay...</div>
-    </div>
-
-    <div class="section global-section" id="relay-update-settings-section" aria-labelledby="relayUpdateHeading">
-      <div class="flex">
-        <h2 id="relayUpdateHeading">版本与更新</h2>
-        <span class="badge pending" id="relayUpdateBadge">未检查</span>
-      </div>
-      <div class="update-versions">
-        <div class="update-version"><span>当前插件</span><strong id="relayUpdateCurrentVersion">—</strong></div>
-        <div class="update-version"><span>本机 Relay</span><strong id="relayUpdateRelayVersion">未连接</strong></div>
-        <div class="update-version"><span>最新版本</span><strong id="relayUpdateLatestVersion">未检查</strong></div>
-      </div>
-      <div id="relayUpdateNotes" aria-label="更新内容" hidden></div>
-      <div class="update-options">
-        <label class="update-option"><input id="relayUpdateAutoCheck" type="checkbox" checked disabled /><span>启动时自动检查更新</span></label>
-        <label class="update-option"><input id="relayUpdateBridgeCheck" type="checkbox" disabled /><span id="relayUpdateBridgeLabel">同时更新当前 Unity 工程的 Bridge（请先选择工程）</span></label>
-      </div>
-      <div class="row">
-        <button id="relayUpdateCheckBtn" class="secondary" type="button" disabled>检查更新</button>
-        <button id="relayUpdateInstallBtn" type="button" disabled>立即更新</button>
-      </div>
-      <progress id="relayUpdateProgress" max="100" aria-label="版本更新进度" hidden></progress>
-      <div class="status-box" id="relayUpdateStatus" role="status" aria-live="polite">连接本地 Relay 后检查版本。</div>
-      <div class="hint" id="relayUpdateRecoveryHint">更新完成后请关闭并重新打开 Figma 插件。Relay 无法连接时，可运行安装目录中的「更新修复.bat」。</div>
     </div>
 
     <div class="section global-section" id="ai-skill-settings-section">
@@ -2129,6 +2106,32 @@
     </div>
   </div>
   <!-- SETTINGS_TAB_END -->
+
+  <div class="tab-page" id="updates-tab">
+    <div class="section global-section" id="relay-update-section" aria-labelledby="relayUpdateHeading">
+      <div class="flex">
+        <h2 id="relayUpdateHeading">版本与更新</h2>
+        <span class="badge pending" id="relayUpdateBadge">未检查</span>
+      </div>
+      <div class="update-versions">
+        <div class="update-version"><span>当前插件</span><strong id="relayUpdateCurrentVersion">—</strong></div>
+        <div class="update-version"><span>本机 Relay</span><strong id="relayUpdateRelayVersion">未连接</strong></div>
+        <div class="update-version"><span>最新版本</span><strong id="relayUpdateLatestVersion">未检查</strong></div>
+      </div>
+      <div id="relayUpdateNotes" aria-label="更新内容" hidden></div>
+      <div class="update-options">
+        <label class="update-option"><input id="relayUpdateAutoCheck" type="checkbox" checked disabled /><span>启动时自动检查更新</span></label>
+        <label class="update-option"><input id="relayUpdateBridgeCheck" type="checkbox" disabled /><span id="relayUpdateBridgeLabel">同时更新当前 Unity 工程的 Bridge（请先选择工程）</span></label>
+      </div>
+      <div class="row">
+        <button id="relayUpdateCheckBtn" class="secondary" type="button" disabled>检查更新</button>
+        <button id="relayUpdateInstallBtn" type="button" disabled>立即更新</button>
+      </div>
+      <progress id="relayUpdateProgress" max="100" aria-label="版本更新进度" hidden></progress>
+      <div class="status-box" id="relayUpdateStatus" role="status" aria-live="polite">连接本地 Relay 后检查版本。</div>
+      <div class="hint" id="relayUpdateRecoveryHint">更新完成后请关闭并重新打开 Figma 插件。Relay 无法连接时，可运行安装目录中的「更新修复.bat」。</div>
+    </div>
+  </div>
 
   <div class="tab-page active" id="sync-unity-tab">
     <div class="sync-tabs" role="tablist" aria-label="同步 Unity">
@@ -3757,6 +3760,7 @@
       "ai-prompt-tab": "AI 提示词",
       "ai-execution-tab": "AI 执行",
       "export-tab": "导出",
+      "updates-tab": "版本与更新",
       "settings-tab": "设置"
     };
     function switchTab(tabId) {
@@ -3775,7 +3779,7 @@
         if (title) workspaceTitleEl.textContent = title;
       }
       if (tabId === "settings-tab") refreshAiSkillStatus();
-      if (tabId === "settings-tab") refreshRelayUpdateStatus();
+      if (tabId === "updates-tab") refreshRelayUpdateStatus();
     }
 
     function switchSyncTab(tabId) {
@@ -5634,8 +5638,8 @@
     relayUpdateInstallBtn.addEventListener("click", function () { installRelayUpdate(); });
     relayUpdateAutoCheck.addEventListener("change", function () { saveRelayUpdateSettings(); });
     relayUpdateNoticeBtn.addEventListener("click", function () {
-      switchTab("settings-tab");
-      document.getElementById("relay-update-settings-section").scrollIntoView({ behavior: "smooth", block: "start" });
+      switchTab("updates-tab");
+      document.getElementById("relay-update-section").scrollIntoView({ behavior: "smooth", block: "start" });
     });
     refreshRelayUpdateControls();
     // RELAY_UPDATE_SETTINGS_END
