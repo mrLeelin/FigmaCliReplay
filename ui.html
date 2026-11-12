@@ -1274,6 +1274,28 @@
     .status-chip.pending { color: var(--accent); border-color: rgba(110,168,255,0.25); background: rgba(110,168,255,0.08); }
     .status-chip.pending .dot { background: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,255,0.12); }
     .badge.pending, .main .badge.pending { background: rgba(110,168,255,0.12); color: var(--accent); }
+    .ai-skill-agent {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .ai-skill-agent:last-of-type { border-bottom: 0; }
+    .ai-skill-agent-heading { display: flex; align-items: center; gap: 8px; }
+    .ai-skill-agent-name { font-size: 12px; font-weight: 600; }
+    .ai-skill-path, .ai-skill-message {
+      margin-top: 5px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    #ai-skill-settings-section .flex { justify-content: space-between; }
+    #ai-skill-settings-section .flex h2 { margin: 0; }
+    #ai-skill-settings-section .hint { line-height: 1.6; }
+    .ai-skill-agent button { min-width: 92px; }
 
     /* Workspace */
     .workspace {
@@ -1984,6 +2006,32 @@
         <button id="openServerBtn" class="secondary">插件目录</button>
       </div>
       <div class="status-box" id="ai-status">等待连接本地 Relay...</div>
+    </div>
+
+    <div class="section global-section" id="ai-skill-settings-section">
+      <div class="flex">
+        <h2>AI Skill</h2>
+        <button id="aiSkillCheckBtn" class="secondary" type="button" disabled>检查状态</button>
+      </div>
+      <div class="hint">写入本机当前用户的 AI 技能目录，让 AI 在其他项目中也能发现 Figma Relay。</div>
+      <div class="ai-skill-agent">
+        <div>
+          <div class="ai-skill-agent-heading"><span class="ai-skill-agent-name">Codex</span><span class="badge pending" id="aiSkillCodexBadge">未检查</span></div>
+          <div class="ai-skill-path" id="aiSkillCodexPath">连接本地 Relay 后读取安装目录。</div>
+          <div class="ai-skill-message" id="aiSkillCodexMessage"></div>
+        </div>
+        <button id="aiSkillCodexInstallBtn" type="button" disabled>写入 Skill</button>
+      </div>
+      <div class="ai-skill-agent">
+        <div>
+          <div class="ai-skill-agent-heading"><span class="ai-skill-agent-name">Claude Code</span><span class="badge pending" id="aiSkillClaudeBadge">未检查</span></div>
+          <div class="ai-skill-path" id="aiSkillClaudePath">连接本地 Relay 后读取安装目录。</div>
+          <div class="ai-skill-message" id="aiSkillClaudeMessage"></div>
+        </div>
+        <button id="aiSkillClaudeInstallBtn" type="button" disabled>写入 Skill</button>
+      </div>
+      <div class="status-box" id="aiSkillStatus" role="status" aria-live="polite">连接本地 Relay 后自动检查。</div>
+      <div class="hint">写入后可重新打开 AI 会话，或手动使用 $figma-relay（Codex）和 /figma-relay（Claude Code）。本地改过的 Skill 会保留，不自动覆盖。</div>
     </div>
 
     <div class="section global-section" id="dxx-settings-section">
@@ -3172,6 +3220,8 @@
       aiBadge.className = "badge " + (online ? "online" : "offline");
       refreshSettingsConnectionAlert();
       refreshDxxControls();
+      if (!online) resetAiSkillSettingsForRelay("本地 Relay 未连接，连接后重新检查 Skill。");
+      else refreshAiSkillControls();
     }
     function setUnityBadge(online) {
       var pending = !online && unityConnectionIsPending();
@@ -3415,6 +3465,7 @@
       if (previousRelayUrl !== relayUrl) {
         relayRuntimeGeneration += 1;
         resetDxxConfigForRelay();
+        resetAiSkillSettingsForRelay("Relay 地址已切换，连接后重新检查 Skill。");
         relayRuntimePaths = readCachedRelayRuntimePaths(relayRuntimeStorage, relayPluginRootCacheKey(relayUrl));
       }
       if (relayUrlInput.value.trim() !== relayUrl) {
@@ -3669,6 +3720,7 @@
           || (activeButton ? activeButton.textContent.trim() : "");
         if (title) workspaceTitleEl.textContent = title;
       }
+      if (tabId === "settings-tab") refreshAiSkillStatus();
     }
 
     function switchSyncTab(tabId) {
@@ -5113,6 +5165,168 @@
       } catch (error) { aiRunnerStatusEl.textContent = "读取本机 AI 设置失败：" + (error.message || error); }
     }
 
+    // AI_SKILL_SETTINGS_BEGIN
+    const aiSkillCheckBtn = document.getElementById("aiSkillCheckBtn");
+    const aiSkillStatus = document.getElementById("aiSkillStatus");
+    const aiSkillRows = {
+      codex: {
+        name: "Codex", badge: document.getElementById("aiSkillCodexBadge"),
+        path: document.getElementById("aiSkillCodexPath"), message: document.getElementById("aiSkillCodexMessage"),
+        button: document.getElementById("aiSkillCodexInstallBtn")
+      },
+      claude: {
+        name: "Claude Code", badge: document.getElementById("aiSkillClaudeBadge"),
+        path: document.getElementById("aiSkillClaudePath"), message: document.getElementById("aiSkillClaudeMessage"),
+        button: document.getElementById("aiSkillClaudeInstallBtn")
+      }
+    };
+    let aiSkillBusy = false;
+    let aiSkillSequence = 0;
+    let aiSkillSourceAvailable = false;
+    let aiSkillInstallations = {};
+
+    function refreshAiSkillControls() {
+      aiSkillCheckBtn.disabled = !relayConnected || aiSkillBusy;
+      Object.keys(aiSkillRows).forEach(function (agent) {
+        var record = aiSkillInstallations[agent];
+        var row = aiSkillRows[agent];
+        row.button.disabled = !relayConnected || aiSkillBusy || !aiSkillSourceAvailable
+          || !record || record.canInstall !== true || record.status === "modified";
+        row.button.textContent = record && record.installed === true ? "更新 Skill" : "写入 Skill";
+      });
+    }
+
+    function clearAiSkillInstallations() {
+      aiSkillInstallations = {};
+      aiSkillSourceAvailable = false;
+      Object.keys(aiSkillRows).forEach(function (agent) {
+        var row = aiSkillRows[agent];
+        row.badge.textContent = "未检查";
+        row.badge.className = "badge pending";
+        row.path.textContent = "连接本地 Relay 后读取安装目录。";
+        row.message.textContent = "";
+      });
+    }
+
+    function resetAiSkillSettingsForRelay(message) {
+      aiSkillSequence += 1;
+      aiSkillBusy = false;
+      clearAiSkillInstallations();
+      aiSkillStatus.textContent = message || "连接状态已变化，请重新检查 Skill。";
+      refreshAiSkillControls();
+    }
+
+    function aiSkillRequestIsCurrent(context, sequence) {
+      return relayConnected && relayRequestIsCurrent(context) && sequence === aiSkillSequence;
+    }
+
+    function aiSkillErrorMessage(error) {
+      var message = String(error && error.message || error || "请检查 Relay 连接。");
+      if (/Unsupported.*(?:control|action)|unknown.*(?:control|action)/i.test(message)) {
+        return "当前 Relay 不支持 AI Skill 管理，请更新并重启 Relay。";
+      }
+      return message;
+    }
+
+    function renderAiSkillInstallations(result) {
+      if (!result || result.ok !== true || !Array.isArray(result.installations)) {
+        throw new Error(result && result.error || "Skill 状态返回不完整，请更新 Relay 后重试。");
+      }
+      var records = {};
+      result.installations.forEach(function (record) {
+        if (record && Object.prototype.hasOwnProperty.call(aiSkillRows, record.agent)) records[record.agent] = record;
+      });
+      if (!records.codex || !records.claude) throw new Error("Skill 状态返回不完整，请更新 Relay 后重试。");
+      aiSkillInstallations = records;
+      aiSkillSourceAvailable = result.sourceAvailable === true;
+      var labels = { installed: "已写入", missing: "未写入", outdated: "需要更新", modified: "本地已修改", error: "检查失败" };
+      Object.keys(aiSkillRows).forEach(function (agent) {
+        var row = aiSkillRows[agent];
+        var record = records[agent];
+        var verified = aiSkillSourceAvailable && record.status === "installed" && record.current === true;
+        row.badge.textContent = verified ? labels.installed : record.status === "installed" ? "待核对" : labels[record.status] || "未检查";
+        row.badge.className = "badge " + (verified ? "online" : record.status === "missing" || record.status === "modified" || record.status === "error" ? "offline" : "pending");
+        row.path.textContent = typeof record.directory === "string" ? record.directory : "未返回安装目录。";
+        row.message.textContent = typeof record.message === "string" ? record.message : "";
+      });
+      refreshAiSkillControls();
+      return aiSkillSourceAvailable
+        ? "检查完成。Skill 状态来自本机文件检查。"
+        : "当前 Relay 缺少 Skill 源文件，请更新完整插件目录后重新检查。";
+    }
+
+    async function readAiSkillStatus(context, sequence) {
+      var result = await sendRelaySocketRequest("ai.skill.status", {}, "", 8000);
+      if (!aiSkillRequestIsCurrent(context, sequence)) return null;
+      return renderAiSkillInstallations(result);
+    }
+
+    async function refreshAiSkillStatus() {
+      refreshAiSkillControls();
+      if (!relayConnected || aiSkillBusy) return;
+      var context = captureRelayRequestContext();
+      var sequence = ++aiSkillSequence;
+      aiSkillBusy = true;
+      aiSkillStatus.textContent = "正在检查本机 AI Skill…";
+      refreshAiSkillControls();
+      try {
+        var message = await readAiSkillStatus(context, sequence);
+        if (message && aiSkillRequestIsCurrent(context, sequence)) aiSkillStatus.textContent = message;
+      } catch (error) {
+        if (aiSkillRequestIsCurrent(context, sequence)) {
+          clearAiSkillInstallations();
+          aiSkillStatus.textContent = "检查失败：" + aiSkillErrorMessage(error);
+        }
+      } finally {
+        if (aiSkillRequestIsCurrent(context, sequence)) {
+          aiSkillBusy = false;
+          refreshAiSkillControls();
+        }
+      }
+    }
+
+    async function installAiSkillFromSettings(agent) {
+      var record = aiSkillInstallations[agent];
+      if (!relayConnected || aiSkillBusy || !aiSkillSourceAvailable || !record || record.canInstall !== true || record.status === "modified") return;
+      var context = captureRelayRequestContext();
+      var sequence = ++aiSkillSequence;
+      aiSkillBusy = true;
+      aiSkillStatus.textContent = "正在写入 " + aiSkillRows[agent].name + " Skill…";
+      refreshAiSkillControls();
+      var writeCompleted = false;
+      try {
+        var result = await sendRelaySocketRequest("ai.skill.install", { target: agent }, "", 20000);
+        if (!aiSkillRequestIsCurrent(context, sequence)) return;
+        if (!result || result.ok !== true) throw new Error(result && result.error || "写入 Skill 失败");
+        writeCompleted = true;
+        clearAiSkillInstallations();
+        aiSkillStatus.textContent = "写入请求已完成，正在检查实际文件…";
+        var message = await readAiSkillStatus(context, sequence);
+        if (!aiSkillRequestIsCurrent(context, sequence)) return;
+        var saved = aiSkillInstallations[agent];
+        aiSkillStatus.textContent = saved && saved.status === "installed" && saved.current === true
+          ? aiSkillRows[agent].name + " Skill 已写入并检查通过，可重新打开 AI 会话使用。"
+          : "写入后检查尚未通过：" + (message || "请点击检查状态核对实际文件。");
+      } catch (error) {
+        if (aiSkillRequestIsCurrent(context, sequence)) {
+          clearAiSkillInstallations();
+          aiSkillStatus.textContent = writeCompleted
+            ? "写入请求已完成，但状态检查失败：" + aiSkillErrorMessage(error) + " 请点击检查状态核对实际文件。"
+            : "写入结果未确认：" + aiSkillErrorMessage(error) + " 请先检查状态，避免重复写入。";
+        }
+      } finally {
+        if (aiSkillRequestIsCurrent(context, sequence)) {
+          aiSkillBusy = false;
+          refreshAiSkillControls();
+        }
+      }
+    }
+
+    aiSkillCheckBtn.addEventListener("click", function () { refreshAiSkillStatus(); });
+    aiSkillRows.codex.button.addEventListener("click", function () { installAiSkillFromSettings("codex"); });
+    aiSkillRows.claude.button.addEventListener("click", function () { installAiSkillFromSettings("claude"); });
+    // AI_SKILL_SETTINGS_END
+
     // DXX_SETTINGS_BEGIN
     const dxxApiBaseInput = document.getElementById("dxxApiBaseInput");
     const dxxApiKeyInput = document.getElementById("dxxApiKeyInput");
@@ -6501,6 +6715,7 @@
           appendLog("WebSocket 会话已在本地 Relay 完成注册：" + relaySessionId);
           refreshCleanupProviders();
           refreshAiRunner();
+          refreshAiSkillStatus();
           refreshDxxConfig();
           scheduleAiCleanupPoll();
           reconcileRelayTasks();

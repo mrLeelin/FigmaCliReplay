@@ -1,0 +1,6 @@
+interface:
+  display_name: "Figma Relay"
+  short_description: "Read and edit local Figma through Relay CLI"
+  default_prompt: "Use $figma-relay to inspect the current Figma selection through the local plugin."
+policy:
+  allow_implicit_invocation: true

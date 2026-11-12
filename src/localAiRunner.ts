@@ -6,6 +6,7 @@ import type { Readable } from "node:stream";
 
 import { claudeCodeCliProvider } from "./ai/claudeCodeCliProvider.js";
 import { codexCliProvider } from "./ai/codexCliProvider.js";
+import { relayCliInstructions } from "./ai/relayCliInstructions.js";
 import {
   CleanupConfirmationDecisionFileName,
   CleanupConfirmationPlanFileName,
@@ -100,15 +101,7 @@ export function runLocalAiPrompt(payload: unknown) {
       embeddedPolicyRemoved: cleanupUserRequest !== prompt,
     });
   }
-  const taskContent = template === "cleanup"
-    ? buildCleanupConversationTask(cleanupUserRequest!, cleanupSnapshot)
-    : [
-    `# Figma AI task: ${template}`, "",
-    "The user clicked the corresponding action in the Figma plugin and authorized this task to execute.",
-    "Follow the prompt below, use the repository tools and skills it names, and preserve the CLI session for follow-up requests.", "",
-    ...(unityProject ? ["## Unity project snapshot", "", "```json", JSON.stringify(unityProject, null, 2), "```", ""] : []),
-    "## Task prompt", "", prompt
-  ].join("\n");
+  const taskContent = buildLocalAiConversationTask(template, cleanupUserRequest ?? prompt, unityProject, cleanupSnapshot, payload.sessionId);
   return startLocalAiTask(
     payload.sessionId,
     template,
@@ -119,6 +112,25 @@ export function runLocalAiPrompt(payload: unknown) {
     cleanupSnapshot,
     clientRequestId,
   );
+}
+
+export function buildLocalAiConversationTask(
+  template: string,
+  prompt: string,
+  unityProject?: Readonly<UnityProjectStatus>,
+  cleanupSnapshot?: CleanupSnapshotV1,
+  sessionId?: string,
+): string {
+  return template === "cleanup"
+    ? buildCleanupConversationTask(prompt, cleanupSnapshot, sessionId)
+    : [
+    `# Figma AI task: ${template}`, "",
+    "The user clicked the corresponding action in the Figma plugin and authorized this task to execute.",
+    "Follow the prompt below, use the repository tools and skills it names, and preserve the CLI session for follow-up requests.", "",
+    relayCliInstructions(sessionId),
+    ...(unityProject ? ["## Unity project snapshot", "", "```json", JSON.stringify(unityProject, null, 2), "```", ""] : []),
+    "## Task prompt", "", prompt
+  ].join("\n");
 }
 
 /**
@@ -143,7 +155,7 @@ export async function openLocalAiTerminal(payload: unknown) {
     const config = preset(runner);
     if (!commandAvailable(config.command)) throw new Error(`local AI command is not available: ${config.command}`);
     const unityProject = resolveUnityProjectSnapshot(payload);
-    const taskContent = buildInteractiveTerminalTask(template, prompt, unityProject);
+    const taskContent = buildInteractiveTerminalTask(template, prompt, unityProject, sessionId);
     const terminalDir = path.join(RUNS_ROOT, terminalId);
     const taskFile = path.join(terminalDir, "terminal-task.md");
     const pidFile = path.join(terminalDir, "terminal.pid");
@@ -188,10 +200,11 @@ export async function openLocalAiTerminal(payload: unknown) {
   }
 }
 
-function buildInteractiveTerminalTask(
+export function buildInteractiveTerminalTask(
   template: string,
   prompt: string,
   unityProject?: Readonly<UnityProjectStatus>,
+  sessionId?: string,
 ): string {
   return [
     `# Figma AI task: ${template}`,
@@ -200,6 +213,7 @@ function buildInteractiveTerminalTask(
     "Read and follow the task prompt below. Keep the conversation in this terminal for any follow-up requests.",
     "The Figma Relay at http://127.0.0.1:32130 is an externally managed endpoint. You are its client: never launch, restart, stop, reconfigure, probe, bind, or listen on its ports. If a Relay connection fails, report the exact error and do not add retries outside the task workflow.",
     "",
+    relayCliInstructions(sessionId),
     ...(unityProject ? ["## Unity project snapshot", "", "```json", JSON.stringify(unityProject, null, 2), "```", ""] : []),
     "## Task prompt", "", prompt,
   ].join("\n");
@@ -284,7 +298,7 @@ export function cleanupInitialUserRequest(prompt: string): string {
  * inspect and plan with the Relay-managed cleanup policy. Relay owns the safe
  * hierarchy transaction immediately after it validates the plan.
  */
-export function buildCleanupConversationTask(prompt: string, cleanupSnapshot?: CleanupSnapshotV1): string {
+export function buildCleanupConversationTask(prompt: string, cleanupSnapshot?: CleanupSnapshotV1, sessionId?: string): string {
   const skillFile = CleanupSkillFile.replaceAll("\\", "/");
   const clientScript = CleanupClientScript.replaceAll("\\", "/");
   const pipelineScript = CleanupPipelineScript.replaceAll("\\", "/");
@@ -300,6 +314,7 @@ export function buildCleanupConversationTask(prompt: string, cleanupSnapshot?: C
     "所有面向用户的回复、进度摘要和错误说明必须使用简体中文。",
     "Relay is the only Figma write authority. Use the project CLI and Relay-provided cleanup commands and verification evidence; never use an official or generic Figma write tool.",
     "",
+    relayCliInstructions(sessionId),
     "## Relay lifecycle boundary",
     "The Figma Relay is an externally managed WebSocket endpoint. You are a client of that endpoint, not its service owner.",
     "The task-start preflight is authoritative: this task was accepted by the Relay itself. Do not independently run curl, Invoke-WebRequest, or any direct /health probe, and do not guess another port such as localhost:3000.",

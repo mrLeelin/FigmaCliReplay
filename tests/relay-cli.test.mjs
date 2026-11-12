@@ -188,6 +188,16 @@ test("CLI queries Figma selection through WebSocket in both directions", { timeo
   assert.equal(requestLogs.at(-1).status, "succeeded");
 });
 
+test("business commands accept the advertised --json flag without changing delivery", async (t) => {
+  const h = await harness(t);
+  const figma = await plugin(t, h);
+  const result = await runCli(h, ["selection", "--json", "--session-id", "figma-test-1"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.json.ok, true);
+  assert.equal(figma.commands.length, 1);
+  assert.equal(figma.commands[0].job.type, "QUERY_SELECTION");
+});
+
 test("Python skill client preserves result artifacts over the real CLI WebSocket path", { timeout: 15_000 }, async (t) => {
   const h = await harness(t);
   const expected = { status: "completed", screenshot: { path: path.join(h.root, "capture.png") }, verify: { allPass: true } };

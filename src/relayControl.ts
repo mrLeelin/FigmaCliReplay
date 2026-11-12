@@ -13,6 +13,7 @@ import { unityProjectKey, unitySessionStatus } from "./unitySessionRegistry.js";
 import { isRecord } from "./utils.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 import { DxxConfig } from "./dxxConfig.js";
+import { createAiSkillService, type AiSkillService, type AiSkillTarget } from "./aiSkillManager.js";
 
 /** Shared CLI and authenticated plugin controls; capability checks stay in the controllers. */
 export function createRelayControlHandler(
@@ -22,6 +23,7 @@ export function createRelayControlHandler(
   unityProjects = new UnityProjectRegistry(),
   bridgeToken = "",
   dxx: Pick<DxxConfig, "get" | "set" | "test"> & Partial<Pick<DxxConfig, "readForSettings">> = new DxxConfig(),
+  aiSkill: AiSkillService = createAiSkillService(),
 ) {
   return async (action: string, payload: Record<string, unknown>, parentOperationId?: string): Promise<unknown> => {
     const runId = typeof payload.runId === "string" ? payload.runId.trim() : "";
@@ -176,6 +178,15 @@ export function createRelayControlHandler(
         case "dxx.config.set": result = dxx.set(payload); break;
         case "dxx.config.test": result = await dxx.test(payload); break;
         case "ai.providers": result = { ok: true, providers: await cleanup.providers.list() }; break;
+        case "ai.skill.status":
+        case "ai.skill.install": {
+          const allowed = new Set(["target", "sessionId", "fileKey", "capabilityToken"]);
+          if (Object.keys(payload).some((key) => !allowed.has(key))) throw new Error("Skill controls only accept target; home and path are managed by the Relay.");
+          const target = payload.target === undefined ? "all" : payload.target;
+          if (target !== "all" && target !== "codex" && target !== "claude") throw new Error("Skill target must be all, codex or claude.");
+          result = action === "ai.skill.status" ? aiSkill.status(target as AiSkillTarget) : aiSkill.install(target as AiSkillTarget);
+          break;
+        }
         case "ai.status": result = ai.localAiRunnerStatus(); break;
         case "ai.config": result = ai.writeLocalAiRunnerConfig(payload); break;
         case "ai.open-terminal": result = await ai.openLocalAiTerminal(payload); break;

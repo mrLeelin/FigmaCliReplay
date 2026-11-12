@@ -11,47 +11,7 @@ import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 import type { OperationScope } from "./logging/operationScope.js";
 import { RELAY_CLI_PATH, RELAY_PROTOCOL_VERSION, RelayProtocolError } from "./relayProtocol.js";
 import { isRecord } from "./utils.js";
-
-const HELP = `Figma Relay CLI
-
-Usage: figma-relay <sessions|selection|figma-status|figma-children|figma-components|figma-pages|figma-command|control|task-status|task-cancel|task-wait|serve> [options]
-
-  sessions                 List connected Figma sessions
-  selection                Query the selected Figma session
-  figma-status             Query Figma plugin status
-  figma-children           Query children for a node (--payload {"nodeId":"..."})
-  figma-components         Query available components
-  figma-pages              Query Figma pages
-  figma-command            Submit a Figma job type through WebSocket
-  control                  Execute an AI or cleanup Relay control action
-  task-status              Read a submitted task by ID
-  task-cancel              Request cancellation of a submitted task
-  task-wait                Subscribe until completion or result uncertainty
-  psd-status               Read PSD import status (--task-id required)
-  psd-wait                 Wait for PSD completion or an actionable preview
-  psd-cancel               Request cancellation; inspect result.accepted
-  serve                    Long-lived mode: one process and one Relay connection for many requests.
-                           stdin lines:  {"action":"relay.control","payload":{...},"timeout":15}
-                           stdout lines: {"requestId":"...","ok":true,"result":{...}}
-                           Ends on stdin EOF; payload keys must match the wire schema (strict).
-  --session-id <id>         Target one plugin session
-  --file-key <key>          Target one Figma file
-  --url <ws-url>            Default: ws://${DEFAULT_HOST}:${DEFAULT_PORT}${RELAY_CLI_PATH}
-  --timeout <seconds>       Query timeout, 0.1 to 120 (default: 15)
-  --detach                  Submit selection and return without waiting
-  --task-id <id>            Task ID for task-status/task-cancel
-  --request-id <id>         Stable submission ID for safe retries
-  --job-type <type>         Figma job type for figma-command
-  --payload <json>          Job fields as a JSON object
-  --payload-file <path>     Read job fields from a UTF-8 JSON file
-  --assets-file <path>      Read asset ID to local path mapping as JSON
-  control uses --job-type   Control action name (for example ai.run.get)
-  --help                   Show help
-
-Results are JSON on stdout; diagnostic logs are on stderr.
-Authentication: FIGMA_RELAY_TOKEN or the local admin-token.txt file.
-This command does not start or stop the Relay.
-`;
+import { describeEntry, executionCommandNames, listEntries, renderCatalog, renderDescription, renderHelp } from "./cliDiscovery.js";
 
 async function main(): Promise<void> {
   const logging = getLoggingRuntime();
@@ -69,17 +29,34 @@ async function main(): Promise<void> {
         "job-type": { type: "string" }, payload: { type: "string" },
         "payload-file": { type: "string" },
         "assets-file": { type: "string" },
+        json: { type: "boolean" }, kind: { type: "string" }, search: { type: "string" },
       },
     });
-    if (values.help) {
-      logger.writeProtocolOutput(HELP);
-      operation.succeed("CLI help displayed");
+    const command = positionals[0];
+    if (values.help || command === "help" || command === "describe" || command === "commands" || !positionals.length) {
+      const isNamedQuery = command === "help" || command === "describe";
+      if (positionals.length > (isNamedQuery ? 2 : 1)) throw new RelayProtocolError("USAGE", "Unexpected arguments. Use figma-relay --help.");
+      if (command === "describe" && !values.help && !positionals[1]) throw new RelayProtocolError("USAGE", "describe requires a name. Run figma-relay commands to discover operations.");
+      let name: string | undefined = isNamedQuery && !values.help ? positionals[1] : command;
+      if (command === "help" && !positionals[1]) name = undefined;
+      if (values.help && values["job-type"] && ["control", "figma-command"].includes(command)) {
+        name = values["job-type"];
+        const entry = describeEntry(name);
+        if (entry.kind !== (command === "control" ? "control" : "figma")) throw new RelayProtocolError("USAGE", `Operation '${name}' does not belong to ${command}. Use figma-relay describe ${name}.`);
+      }
+      const catalogQuery = command === "commands" && !values.help;
+      const result = catalogQuery
+        ? (values.json ? listEntries(values.kind, values.search) : renderCatalog(values.kind, values.search))
+        : name ? (values.json ? describeEntry(name) : renderDescription(name))
+          : values.json ? listEntries() : renderHelp();
+      logger.writeProtocolOutput(result);
+      operation.succeed("CLI discovery displayed");
       return;
     }
-    const commandNames = ["sessions", "selection", "figma-status", "figma-children", "figma-components", "figma-pages", "figma-command", "control", "task-status", "task-cancel", "task-wait", "psd-status", "psd-wait", "psd-cancel", "serve"];
-    if (positionals.length !== 1 || !commandNames.includes(positionals[0])) {
+    if (positionals.length !== 1 || !executionCommandNames.includes(positionals[0])) {
       throw new RelayProtocolError("USAGE", "Expected a supported Relay CLI command. Use --help for options.");
     }
+    if (values.kind !== undefined || values.search !== undefined) throw new RelayProtocolError("USAGE", "--kind and --search are discovery options; use commands.");
     if ((positionals[0].startsWith("task-") || positionals[0].startsWith("psd-")) && !values["task-id"]) throw new RelayProtocolError("USAGE", "--task-id is required.");
     if (positionals[0].startsWith("psd-")) {
       if (values.payload || values["payload-file"] || values["job-type"]) throw new RelayProtocolError("USAGE", "PSD status commands use --task-id, not a job payload.");

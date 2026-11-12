@@ -18,6 +18,10 @@
 
 AI 对话还需要在本机安装并登录所选择的 AI CLI。DXX 图片拆层需要在插件设置里填写自己的 Key。这些账号和密钥不随安装包提供。Unity 真值采集需要另行安装 Unity CLI。
 
+要让其他项目里的 Codex 或 Claude Code 发现本机 Figma 插件，打开插件「设置 → AI Skill」，分别点击对应客户端的「写入 Skill」。页面会检查当前电脑用户目录里的实际文件，显示安装路径和状态；写入后再次检查。更新或移动解压目录后，在新插件副本中检查状态并点击「更新 Skill」，同步本机路径。检测到本地手工修改时保留文件并提示处理。
+
+也可在 `figma-relay` 目录执行 `npm link --ignore-scripts --offline` 和 `npm run ai:install-skill`。前者注册 `figma-relay` 命令，后者安装 Skill；界面写入的 Skill 自带绝对路径后备入口，因此未注册全局命令也能使用。不修改全局 AI 配置。可显式使用 `$figma-relay`（Codex）或 `/figma-relay`（Claude Code）；技能列表未出现时重新打开会话。
+
 ## 更新版本
 
 将新 ZIP 解压到新的目录，运行新目录里的首次安装。先关闭旧的 Figma 插件，并停止旧 Relay（当前版本没有停止按钮，可在任务管理器中根据命令行路径确认并结束旧目录对应的 Node.js 进程），再启动新目录的 Relay。

@@ -168,7 +168,7 @@ Write-Step "Assembling release package"
 $releaseItems = @(
     "ai", "client", "code", "dist", "docs", "prompts", "scripts", "server", "src",
     ".build_version", ".gitignore", "build.bat", "code.js", "manifest.json", "package-lock.json",
-    "package.json", "README.md", "LICENSE", "tsconfig.json", "ui.html",
+    "package.json", "README.md", "AGENTS.md", "CLAUDE.md", "LICENSE", "tsconfig.json", "ui.html",
     "unity\Assets\Editor\FigmaBridge", "unity\Assets\Editor\FigmaBridge.meta"
 )
 foreach ($item in $releaseItems) {

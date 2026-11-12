@@ -1,4 +1,56 @@
-# 项目 CLI（迁移阶段）
+# 项目 CLI
+
+## 安装命令与发现用法
+
+### 让 AI 发现工具
+
+界面操作需要连接已更新的本地 Relay。
+
+图形界面入口为插件「设置 → AI Skill」：连接 Relay 后自动检查，也可点击「检查状态」。Codex / Claude Code 各有「写入 Skill」或「更新 Skill」按钮；写入成功后会重新读取本机文件。状态检查覆盖 Skill 正文、客户端元数据和当前安装目录的后备路径，区分未写入、已写入、需要更新和本地修改。它不代表 AI 已实际选择 Skill；技能列表未出现时重新打开 AI 会话。
+
+终端安装方式：
+
+```powershell
+npm run ai:install-skill
+# 按需只安装一个客户端：
+npm run ai:install-skill -- --target codex
+npm run ai:install-skill -- --target claude
+```
+
+安装目标分别为当前用户的 `~/.agents/skills/figma-relay`（Codex）和 `~/.claude/skills/figma-relay`（Claude Code）。安装器只写该 Skill 及安装来源记录，生成本机绝对 CLI 后备路径，不修改全局 AI 配置。重复安装会更新未被本地修改的安装器管理文件；遇到其他同名 Skill 或本地修改时停止并保留文件。
+
+AI 通过 Skill 的名称和描述发现本机 Relay，选中后按 `--help → commands → describe` 查找当前用法。可显式调用 `$figma-relay`（Codex）或 `/figma-relay`（Claude Code）；自动选择取决于会话的技能加载和任务匹配，未出现时重新打开会话。项目内的 `AGENTS.md` 和 `CLAUDE.md` 也提供入口。插件启动的交互式或跟踪 AI 任务会在提示中提供 CLI 发现指引，是否已被正在运行的 Relay 使用取决于它加载的代码版本。
+
+### 查找命令与参数
+
+在已安装依赖、完成构建的源码目录运行 `npm link --ignore-scripts --offline`，即可在终端直接使用 `figma-relay`。尚未注册命令时，本文中的 `figma-relay` 可替换为 `node dist/cli.js`（需要在项目目录运行）。帮助与目录查询无需 Relay、Figma、Unity 在线，也无需读取认证令牌。
+
+```powershell
+figma-relay --help
+figma-relay commands
+figma-relay commands --kind control --search unity --json
+figma-relay describe unity.projects.list --json
+figma-relay describe FIGMA_INSPECT_NODES
+figma-relay figma-children --help
+figma-relay help selection
+figma-relay control --job-type unity.projects.list --help
+```
+
+AI 调用顺序：先用 `commands` 按功能查找名字，再用 `describe <name> --json` 获取参数契约和示例。目录分为 `command`（顶层命令）、`figma`（`figma-command --job-type`）和 `control`（`control --job-type`）。`commands --json` 包含 `schemaVersion`、产品 `version`、`commands` 和 `operations`；`describe --json` 包含名字、类型、用法及输入 schema。业务操作还包含 `payloadSchema`、`examples`、`notes` 和 `source`，示例提供程序调用用的 `argv` 数组以及 PowerShell 使用的文件调用方式。
+
+设计编辑操作的 schema 由实际 Zod 输入校验生成；跨字段规则和运行条件以运行时校验为准，schema 中的 `x-runtimeValidation` 表示额外校验。旧操作的复杂嵌套参数会在 `notes` / schema 的说明中标明边界和实现来源。目录表示当前安装版本提供的契约，不代表某个 Figma 插件或 Unity Editor 当前在线；先通过 `sessions` 或实际状态查询核对连接。
+
+例如在 PowerShell 中读取节点属性：
+
+```powershell
+figma-relay sessions
+figma-relay describe FIGMA_INSPECT_NODES --json
+$request = @{ nodeIds = @('33:465'); depth = 0; includeText = $false } | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText((Join-Path $PWD 'request.json'), $request, [System.Text.UTF8Encoding]::new($false))
+figma-relay figma-command --job-type FIGMA_INSPECT_NODES --session-id <sessionId> --payload-file request.json
+```
+
+将节点 ID 和 sessionId 替换为目标会话的实际值。`--job-type` 放操作名；Figma 的 `--payload-file` 只放该操作的业务参数，`sessionId` / `fileKey` 用命令行参数传入。帮助查询只展示示例，不执行示例。`--json` 用于帮助与目录，业务命令本身始终输出 JSON。退出码为 0 成功、1 连接或业务失败、2 用法错误；诊断写入 stderr。
 
 Unity 项目管理控制支持 `unity.projects.list/add/select/remove`、`unity.bridge.install`、`unity.gateway.get`。添加传 `path`，选择、移除、安装和发现必须传显式 `id`，不自动使用最近选择的项目。CLI 和插件使用同一注册表与安装逻辑；旧 `/unity-projects` HTTP 入口返回 410。示例：
 

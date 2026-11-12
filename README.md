@@ -16,10 +16,11 @@ Windows ZIP 分发包的首次安装和使用步骤见 [分发说明](docs/distr
 npm ci
 python -m pip install -r server/requirements.txt
 npm run build
+npm link --ignore-scripts --offline
 .\启动Relay.bat
 npm run doctor
-node dist/cli.js sessions
-node dist/cli.js --help
+figma-relay sessions
+figma-relay --help
 ```
 
 启动是独立操作，业务 CLI 不自动管理服务。后台日志位于 `.logs`。Figma 开发插件导入 `manifest.json`；Unity Bridge 与其 `.meta` 一起安装到目标项目 `Assets/Editor`，工程里已存在的 `.meta` 原样保留，模板 GUID 与工程内其它资产冲突时自动改用新 GUID。
@@ -33,7 +34,19 @@ node dist/cli.js control --job-type relay.status --payload '{}'
 node dist/cli.js control --job-type logs.query --payload '{"query":{"source":"relay","limit":100}}'
 ```
 
-详见 [CLI 文档](docs/cli.md)。结果在 stdout，诊断在 stderr。写入结果未知时核对原任务，不重复提交；重启不恢复内存任务。资源登记必须符合允许目录规则。
+AI 和新调用者可以直接从 CLI 查找操作和参数，无需读取源码：
+
+```powershell
+figma-relay commands --search unity
+figma-relay commands --kind figma --json
+figma-relay describe FIGMA_INSPECT_NODES --json
+figma-relay describe unity.projects.list
+figma-relay figma-children --help
+```
+
+帮助和操作目录可离线查询。`describe` 返回输入 JSON Schema、调用示例、约束和实现来源；业务操作按实际运行状态执行。详见 [CLI 文档](docs/cli.md)。结果在 stdout，诊断在 stderr。写入结果未知时核对原任务，不重复提交；重启不恢复内存任务。资源登记必须符合允许目录规则。
+
+让其他项目中的 AI 发现该工具，打开插件「设置 → AI Skill」，检查状态后点击对应客户端的「写入 Skill」或「更新 Skill」；写入后会再次核对本机文件。也可执行 `npm run ai:install-skill`。它为当前电脑用户的 Codex 和 Claude Code 安装 [figma-relay Skill](ai/skills/figma-relay/SKILL.md)，保留全局配置及本地改过的 Skill 文件。Skill 的描述供 AI 按任务选择；也可在 Codex 显式使用 `$figma-relay`，在 Claude Code 使用 `/figma-relay`。项目内另有 `AGENTS.md` / `CLAUDE.md` 入口。安装不证明 AI 已自动选中；未在技能列表出现时重新打开会话。
 
 出站客户端的真实 C# 端到端测试默认跳过，需要用已编译宿主显式开启：
 

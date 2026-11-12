@@ -8,6 +8,7 @@
   },
   "scripts": {
     "cli": "node dist/cli.js",
+    "ai:install-skill": "node scripts/install_ai_skill.mjs",
     "build": "npm run build:ui && tsc -p tsconfig.json",
     "build:ui": "python scripts/build.py",
     "dev": "tsx src/index.ts",
