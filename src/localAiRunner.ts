@@ -24,7 +24,7 @@ import {
   setCleanupAiWritePhase,
   type CleanupAiWritePhase,
 } from "./cleanupAiWriteGuard.js";
-import { LOCAL_DIR, PLUGIN_ROOT } from "./config.js";
+import { DATA_ROOT, LOCAL_DIR, PLUGIN_ROOT } from "./config.js";
 import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 import type { OperationScope } from "./logging/operationScope.js";
 import { logInfo } from "./utils/logger.js";
@@ -53,12 +53,15 @@ interface AiRun {
 }
 
 const CONFIG_PATH = path.join(LOCAL_DIR, "ai-runner.json");
-const RUNS_ROOT = path.join(PLUGIN_ROOT, ".tmp", "ai-runs");
+const RUNS_ROOT = path.join(DATA_ROOT, ".tmp", "ai-runs");
 const CleanupSkillDirectory = path.join(PLUGIN_ROOT, "ai", "skills", "figma-hierarchy-cleanup");
 const CleanupSkillFile = path.join(CleanupSkillDirectory, "SKILL.md");
 const CleanupClientScript = path.join(CleanupSkillDirectory, "scripts", "figma_hierarchy_cleanup_cli.py");
 const CleanupPipelineScript = path.join(CleanupSkillDirectory, "scripts", "run_cleanup_pipeline.py");
 const runs = new Map<string, AiRun>();
+export function activeLocalAiRunCount(): number {
+  return [...runs.values()].filter((run) => run.status === "starting" || run.status === "running").length;
+}
 const MaxOutputEntries = 800;
 const MaxCleanupPlanRepairAttempts = 3;
 const SupportedPromptTemplates = new Set(["cleanup", "unity", "componentVariants"]);

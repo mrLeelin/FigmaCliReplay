@@ -4,9 +4,13 @@
 
 ## 分发给其他人
 
-Windows ZIP 分发包的首次安装和使用步骤见 [分发说明](docs/distribution.md)。执行 `npm run package:release -- -NoLaunch` 会提升 patch 版本、同步各端版本、完整构建并生成 `output/figma-relay-<版本>.zip`。包内的 `figma-relay/unity` 与 Relay 的 Bridge 安装器使用同一目录约定；包根目录附带给接收者的 README。该操作不提交或推送 Git。
+Windows ZIP 分发包的首次安装和使用步骤见 [分发说明](docs/distribution.md)，下载入口为 [GitHub 最新发布](https://github.com/mrLeelin/FigmaCliReplay/releases/latest)。执行 `npm run package:release -- -NoLaunch` 会提升 patch 版本、同步各端版本、完整构建，并生成 ZIP、哈希和签名 `latest.json`。默认更新源为公开仓库 `mrLeelin/FigmaCliReplay`，ZIP 下载地址绑定发布 tag。打包不提交、推送 Git 或上传文件。
 
-接收者先安装 Node.js 18+ 和 Python 3.10+，再运行包内 `首次安装.bat` 安装依赖，随后运行 `start_relay.bat`。首次安装需要联网，Python 依赖使用包内独立 `.venv`。
+接收者先安装 Node.js 18+ 和 Python 3.10+，再运行包内 `首次安装.bat`，安装到固定目录 `%LOCALAPPDATA%\FigmaRelay`。从固定目录的 `start_relay.bat` 启动 Relay，在 Figma 导入固定的 `plugin\manifest.json`。以后在“设置 → 版本与更新”检查和安装新版本，完成后重新打开插件，无需换目录重新导入。首次安装和更新需要联网准备依赖；个人配置保存在固定目录的 `data`，与各版本独立的 `.venv`、程序文件分开。连接异常时运行固定目录的 `更新修复.bat`。
+
+发布私钥位于源码仓库 `.local/release-signing/private.pem`，必须备份并跨版本复用，永不随 ZIP 分发。没有配置发布地址的包只支持本地安装验收，界面会明确显示更新源未配置，不会把离线状态当作“已是最新版”。
+
+测试通过并将对应代码提交推送后，执行 `npm run publish:github -- -Version "实际版本" -TargetCommit "实际的40位提交SHA"` 发布已打好的包。脚本先校验本地文件，再创建 GitHub 草稿、上传全部资产并检查，最后发布为 Latest；失败保留草稿，不覆盖既有 Release。可加 `-DryRun` 仅查看计划。发布命令不替你提交或推送代码。
 
 ## 从源码安装与启动
 

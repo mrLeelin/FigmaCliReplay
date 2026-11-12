@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { GatewayConfig } from "./config.js";
-import { PLUGIN_ROOT, publicUrl } from "./config.js";
+import { DATA_ROOT, PLUGIN_ROOT, publicUrl } from "./config.js";
 import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 import type { OperationScope } from "./logging/operationScope.js";
 import { logInfo, logWarn } from "./utils/logger.js";
@@ -68,6 +68,9 @@ export interface PsdImportTask {
 }
 
 const tasks = new Map<string, PsdImportTask>();
+export function activePsdImportCount(): number {
+  return [...tasks.values()].filter((task) => ["queued", "running", "cancel_requested", "preview-ready", "preview-baseline-required"].includes(task.status)).length;
+}
 const requests = new Map<string, Record<string, unknown>>();
 const taskOperations = new Map<string, OperationScope>();
 const logging = getLoggingRuntime();
@@ -122,7 +125,7 @@ export function startPsdImportTask(config: GatewayConfig, payload: unknown): Psd
   }
 
   const taskId = requestId;
-  const importsRoot = path.join(PLUGIN_ROOT, ".tmp", "psd-to-figma");
+  const importsRoot = path.join(DATA_ROOT, ".tmp", "psd-to-figma");
   const taskDir = path.join(importsRoot, taskId);
   if (fs.existsSync(taskDir)) throw new Error("PSD task artifacts already exist; execution status is unknown. Do not replay.");
   const sourcePsdPath = path.join(taskDir, fileName);

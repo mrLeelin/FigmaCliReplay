@@ -1,6 +1,11 @@
 param(
     [switch]$NoLaunch,
-    [switch]$NoVersionBump
+    [switch]$NoVersionBump,
+    [string]$UpdateBaseUrl = '',
+    [string]$ManifestUrl = '',
+    [string]$SigningKeyPath = '',
+    [string]$ReleaseNotesFile = '',
+    [string]$GitHubRepository = ''
 )
 
 $ErrorActionPreference = "Stop"
@@ -121,6 +126,13 @@ if (-not (Test-Path -LiteralPath $unityBridge -PathType Container) -or -not (Tes
 Write-Step "Checking packaging environment"
 Ensure-NodeEnvironment
 Ensure-NpmDependencies
+if (-not $PSBoundParameters.ContainsKey('GitHubRepository') -and -not $UpdateBaseUrl -and -not $ManifestUrl) {
+    $publisherConfig = Get-Content -Encoding utf8 -Raw -LiteralPath (Join-Path $PluginRoot 'release-config.json') | ConvertFrom-Json
+    if ($publisherConfig.githubRepository) { $GitHubRepository = [string]$publisherConfig.githubRepository }
+}
+if ($GitHubRepository -and ($UpdateBaseUrl -or $ManifestUrl)) {
+    throw 'Use GitHubRepository or custom UpdateBaseUrl/ManifestUrl, not both.'
+}
 
 Write-Step "Bumping release version"
 Push-Location $PluginRoot
@@ -147,6 +159,14 @@ try {
     Pop-Location
 }
 
+if ($GitHubRepository) {
+    $githubUrlsJson = & node (Join-Path $ScriptDir 'create_release_manifest.mjs') 'github-urls' '--repository' $GitHubRepository '--version' $releaseVersion
+    if ($LASTEXITCODE -ne 0) { throw 'Invalid GitHub release repository or version.' }
+    $githubUrls = $githubUrlsJson | ConvertFrom-Json
+    $UpdateBaseUrl = $githubUrls.baseUrl
+    $ManifestUrl = $githubUrls.manifestUrl
+}
+
 $outputRoot = Join-Path $PluginRoot "output"
 $releaseName = "figma-relay-$releaseVersion"
 $releaseRoot = Join-Path $outputRoot $releaseName
@@ -168,7 +188,7 @@ Write-Step "Assembling release package"
 $releaseItems = @(
     "ai", "client", "code", "dist", "docs", "prompts", "scripts", "server", "src",
     ".build_version", ".gitignore", "build.bat", "code.js", "manifest.json", "package-lock.json",
-    "package.json", "README.md", "AGENTS.md", "CLAUDE.md", "LICENSE", "tsconfig.json", "ui.html",
+    "package.json", "README.md", "AGENTS.md", "CLAUDE.md", "LICENSE", "tsconfig.json", "ui.html", "release-config.json",
     "unity\Assets\Editor\FigmaBridge", "unity\Assets\Editor\FigmaBridge.meta"
 )
 foreach ($item in $releaseItems) {
@@ -180,9 +200,29 @@ Get-ChildItem -LiteralPath $PluginRoot -Filter "*.bat" -File | ForEach-Object {
 
 Copy-Item -LiteralPath (Join-Path $PluginRoot 'docs\distribution.md') -Destination (Join-Path $releaseRoot 'README.md')
 
+Write-Step "Preparing signed update identity and release feed"
+$manifestTool = Join-Path $ScriptDir 'create_release_manifest.mjs'
+$prepareArguments = @($manifestTool, 'prepare', '--root', $relayRoot)
+if ($UpdateBaseUrl) { $prepareArguments += @('--base-url', $UpdateBaseUrl) }
+if ($ManifestUrl) { $prepareArguments += @('--manifest-url', $ManifestUrl) }
+if ($GitHubRepository) { $prepareArguments += @('--github-repository', $GitHubRepository) }
+if ($SigningKeyPath) { $prepareArguments += @('--private-key', $SigningKeyPath) }
+Invoke-Checked -FilePath 'node' -Arguments $prepareArguments
+
 Write-Step "Validating assembled release versions and runtime layout"
 Invoke-Checked -FilePath 'node' -Arguments @((Join-Path $ScriptDir 'check_release.mjs'), $relayRoot)
+foreach ($requiredUpdateFile in @('release-config.json', 'scripts\install_release.mjs', 'scripts\apply_update.mjs', 'scripts\installed_launcher.mjs', 'scripts\update_common.mjs', 'scripts\extract_update.ps1')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $relayRoot $requiredUpdateFile) -PathType Leaf)) {
+        throw "Required update release item is missing: $requiredUpdateFile"
+    }
+}
 Compress-Archive -Path (Join-Path $releaseRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
+Write-Step "Signing archive metadata"
+$finalizeArguments = @($manifestTool, 'finalize', '--root', $relayRoot, '--archive', $zipPath, '--output-dir', $outputRoot)
+if ($UpdateBaseUrl) { $finalizeArguments += @('--base-url', $UpdateBaseUrl) }
+if ($SigningKeyPath) { $finalizeArguments += @('--private-key', $SigningKeyPath) }
+if ($ReleaseNotesFile) { $finalizeArguments += @('--notes-file', $ReleaseNotesFile) }
+Invoke-Checked -FilePath 'node' -Arguments $finalizeArguments
 Write-Host "Release directory: $releaseRoot" -ForegroundColor Green
 Write-Host "Release archive:   $zipPath" -ForegroundColor Green
 

@@ -1296,6 +1296,30 @@
     #ai-skill-settings-section .flex h2 { margin: 0; }
     #ai-skill-settings-section .hint { line-height: 1.6; }
     .ai-skill-agent button { min-width: 92px; }
+    .brand .update-notice {
+      padding: 3px 7px;
+      min-height: 0;
+      font-size: 10px;
+      border: 1px solid rgba(110,168,255,0.35);
+      border-radius: 5px;
+      color: var(--accent);
+      background: rgba(110,168,255,0.12);
+    }
+    .update-notice[hidden], #relayUpdateProgress[hidden], #relayUpdateNotes[hidden] { display: none; }
+    #relay-update-settings-section .flex { justify-content: space-between; gap: 12px; }
+    #relay-update-settings-section h2 { margin: 0; }
+    .update-versions { display: flex; flex-wrap: wrap; gap: 12px 28px; padding: 15px 0 10px; }
+    .update-version { display: grid; gap: 4px; }
+    .update-version span { color: var(--muted); font-size: 11px; }
+    .update-version strong { color: var(--text); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .update-options { display: grid; gap: 10px; padding: 10px 0 14px; }
+    .update-option { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--text); }
+    #relay-update-settings-section .update-option input { flex: 0 0 14px; width: 14px; height: 14px; min-height: 14px; margin: 1px 0 0; padding: 0; accent-color: var(--accent); }
+    .update-option span { flex: 1; min-width: 0; line-height: 1.5; }
+    #relayUpdateNotes { margin: 0 0 12px; padding: 12px; border-left: 2px solid var(--accent); background: rgba(110,168,255,0.05); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+    #relayUpdateProgress { display: block; width: 100%; height: 6px; margin: 14px 0 4px; accent-color: var(--accent); }
+    #relayUpdateStatus { overflow-wrap: anywhere; }
+    #relay-update-settings-section .hint { line-height: 1.6; }
 
     /* Workspace */
     .workspace {
@@ -1944,7 +1968,8 @@
           <div>
             <h1>LKS Figma Relay</h1>
           </div>
-          <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.49<!-- END_RELEASE_VERSION --></span>
+          <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.50<!-- END_RELEASE_VERSION --></span>
+          <button class="update-notice" id="relayUpdateNoticeBtn" type="button" title="查看版本与更新" hidden>有更新</button>
           <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
         </div>
         <div class="brand-meta">Figma ↔ Unity 工作台</div>
@@ -2006,6 +2031,30 @@
         <button id="openServerBtn" class="secondary">插件目录</button>
       </div>
       <div class="status-box" id="ai-status">等待连接本地 Relay...</div>
+    </div>
+
+    <div class="section global-section" id="relay-update-settings-section" aria-labelledby="relayUpdateHeading">
+      <div class="flex">
+        <h2 id="relayUpdateHeading">版本与更新</h2>
+        <span class="badge pending" id="relayUpdateBadge">未检查</span>
+      </div>
+      <div class="update-versions">
+        <div class="update-version"><span>当前插件</span><strong id="relayUpdateCurrentVersion">—</strong></div>
+        <div class="update-version"><span>本机 Relay</span><strong id="relayUpdateRelayVersion">未连接</strong></div>
+        <div class="update-version"><span>最新版本</span><strong id="relayUpdateLatestVersion">未检查</strong></div>
+      </div>
+      <div id="relayUpdateNotes" aria-label="更新内容" hidden></div>
+      <div class="update-options">
+        <label class="update-option"><input id="relayUpdateAutoCheck" type="checkbox" checked disabled /><span>启动时自动检查更新</span></label>
+        <label class="update-option"><input id="relayUpdateBridgeCheck" type="checkbox" disabled /><span id="relayUpdateBridgeLabel">同时更新当前 Unity 工程的 Bridge（请先选择工程）</span></label>
+      </div>
+      <div class="row">
+        <button id="relayUpdateCheckBtn" class="secondary" type="button" disabled>检查更新</button>
+        <button id="relayUpdateInstallBtn" type="button" disabled>立即更新</button>
+      </div>
+      <progress id="relayUpdateProgress" max="100" aria-label="版本更新进度" hidden></progress>
+      <div class="status-box" id="relayUpdateStatus" role="status" aria-live="polite">连接本地 Relay 后检查版本。</div>
+      <div class="hint" id="relayUpdateRecoveryHint">更新完成后请关闭并重新打开 Figma 插件。Relay 无法连接时，可运行安装目录中的「更新修复.bat」。</div>
     </div>
 
     <div class="section global-section" id="ai-skill-settings-section">
@@ -3222,6 +3271,8 @@
       refreshDxxControls();
       if (!online) resetAiSkillSettingsForRelay("本地 Relay 未连接，连接后重新检查 Skill。");
       else refreshAiSkillControls();
+      if (!online) resetRelayUpdateSettings("本地 Relay 未连接。连接后可核对更新状态；也可运行安装目录中的「更新修复.bat」。");
+      else refreshRelayUpdateControls();
     }
     function setUnityBadge(online) {
       var pending = !online && unityConnectionIsPending();
@@ -3466,6 +3517,7 @@
         relayRuntimeGeneration += 1;
         resetDxxConfigForRelay();
         resetAiSkillSettingsForRelay("Relay 地址已切换，连接后重新检查 Skill。");
+        resetRelayUpdateSettings("Relay 地址已切换，连接后重新检查版本。");
         relayRuntimePaths = readCachedRelayRuntimePaths(relayRuntimeStorage, relayPluginRootCacheKey(relayUrl));
       }
       if (relayUrlInput.value.trim() !== relayUrl) {
@@ -3493,6 +3545,8 @@
       }
       unityProjectSelect.value = selectedId || (unityProjects[0] && unityProjects[0].id) || "";
       selectedUnityProject = unityProjects.find(function (project) { return project.id === unityProjectSelect.value; }) || null;
+      relayUpdateExplicitProjectId = selectedId;
+      refreshRelayUpdateControls();
       if (unityBridgeVersionMismatch && (!selectedUnityProject || unityBridgeVersionMismatch.projectId !== selectedUnityProject.id)) {
         unityBridgeVersionMismatch = null;
       }
@@ -3721,6 +3775,7 @@
         if (title) workspaceTitleEl.textContent = title;
       }
       if (tabId === "settings-tab") refreshAiSkillStatus();
+      if (tabId === "settings-tab") refreshRelayUpdateStatus();
     }
 
     function switchSyncTab(tabId) {
@@ -5327,6 +5382,264 @@
     aiSkillRows.claude.button.addEventListener("click", function () { installAiSkillFromSettings("claude"); });
     // AI_SKILL_SETTINGS_END
 
+    // RELAY_UPDATE_SETTINGS_BEGIN
+    const relayUpdateNoticeBtn = document.getElementById("relayUpdateNoticeBtn");
+    const relayUpdateCheckBtn = document.getElementById("relayUpdateCheckBtn");
+    const relayUpdateInstallBtn = document.getElementById("relayUpdateInstallBtn");
+    const relayUpdateAutoCheck = document.getElementById("relayUpdateAutoCheck");
+    const relayUpdateBridgeCheck = document.getElementById("relayUpdateBridgeCheck");
+    const relayUpdateBridgeLabel = document.getElementById("relayUpdateBridgeLabel");
+    const relayUpdateBadge = document.getElementById("relayUpdateBadge");
+    const relayUpdateCurrentVersion = document.getElementById("relayUpdateCurrentVersion");
+    const relayUpdateRelayVersion = document.getElementById("relayUpdateRelayVersion");
+    const relayUpdateLatestVersion = document.getElementById("relayUpdateLatestVersion");
+    const relayUpdateNotes = document.getElementById("relayUpdateNotes");
+    const relayUpdateProgress = document.getElementById("relayUpdateProgress");
+    const relayUpdateStatus = document.getElementById("relayUpdateStatus");
+    let relayUpdateState = null;
+    let relayUpdateBusy = false;
+    let relayUpdateSequence = 0;
+    let relayUpdatePollTimer = null;
+    let relayUpdateConnectionStarted = false;
+    let relayUpdateInstallUncertain = false;
+    let relayUpdateExplicitProjectId = "";
+    const relayUpdateActivePhases = ["checking", "downloading", "preparing", "waiting", "installing"];
+    const relayUpdatePhaseLabels = {
+      idle: "未检查", checking: "检查中", available: "有更新", "up-to-date": "已是最新",
+      downloading: "下载中", preparing: "准备中", waiting: "等待任务结束", installing: "安装中",
+      "restart-required": "请重新打开插件", "rolled-back": "已恢复原版本", failed: "更新失败"
+    };
+
+    function relayUpdateIsActive() {
+      return !!relayUpdateState && relayUpdateActivePhases.indexOf(relayUpdateState.phase) >= 0;
+    }
+
+    function relayUpdateNeedsReopen() {
+      return !!relayUpdateState && relayUpdateState.installed && relayUpdateState.currentVersion !== pluginReleaseVersion;
+    }
+
+    function relayUpdateBridgeIsPending() {
+      return !!relayUpdateState && !!relayUpdateState.bridge
+        && ["pending", "installing", "waiting-for-unity", "pending-reconnect"].indexOf(relayUpdateState.bridge.phase) >= 0;
+    }
+
+    function relayUpdateBridgeProject() {
+      return selectedUnityProject && selectedUnityProject.valid === true
+        && selectedUnityProject.id === relayUpdateExplicitProjectId
+        && selectedUnityProject.id === unityProjectSelect.value ? selectedUnityProject : null;
+    }
+
+    function refreshRelayUpdateControls() {
+      var active = relayUpdateIsActive();
+      var locked = !relayConnected || relayUpdateBusy || active;
+      var project = relayUpdateBridgeProject();
+      relayUpdateCheckBtn.disabled = !relayConnected || relayUpdateBusy;
+      relayUpdateCheckBtn.textContent = relayUpdateInstallUncertain ? "核对更新状态" : active || relayUpdateBridgeIsPending() ? "刷新进度" : "检查更新";
+      relayUpdateInstallBtn.disabled = locked || relayUpdateInstallUncertain || !relayUpdateState
+        || relayUpdateState.canInstall !== true || !relayUpdateState.configured || relayUpdateNeedsReopen();
+      relayUpdateInstallBtn.textContent = relayUpdateState && relayUpdateState.phase === "failed" ? "重试更新" : "立即更新";
+      relayUpdateAutoCheck.disabled = locked || !relayUpdateState;
+      relayUpdateBridgeCheck.disabled = locked || !project || !relayUpdateState || relayUpdateState.canInstall !== true;
+      if (!project) relayUpdateBridgeCheck.checked = false;
+      relayUpdateBridgeLabel.textContent = project
+        ? "同时更新当前 Unity 工程的 Bridge（" + project.name + "）"
+        : "同时更新当前 Unity 工程的 Bridge（请先选择工程）";
+    }
+
+    function clearRelayUpdatePoll() {
+      if (relayUpdatePollTimer !== null) clearTimeout(relayUpdatePollTimer);
+      relayUpdatePollTimer = null;
+    }
+
+    function resetRelayUpdateSettings(message) {
+      var wasUpdating = relayUpdateIsActive() || relayUpdateInstallUncertain;
+      relayUpdateSequence += 1;
+      relayUpdateBusy = false;
+      relayUpdateState = null;
+      relayUpdateConnectionStarted = false;
+      relayUpdateExplicitProjectId = "";
+      clearRelayUpdatePoll();
+      relayUpdateBadge.textContent = "未连接";
+      relayUpdateBadge.className = "badge offline";
+      relayUpdateRelayVersion.textContent = "未连接";
+      relayUpdateLatestVersion.textContent = "未检查";
+      relayUpdateNoticeBtn.hidden = true;
+      relayUpdateNotes.hidden = true;
+      relayUpdateNotes.textContent = "";
+      relayUpdateProgress.hidden = true;
+      relayUpdateStatus.textContent = (wasUpdating ? "更新如已启动，将由独立更新器继续执行；重新连接后核对结果。\n" : "") + (message || "连接状态已变化，请重新检查版本。");
+      refreshRelayUpdateControls();
+    }
+
+    function relayUpdateRequestIsCurrent(context, sequence) {
+      return relayConnected && relayRequestIsCurrent(context) && sequence === relayUpdateSequence;
+    }
+
+    function validateRelayUpdateStatus(result) {
+      if (!result || result.ok !== true || typeof result.currentVersion !== "string"
+        || typeof result.installed !== "boolean" || typeof result.configured !== "boolean"
+        || typeof result.autoCheck !== "boolean" || typeof result.canInstall !== "boolean"
+        || !Object.prototype.hasOwnProperty.call(relayUpdatePhaseLabels, result.phase)
+        || typeof result.message !== "string"
+        || result.latest && (typeof result.latest.version !== "string" || !Array.isArray(result.latest.notes)
+          || result.latest.notes.some(function (note) { return typeof note !== "string"; }))) {
+        throw new Error("更新状态返回不完整，请更新 Relay 后重新检查。");
+      }
+      return result;
+    }
+
+    function renderRelayUpdateStatus(result) {
+      relayUpdateState = validateRelayUpdateStatus(result);
+      relayUpdateAutoCheck.checked = result.autoCheck;
+      relayUpdateCurrentVersion.textContent = "v" + pluginReleaseVersion;
+      relayUpdateRelayVersion.textContent = "v" + result.currentVersion;
+      relayUpdateLatestVersion.textContent = result.latest ? "v" + result.latest.version : result.configured ? "未检查" : "未配置";
+      var reopen = relayUpdateNeedsReopen();
+      var label = reopen ? "请重新打开插件" : !result.configured ? "未配置更新源"
+        : result.phase === "restart-required" ? "已更新" : relayUpdatePhaseLabels[result.phase];
+      relayUpdateBadge.textContent = label;
+      relayUpdateBadge.className = "badge " + (result.phase === "failed" || result.phase === "rolled-back" ? "offline"
+        : result.configured && ["up-to-date", "restart-required"].indexOf(result.phase) >= 0 && !reopen ? "online" : "pending");
+      relayUpdateNoticeBtn.hidden = !(result.latest && result.phase === "available" || reopen);
+      relayUpdateNoticeBtn.textContent = reopen ? "重新打开插件" : "有更新";
+      relayUpdateNoticeBtn.title = reopen ? "本机版本已变化，请关闭并重新打开 Figma 插件" : "发现新版本，查看更新内容";
+      relayUpdateNotes.hidden = !result.latest || result.latest.notes.length === 0;
+      relayUpdateNotes.textContent = result.latest ? result.latest.notes.map(function (note) { return "· " + note; }).join("\n") : "";
+      relayUpdateProgress.hidden = !relayUpdateIsActive();
+      if (typeof result.progress === "number" && Number.isFinite(result.progress)) relayUpdateProgress.value = Math.max(0, Math.min(100, result.progress));
+      else relayUpdateProgress.removeAttribute("value");
+      var message = !result.configured ? "发布者尚未配置更新源，请联系发布者获取新版本。" : result.message;
+      if (!result.installed) message += "\n当前为源码或旧式解压目录；请先通过「首次安装.bat」安装到固定目录。";
+      if (reopen) message += "\n请关闭并重新打开 Figma 插件，载入新版本代码。";
+      if (result.error) message += "\n" + result.error;
+      if (result.bridge && result.bridge.message) message += "\nUnity Bridge：" + result.bridge.message;
+      relayUpdateStatus.textContent = message;
+      refreshRelayUpdateControls();
+    }
+
+    function relayUpdateErrorMessage(error) {
+      var message = String(error && error.message || error || "请检查 Relay 连接。");
+      return /Unsupported.*(?:control|action)|unknown.*(?:control|action)/i.test(message)
+        ? "当前 Relay 不支持在线更新，请通过新安装包中的「首次安装.bat」升级一次。" : message;
+    }
+
+    function scheduleRelayUpdatePoll() {
+      clearRelayUpdatePoll();
+      if (!relayConnected || !relayUpdateIsActive() && !relayUpdateBridgeIsPending()) return;
+      var delay = relayUpdateState.bridge && relayUpdateState.bridge.phase === "pending-reconnect" && !relayUpdateIsActive() ? 5000 : 1000;
+      relayUpdatePollTimer = setTimeout(function () {
+        relayUpdatePollTimer = null;
+        if (relayUpdateBusy) scheduleRelayUpdatePoll();
+        else refreshRelayUpdateStatus();
+      }, delay);
+    }
+
+    async function readRelayUpdateAction(action, payload) {
+      if (!relayConnected || relayUpdateBusy) return false;
+      clearRelayUpdatePoll();
+      var context = captureRelayRequestContext();
+      var sequence = ++relayUpdateSequence;
+      relayUpdateBusy = true;
+      refreshRelayUpdateControls();
+      try {
+        var result = await sendRelaySocketRequest(action, payload || {}, "", action === "relay.update.check" ? 30000 : 10000);
+        if (!relayUpdateRequestIsCurrent(context, sequence)) return false;
+        renderRelayUpdateStatus(result);
+        relayUpdateInstallUncertain = false;
+        return true;
+      } catch (error) {
+        if (relayUpdateRequestIsCurrent(context, sequence)) {
+          relayUpdateState = null;
+          relayUpdateNoticeBtn.hidden = true;
+          relayUpdateBadge.textContent = "检查失败";
+          relayUpdateBadge.className = "badge offline";
+          relayUpdateLatestVersion.textContent = "未检查";
+          relayUpdateNotes.hidden = true;
+          relayUpdateProgress.hidden = true;
+          relayUpdateStatus.textContent = "无法核对更新状态：" + relayUpdateErrorMessage(error)
+            + "\n连接异常时可运行安装目录中的「更新修复.bat」。";
+        }
+        return false;
+      } finally {
+        if (relayUpdateRequestIsCurrent(context, sequence)) {
+          relayUpdateBusy = false;
+          refreshRelayUpdateControls();
+          scheduleRelayUpdatePoll();
+        }
+      }
+    }
+
+    function refreshRelayUpdateStatus() {
+      return readRelayUpdateAction("relay.update.status", {});
+    }
+
+    function checkRelayUpdate() {
+      return relayUpdateInstallUncertain || relayUpdateIsActive() || relayUpdateBridgeIsPending()
+        ? refreshRelayUpdateStatus() : readRelayUpdateAction("relay.update.check", {});
+    }
+
+    async function startRelayUpdateConnection() {
+      if (!relayConnected || relayUpdateConnectionStarted) return;
+      relayUpdateConnectionStarted = true;
+      if (await refreshRelayUpdateStatus() && relayConnected && relayUpdateState && relayUpdateState.autoCheck
+        && relayUpdateState.configured && !relayUpdateIsActive() && !relayUpdateNeedsReopen()
+        && relayUpdateState.phase !== "available") await checkRelayUpdate();
+    }
+
+    async function saveRelayUpdateSettings() {
+      if (!relayConnected || relayUpdateBusy || relayUpdateIsActive() || !relayUpdateState) return;
+      var selected = relayUpdateAutoCheck.checked;
+      relayUpdateAutoCheck.checked = relayUpdateState.autoCheck;
+      await readRelayUpdateAction("relay.update.settings", { autoCheck: selected });
+    }
+
+    async function installRelayUpdate() {
+      refreshRelayUpdateControls();
+      if (relayUpdateInstallBtn.disabled) return;
+      var project = relayUpdateBridgeProject();
+      var updateBridge = relayUpdateBridgeCheck.checked === true;
+      if (updateBridge && !project) return;
+      var payload = { updateBridge: updateBridge };
+      if (updateBridge) payload.projectId = project.id;
+      var context = captureRelayRequestContext();
+      var sequence = ++relayUpdateSequence;
+      relayUpdateBusy = true;
+      relayUpdateInstallUncertain = true;
+      clearRelayUpdatePoll();
+      relayUpdateStatus.textContent = "正在提交更新请求。下载和安装进度将由本机更新器报告…";
+      refreshRelayUpdateControls();
+      try {
+        var result = await sendRelaySocketRequest("relay.update.install", payload, "", 10000);
+        if (!relayUpdateRequestIsCurrent(context, sequence)) return;
+        renderRelayUpdateStatus(result);
+        relayUpdateInstallUncertain = false;
+      } catch (error) {
+        if (relayUpdateRequestIsCurrent(context, sequence)) {
+          relayUpdateStatus.textContent = "更新请求结果未确认：" + relayUpdateErrorMessage(error)
+            + "\n请先核对更新状态；不会自动重复提交安装。";
+          relayUpdateBadge.textContent = "待核对";
+          relayUpdateBadge.className = "badge pending";
+        }
+      } finally {
+        if (relayUpdateRequestIsCurrent(context, sequence)) {
+          relayUpdateBusy = false;
+          refreshRelayUpdateControls();
+          scheduleRelayUpdatePoll();
+        }
+      }
+    }
+
+    relayUpdateCurrentVersion.textContent = "v" + pluginReleaseVersion;
+    relayUpdateCheckBtn.addEventListener("click", function () { checkRelayUpdate(); });
+    relayUpdateInstallBtn.addEventListener("click", function () { installRelayUpdate(); });
+    relayUpdateAutoCheck.addEventListener("change", function () { saveRelayUpdateSettings(); });
+    relayUpdateNoticeBtn.addEventListener("click", function () {
+      switchTab("settings-tab");
+      document.getElementById("relay-update-settings-section").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    refreshRelayUpdateControls();
+    // RELAY_UPDATE_SETTINGS_END
+
     // DXX_SETTINGS_BEGIN
     const dxxApiBaseInput = document.getElementById("dxxApiBaseInput");
     const dxxApiKeyInput = document.getElementById("dxxApiKeyInput");
@@ -6716,6 +7029,7 @@
           refreshCleanupProviders();
           refreshAiRunner();
           refreshAiSkillStatus();
+          startRelayUpdateConnection();
           refreshDxxConfig();
           scheduleAiCleanupPoll();
           reconcileRelayTasks();

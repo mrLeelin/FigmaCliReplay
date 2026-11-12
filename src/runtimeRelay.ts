@@ -8,7 +8,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type { GatewayConfig } from "./config.js";
-import { LOCAL_DIR, PLUGIN_ROOT, publicUrl } from "./config.js";
+import { DATA_ROOT, LOCAL_DIR, PLUGIN_ROOT, publicUrl } from "./config.js";
+import { assertRuntimeAcceptingWork } from "./updateActivity.js";
 import { getLoggingRuntime, type LoggingRuntime } from "./logging/loggingRuntime.js";
 import { assertCleanupAiJobAllowed, recordCleanupAiJobResult } from "./cleanupAiWriteGuard.js";
 import type { OperationScope } from "./logging/operationScope.js";
@@ -78,6 +79,7 @@ export class RuntimeRelay {
   }
 
   submitJob(payload: unknown, options?: { transport: "websocket" }): JsonObject {
+    assertRuntimeAcceptingWork();
     if (!isRecord(payload)) {
       throw new Error("json body must be object");
     }
@@ -420,7 +422,7 @@ export class RuntimeRelay {
         } catch (error) { operation.fail(error, "Folder opener failed"); throw error; }
       }
       case "psd.export.open-folder": {
-        const exportRoot = path.join(PLUGIN_ROOT, ".tmp", "exports");
+        const exportRoot = path.join(DATA_ROOT, ".tmp", "exports");
         fs.mkdirSync(exportRoot, { recursive: true });
         const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
         await new Promise<void>((resolve, reject) => {

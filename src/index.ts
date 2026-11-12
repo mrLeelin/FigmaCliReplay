@@ -1,7 +1,10 @@
 import { createRelayHttpServer } from "./httpServer.js";
 import { getLoggingRuntime } from "./logging/loggingRuntime.js";
 import { RuntimeRelay } from "./runtimeRelay.js";
-import { parseArgs, publicUrl } from "./config.js";
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { INSTALL_ROOT, LOCAL_DIR, PLUGIN_ROOT, parseArgs, publicUrl } from "./config.js";
 import { probePythonWorker } from "./pythonWorker.js";
 import { PythonAlgorithms } from "./pythonAlgorithms.js";
 import { WebSocketGateway } from "./websocketGateway.js";
@@ -11,7 +14,12 @@ import { RelayCliEndpoint } from "./relayCliEndpoint.js";
 import { getCleanupRuntime } from "./cleanup/cleanupRuntime.js";
 import { CleanupExecutor } from "./cleanup/cleanupExecutor.js";
 import { createConversationCleanupDispatcher } from "./cleanup/conversationCleanupDispatcher.js";
-import { configureLocalAiCleanupDispatcher, stopAiRunsForSession } from "./localAiRunner.js";
+import { activeLocalAiRunCount, configureLocalAiCleanupDispatcher, stopAiRunsForSession } from "./localAiRunner.js";
+import { activePsdImportCount } from "./psdImportTask.js";
+import { activeFigmaPrefabImportCount } from "./figmaPrefabImportTask.js";
+import { activeRuntimeControls } from "./updateActivity.js";
+import { UpdateService, writeUpdateJson } from "./updateService.js";
+import { resumeRequestedBridgeUpdate } from "./updateBridge.js";
 
 async function main(): Promise<void> {
   const logging = getLoggingRuntime();
@@ -56,7 +64,13 @@ async function main(): Promise<void> {
   const cleanupRuntime = getCleanupRuntime();
   configureLocalAiCleanupDispatcher(createConversationCleanupDispatcher(new CleanupExecutor()));
   const unityProjects = new UnityProjectRegistry();
-  const cliControlHandler = createRelayControlHandler(relay, cleanupRuntime, undefined, unityProjects, config.bridgeToken);
+  const update = new UpdateService({
+    refreshBridge: () => resumeRequestedBridgeUpdate(),
+    activity: () => relay.status().pending + Number(algorithms.status().processRunning) + activeLocalAiRunCount()
+      + activePsdImportCount() + activeFigmaPrefabImportCount() + (cleanupRuntime.controller.activeCount?.() ?? 0) + activeRuntimeControls(),
+    shutdown: () => void shutdown("update"),
+  });
+  const cliControlHandler = createRelayControlHandler(relay, cleanupRuntime, undefined, unityProjects, config.bridgeToken, undefined, undefined, update);
   gateway.onClientRequest((request) => cliControlHandler(request.action, {
     ...request.payload,
     sessionId: request.sessionId,
@@ -73,6 +87,13 @@ async function main(): Promise<void> {
       resolve();
     });
   });
+
+  const runtimeFile = path.join(LOCAL_DIR, "runtime.json");
+  if (INSTALL_ROOT) {
+    process.env.FIGMA_RELAY_INSTANCE_ID ||= randomUUID();
+    writeUpdateJson(runtimeFile, { schemaVersion: 1, pid: process.pid, entry: path.join(PLUGIN_ROOT, "dist", "index.js"),
+      port: config.port, tokenFile: path.join(LOCAL_DIR, "admin-token.txt"), startedAt: new Date().toISOString(), instanceId: process.env.FIGMA_RELAY_INSTANCE_ID });
+  }
 
   const python = config.pythonWorker ? probePythonWorker() : { available: false, scriptExists: false, error: "disabled" };
   startup.succeed("Figma Relay Node gateway 已启动", {
@@ -104,6 +125,11 @@ async function main(): Promise<void> {
     relay.dispose();
     gateway.close();
     algorithms.close();
+    if (INSTALL_ROOT) {
+      try {
+        if (JSON.parse(fs.readFileSync(runtimeFile, "utf8")).pid === process.pid) fs.unlinkSync(runtimeFile);
+      } catch { /* A newer instance may already own the record. */ }
+    }
     operation.step("runtime.disposed", "Relay 运行时资源已释放");
     operation.succeed("Figma Relay 已关闭");
     await logging.flush();
@@ -113,6 +139,7 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  void resumeRequestedBridgeUpdate().catch((error) => processLogger.error("Bridge 更新恢复失败", error));
 }
 
 main().catch(async (error) => {

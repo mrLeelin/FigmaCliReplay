@@ -1,6 +1,6 @@
 {
   "name": "figma-relay",
-  "version": "0.1.49",
+  "version": "0.1.50",
   "private": true,
   "type": "module",
   "bin": {
@@ -16,6 +16,7 @@
     "smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke_relay.ps1",
     "oneclick": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_relay.ps1",
     "package:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package_release.ps1",
+    "publish:github": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_github_release.ps1",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

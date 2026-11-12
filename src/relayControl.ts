@@ -14,6 +14,8 @@ import { isRecord } from "./utils.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 import { DxxConfig } from "./dxxConfig.js";
 import { createAiSkillService, type AiSkillService, type AiSkillTarget } from "./aiSkillManager.js";
+import { UpdateService } from "./updateService.js";
+import { beginRuntimeControl } from "./updateActivity.js";
 
 /** Shared CLI and authenticated plugin controls; capability checks stay in the controllers. */
 export function createRelayControlHandler(
@@ -24,8 +26,11 @@ export function createRelayControlHandler(
   bridgeToken = "",
   dxx: Pick<DxxConfig, "get" | "set" | "test"> & Partial<Pick<DxxConfig, "readForSettings">> = new DxxConfig(),
   aiSkill: AiSkillService = createAiSkillService(),
+  update: UpdateService = new UpdateService(),
 ) {
   return async (action: string, payload: Record<string, unknown>, parentOperationId?: string): Promise<unknown> => {
+    const releaseActivity = action.startsWith("relay.update.") || /(?:\.get|\.status|\.list|\.providers|command-status)$/.test(action) || action === "logs.query"
+      ? () => {} : beginRuntimeControl();
     const runId = typeof payload.runId === "string" ? payload.runId.trim() : "";
     const token = typeof payload.capabilityToken === "string" ? payload.capabilityToken : "";
     const afterSequence = typeof payload.afterSequence === "number" && Number.isFinite(payload.afterSequence)
@@ -60,6 +65,35 @@ export function createRelayControlHandler(
       }
       let result: unknown;
       switch (action) {
+        case "relay.update.status":
+        case "relay.update.check":
+        case "relay.update.settings":
+        case "relay.update.install":
+        case "relay.update.activity":
+        case "relay.update.shutdown": {
+          const fields: Record<string, string[]> = {
+            "relay.update.settings": ["autoCheck"], "relay.update.install": ["updateBridge", "projectId"], "relay.update.shutdown": ["planId"],
+          };
+          const allowed = new Set([...(fields[action] ?? []), "sessionId", "fileKey", "capabilityToken"]);
+          if (Object.keys(payload).some((key) => !allowed.has(key))) throw new Error("更新入口不接受下载地址、安装路径或未声明的参数。");
+          if (action === "relay.update.check") result = await update.check();
+          else if (action === "relay.update.settings") result = update.settings(payload.autoCheck);
+          else if (action === "relay.update.activity") result = update.activity();
+          else if (action === "relay.update.shutdown") result = update.shutdown(payload.planId);
+          else if (action === "relay.update.install") {
+            if (payload.updateBridge !== undefined && typeof payload.updateBridge !== "boolean") throw new Error("updateBridge 必须为布尔值。");
+            let bridge: { projectId: string; projectPath: string } | undefined;
+            if (payload.updateBridge === true) {
+              const projects = unityProjects.list();
+              if (typeof payload.projectId !== "string" || !payload.projectId || payload.projectId !== projects.lastSelectedProjectId) throw new Error("请选择当前 Unity 工程后再勾选更新 Bridge。");
+              const project = unityProjects.snapshot(payload.projectId);
+              if (!project.valid) throw new Error("当前 Unity 工程目录无效。");
+              bridge = { projectId: project.id, projectPath: project.path };
+            }
+            result = await update.install(bridge);
+          } else result = update.status();
+          break;
+        }
         case "relay.status":
           result = { ...relay.status(), gateway: { pluginRoot: PLUGIN_ROOT } };
           break;
@@ -211,6 +245,8 @@ export function createRelayControlHandler(
     } catch (error) {
       operation.fail(error, "Relay control rejected", { action, runId });
       throw error;
+    } finally {
+      releaseActivity();
     }
   };
 }

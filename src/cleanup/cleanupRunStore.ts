@@ -103,6 +103,8 @@ export class CleanupRunStore {
     return this.runs.has(runId);
   }
 
+  activeCount(): number { return this.activeBySession.size; }
+
   get(runId: string): CleanupRunRecord {
     const run = this.runs.get(runId);
     if (!run) throw new CleanupError("CLEANUP_RUN_NOT_FOUND", "unknown cleanup run");

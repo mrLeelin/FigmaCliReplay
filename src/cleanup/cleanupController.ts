@@ -32,6 +32,7 @@ export interface CleanupController {
   waitForPlanning(runId: string): Promise<void>;
   waitForExecution(runId: string): Promise<void>;
   has(runId: string): boolean;
+  activeCount?(): number;
 }
 
 export function createCleanupController(dependencies: CleanupControllerDependencies): CleanupController {
@@ -318,6 +319,7 @@ export function createCleanupController(dependencies: CleanupControllerDependenc
     has(runId: string): boolean {
       return store.has(runId);
     },
+    activeCount: () => store.activeCount(),
   };
 }
 

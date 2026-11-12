@@ -17,6 +17,8 @@ for (const [file, pattern] of checks) {
   }
 }
 for (const file of ["manifest.json", "code.js", "scripts/setup_relay.ps1", "scripts/install_unity_bridge.mjs",
+  "release-config.json", "scripts/update_common.mjs", "scripts/install_release.mjs", "scripts/apply_update.mjs",
+  "scripts/installed_launcher.mjs", "scripts/installed_bootstrap.mjs", "scripts/extract_update.ps1", "scripts/inspect_update_process.ps1",
   "unity/Assets/Editor/FigmaBridge.meta", "server/requirements.txt", "LICENSE"]) {
   if (!fs.existsSync(path.join(root, file))) throw new Error(`Release item missing: ${file}`);
 }

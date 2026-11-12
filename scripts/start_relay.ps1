@@ -17,7 +17,8 @@ $node = (Get-Command node -ErrorAction Stop).Source
 $entry = Join-Path $PluginRoot 'dist\index.js'
 if (-not (Test-Path -LiteralPath $entry)) { throw 'Run npm ci and npm run build before starting Relay.' }
 if ($Port -lt 1 -or $Port -gt 65535) { throw 'Invalid port' }
-$localDir = Join-Path $PluginRoot '.local'
+$dataRoot = if ($env:FIGMA_RELAY_DATA_ROOT) { [System.IO.Path]::GetFullPath($env:FIGMA_RELAY_DATA_ROOT) } else { $PluginRoot }
+$localDir = Join-Path $dataRoot '.local'
 New-Item -ItemType Directory -Force -Path $localDir | Out-Null
 $tokenFile = Join-Path $localDir 'admin-token.txt'
 if (-not (Test-Path -LiteralPath $tokenFile)) { [guid]::NewGuid().ToString('N') | Set-Content -LiteralPath $tokenFile -Encoding ASCII }
@@ -50,7 +51,7 @@ if ($Foreground) {
     $launchLog.Write('succeeded', 'Foreground Relay exited normally')
     exit 0
 }
-$logs = Join-Path $PluginRoot '.logs'
+$logs = Join-Path $dataRoot '.logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 $process = Start-Process -FilePath $node -ArgumentList @(('"' + $entry + '"'), '--port', $Port) -WorkingDirectory $PluginRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logs 'relay.stdout.log') -RedirectStandardError (Join-Path $logs 'relay.stderr.log') -PassThru
 # 启动后确认真的活着：否则失败只留在 .logs\relay.stderr.log 里，用户以为已经重启。

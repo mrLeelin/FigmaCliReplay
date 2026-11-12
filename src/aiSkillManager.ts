@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-import { PLUGIN_ROOT } from "./config.js";
+import { INSTALL_ROOT, PLUGIN_ROOT } from "./config.js";
 import { isRecord } from "./utils.js";
 
 export type AiSkillTarget = "all" | "codex" | "claude";
@@ -54,7 +54,8 @@ function locations(home: string, target: AiSkillTarget) {
 }
 
 function expectedContents(projectRoot: string): Record<string, string> {
-  const cliPath = path.join(projectRoot, "dist", "cli.js");
+  const cliRoot = INSTALL_ROOT && path.resolve(projectRoot) === PLUGIN_ROOT ? INSTALL_ROOT : projectRoot;
+  const cliPath = path.join(cliRoot, "dist", "cli.js");
   if (!fs.statSync(cliPath).isFile()) throw new Error("Build the project CLI before installing the skill: npm run build.");
   const sourceRoot = path.join(projectRoot, "ai", "skills", "figma-relay");
   return {
@@ -62,7 +63,7 @@ function expectedContents(projectRoot: string): Record<string, string> {
     "agents/openai.yaml": fs.readFileSync(path.join(sourceRoot, "agents", "openai.yaml"), "utf8"),
     "references/installation.md": [
       "# Installed Relay CLI", "",
-      `Relay repository root: ${projectRoot}`, "",
+      `Relay repository root: ${cliRoot}`, "",
       "Preferred command: `figma-relay`. If the command is absent from PATH, use this absolute fallback with the same arguments:", "",
       "```powershell", `node ${psLiteral(cliPath)} --help`, "```", "",
       `Workflow documentation: ${path.join(projectRoot, "docs", "cli.md")}`,

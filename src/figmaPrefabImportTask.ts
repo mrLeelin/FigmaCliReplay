@@ -4,7 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import type { GatewayConfig } from "./config.js";
-import { PLUGIN_ROOT, SERVER_VERSION, publicUrl } from "./config.js";
+import { DATA_ROOT, PLUGIN_ROOT, SERVER_VERSION, publicUrl } from "./config.js";
 import { callUnityBridge } from "./unityBridgeClient.js";
 import type { UnityProjectRegistry, UnityProjectStatus } from "./unityProjectRegistry.js";
 import { isRecord } from "./utils.js";
@@ -87,6 +87,9 @@ interface PreparedImport {
 }
 
 const tasks = new Map<string, FigmaPrefabImportTask>();
+export function activeFigmaPrefabImportCount(): number {
+  return [...tasks.values()].filter((task) => task.status === "queued" || task.status === "running").length;
+}
 const projectImportLocks = new Map<string, string>();
 const MAX_TASK_LOGS = 60;
 const MAX_PROCESS_OUTPUT_CHARS = 2 * 1024 * 1024;
@@ -121,7 +124,7 @@ export function startFigmaPrefabImportTask(
     throw new Error(`Unity project already has a deterministic import task in flight: ${activeTaskId}`);
   }
 
-  const taskDirectory = path.join(PLUGIN_ROOT, ".tmp", "figma-to-prefab", taskId);
+  const taskDirectory = path.join(DATA_ROOT, ".tmp", "figma-to-prefab", taskId);
   if (fs.existsSync(taskDirectory)) throw new Error("Import request has existing artifacts; do not replay an unknown write");
   const now = Date.now();
   const task: FigmaPrefabImportTask = {

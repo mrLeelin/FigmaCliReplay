@@ -6,7 +6,7 @@ import { RelayLogger } from "./logging/relayLogger.js";
 
 export const SERVER_NAME = "figmaRelay";
 // BEGIN_RELEASE_VERSION
-export const SERVER_VERSION = "0.1.49";
+export const SERVER_VERSION = "0.1.50";
 // END_RELEASE_VERSION
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PUBLIC_HOST = "localhost";
@@ -31,9 +31,12 @@ const __filename = fileURLToPath(import.meta.url);
 const protocolLogger = new RelayLogger({ module: "config", emit: () => undefined });
 export const DIST_DIR = path.dirname(__filename);
 export const PLUGIN_ROOT = path.resolve(DIST_DIR, "..");
+/** Managed installations keep user data outside immutable release directories. */
+export const DATA_ROOT = process.env.FIGMA_RELAY_DATA_ROOT ? path.resolve(process.env.FIGMA_RELAY_DATA_ROOT) : PLUGIN_ROOT;
+export const INSTALL_ROOT = process.env.FIGMA_RELAY_INSTALL_ROOT ? path.resolve(process.env.FIGMA_RELAY_INSTALL_ROOT) : undefined;
 export const SERVER_DIR = path.join(PLUGIN_ROOT, "server");
-export const LOG_DIR = path.join(PLUGIN_ROOT, ".logs");
-export const LOCAL_DIR = path.join(PLUGIN_ROOT, ".local");
+export const LOG_DIR = path.join(DATA_ROOT, ".logs");
+export const LOCAL_DIR = path.join(DATA_ROOT, ".local");
 
 export function parseArgs(argv: string[] = process.argv.slice(2)): GatewayConfig {
   const config: GatewayConfig = {
@@ -116,7 +119,7 @@ Options:
 
 function defaultAssetRoots(): string[] {
   return uniquePaths([
-    path.join(PLUGIN_ROOT, ".tmp"),
+    path.join(DATA_ROOT, ".tmp"),
     path.join(os.tmpdir(), "figma-relay")
   ].map((item) => path.resolve(item)));
 }

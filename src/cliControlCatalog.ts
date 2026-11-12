@@ -49,6 +49,12 @@ function op(name: string, summary: string, payloadSchema: Schema, payload: Recor
 
 const operations: ControlOperationDescription[] = [
   op("relay.status", "Read Relay health, plugin sessions, and runtime paths.", object()),
+  op("relay.update.status", "Read fixed-install update progress and publisher configuration.", object(), {}, ["Works without a live Figma session, including version mismatch recovery."], "src/updateService.ts"),
+  op("relay.update.check", "Check the publisher-pinned signed release feed.", object(), {}, [], "src/updateService.ts"),
+  op("relay.update.settings", "Save automatic update-check preference; installation remains explicit.", object({ autoCheck: bool("Check on plugin startup.") }, ["autoCheck"]), { autoCheck: true }, [], "src/updateService.ts"),
+  op("relay.update.install", "Start the independent updater; reconcile status after an uncertain response.", object({ updateBridge: bool("Also update only the currently selected Unity project Bridge."), projectId }, []), { updateBridge: false }, ["Requires a managed installation and a signed newer release. Waits for active work before switching. Reopen the Figma plugin when prompted."], "src/updateService.ts"),
+  op("relay.update.activity", "Read current process identity and whether work prevents a safe update.", object(), {}, [], "src/updateService.ts"),
+  op("relay.update.shutdown", "Updater-only graceful stop matching the durable approved plan.", object({ planId: nonempty("Approved plan ID from the local updater record.") }, ["planId"]), { planId: "<planId>" }, ["Rejects mismatched plans and active work. Used by the independent updater."], "src/updateService.ts"),
   op("logs.query", "Query structured logs with filters and pagination.", object({ query: object({
     from: text("Inclusive start timestamp parseable by Date.parse."), to: text("End timestamp; must not precede from."),
     level: { type: "string", enum: ["trace", "debug", "info", "warn", "error", "fatal"] },
