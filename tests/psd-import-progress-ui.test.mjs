@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { MAX_PSD_UPLOAD_BYTES } from "../dist/psdUploadLimits.js";
 
 const ui = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
 function functionSource(name) {
@@ -37,6 +38,9 @@ function harness(overrides = {}) {
     psdImportProgressBackground: [], psdImportProgressPreviousFocus: null,
     psdImportBusy: false, psdImportQueueActive: false, psdImportCurrentContext: null,
     aiPromptPsdDragDepth: 0, aiPromptTemplateSelect: {},
+    ...Object.fromEntries(["PSD_IMPORT_MAX_FILE_BYTES", "PSD_IMPORT_INLINE_MAX_FILE_BYTES", "PSD_IMPORT_CHUNK_BYTES"].map(name => [
+      name, vm.runInNewContext(ui.match(new RegExp(`const ${name} = ([^;]+);`))[1]),
+    ])),
     psdImportTaskId: "", psdImportLastRenderedLog: "",
     psdImportCompletionResolve: null, psdImportCompletionReject: null,
     aiPromptPsdDropZone: element(), psdWindowDropOverlay: element(),
@@ -189,6 +193,10 @@ test("server stages drive progress and preview releases overlay for confirmation
   s.renderPsdImportTaskStatus({ status: "running", stage: "exporting_psd_layers", percent: 10 });
   assert.match(s.psdImportProgressStage.textContent, /解析 PSD/);
   assert.equal(s.psdImportProgressPercent.textContent, "15%");
+  s.renderPsdImportTaskStatus({ status: "running", stage: "rendering_psd_tools", percent: 25 });
+  assert.match(s.psdImportProgressStage.textContent, /psd-tools/);
+  s.renderPsdImportTaskStatus({ status: "running", stage: "closing_psd_photoshop", percent: 98 });
+  assert.match(s.psdImportProgressStage.textContent, /关闭本次导入启动的 Photoshop/);
   s.renderPsdImportTaskStatus({ status: "running", stage: "submitting_figma_import", percent: 55 });
   assert.match(s.psdImportProgressStage.textContent, /导入 Figma/);
   for (const status of s.PSD_PREVIEW_TERMINAL_STATUSES) {
@@ -239,6 +247,16 @@ test("failed file reads release standalone busy state and overlay", async () => 
   assert.equal(s.psdImportProgressOverlay.hidden, true);
 });
 
+test("oversized PSD fails before selection, file reading or submission and releases the UI", async () => {
+  const unexpected = () => { throw new Error("Oversized PSD must not be read or submitted"); };
+  const { sandbox: s } = harness({ querySelectionForPsdImport: unexpected, readFileAsBase64: unexpected, sendRelaySocketRequest: unexpected });
+  assert.equal(s.PSD_IMPORT_MAX_FILE_BYTES, MAX_PSD_UPLOAD_BYTES);
+  vm.runInContext(functionSource("startPsdImportFromDroppedFile"), s);
+  await assert.rejects(s.startPsdImportFromDroppedFile({ name: "large.psd", size: MAX_PSD_UPLOAD_BYTES + 1 }), /1 GiB/);
+  assert.equal(s.psdImportBusy, false);
+  assert.equal(s.psdImportProgressOverlay.hidden, true);
+});
+
 test("an offline request that was never sent releases the queue and overlay", async () => {
   const offline = Object.assign(new Error("Relay WebSocket is not registered"), {
     relayTransportFailure: true, relayRequestSent: false,
@@ -256,4 +274,63 @@ test("an offline request that was never sent releases the queue and overlay", as
   assert.equal(s.psdImportQueueActive, false);
   assert.equal(s.psdImportProgressOverlay.hidden, true);
   assert.equal(s.psdImportProgressBackground.length, 0);
+});
+
+test("a 1 GiB PSD is staged without reading the entire file as one base64 string", async () => {
+  let staged = false;
+  let submitted;
+  const { sandbox: s } = harness({
+    PSD_IMPORT_INLINE_MAX_FILE_BYTES: 256 * 1024 * 1024,
+    readFileAsBase64: async () => { throw new Error("Must not read the entire 1 GiB PSD"); },
+    stagePsdImportFile: async file => { assert.equal(file.size, 1024 * 1024 * 1024); staged = true; return "staged-upload"; },
+    sendRelaySocketRequest: async (_action, payload) => { submitted = payload; return { ok: true, task: { taskId: "task", status: "queued" } }; },
+    waitForPsdImportTaskCompletion: async () => ({ status: "completed" }),
+    pollPsdImportTaskStatus() {},
+  });
+  vm.runInContext(functionSource("startPsdImportFromDroppedFile"), s);
+  await s.startPsdImportFromDroppedFile({ name: "one-gib.psd", size: 1024 * 1024 * 1024 });
+  assert.equal(staged, true);
+  assert.equal(submitted.uploadId, "staged-upload");
+  assert.equal(submitted.fileBase64, undefined);
+});
+
+test("large file staging reads bounded slices sequentially before starting the task", async () => {
+  const slices = [];
+  const calls = [];
+  const size = 256 * 1024 * 1024 + 31;
+  const { sandbox: s } = harness({
+    readFileAsBase64: async slice => { assert.ok(slice.size <= 4 * 1024 * 1024); slices.push(slice); return "YWJj"; },
+    sendRelaySocketRequest: async (action, payload) => {
+      calls.push({ action, payload });
+      return action === "psd.import.upload-chunk"
+        ? { ok: true, upload: { uploadId: payload.clientRequestId } }
+        : { ok: true, task: { taskId: payload.clientRequestId, status: "queued" } };
+    },
+    waitForPsdImportTaskCompletion: async () => ({ status: "completed" }), pollPsdImportTaskStatus() {},
+  });
+  vm.runInContext(["stagePsdImportFile", "startPsdImportFromDroppedFile"].map(functionSource).join("\n"), s);
+  await s.startPsdImportFromDroppedFile({ name: "large.psd", size, slice: (start, end) => ({ start, end, size: end - start }) });
+  assert.equal(slices.length, 65);
+  for (let index = 0; index < slices.length; index++) {
+    assert.equal(slices[index].start, index * 4 * 1024 * 1024);
+    assert.equal(calls[index].action, "psd.import.upload-chunk");
+    assert.equal(calls[index].payload.chunkIndex, index);
+    assert.equal(calls[index].payload.chunkCount, 65);
+    assert.equal(calls[index].payload.totalBytes, size);
+  }
+  assert.equal(slices.at(-1).size, 31);
+  assert.equal(calls.at(-1).action, "psd.import.start");
+  assert.equal(calls.at(-1).payload.uploadId, calls[0].payload.clientRequestId);
+  assert.equal(calls.at(-1).payload.fileBase64, undefined);
+});
+
+test("a chunk transport failure releases the UI without waiting for a nonexistent import task", async () => {
+  const { sandbox: s } = harness({
+    stagePsdImportFile: async () => { throw Object.assign(new Error("Chunk upload disconnected"), { relayTransportFailure: true }); },
+    waitForPsdImportTaskCompletion: () => { throw new Error("Staging must not wait for an import task"); },
+  });
+  vm.runInContext(functionSource("startPsdImportFromDroppedFile"), s);
+  await assert.rejects(s.startPsdImportFromDroppedFile({ name: "large.psd", size: 1024 * 1024 * 1024 }), /Chunk upload disconnected/);
+  assert.equal(s.psdImportBusy, false);
+  assert.equal(s.psdImportProgressOverlay.hidden, true);
 });

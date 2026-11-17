@@ -3921,9 +3921,8 @@ function buildPsdLiveSourceState(node, root, storedSourceState) {
     constraints: "constraints" in node && node.constraints ? clonePsdValue(node.constraints) : {}
   };
   if (node.type === "TEXT" && liveState.text) {
-    const fontName = node.fontName && typeof node.fontName === "object" ? node.fontName : {};
     const lineHeight = node.lineHeight && typeof node.lineHeight === "object" ? node.lineHeight : {};
-    const liveFontFamily = String(fontName.family || "");
+    const liveFontFamily = resolvePsdLiveFontFamily(node, liveState.text);
     liveState.text.characters = String(node.characters || "");
     if (!isPsdFontFamilyAllowed(liveState.text, liveFontFamily)) {
       liveState.text.fontFamily = liveFontFamily;
@@ -3937,6 +3936,79 @@ function buildPsdLiveSourceState(node, root, storedSourceState) {
     liveState.text.dropShadow = buildPsdLiveTextShadow(node, liveState.text.dropShadow);
   }
   return normalizePsdSourceState({ sourceState: liveState });
+}
+
+// 完整字体段使用 UTF-16 下标；合并相邻相同字体，避免其它样式造成的分段差异。
+function normalizePsdTextFontRunState(length, segments) {
+  if (!Number.isInteger(length) || length < 0 || !Array.isArray(segments)) return null;
+  const runs = [];
+  let cursor = 0;
+  for (const segment of segments) {
+    const fontName = segment && segment.fontName;
+    if (!segment || segment.start !== cursor || !Number.isInteger(segment.end)
+      || segment.end <= cursor || segment.end > length || !fontName
+      || typeof fontName !== "object" || !fontName.family || typeof fontName.style !== "string") return null;
+    const font = clonePsdValue(fontName);
+    const previous = runs[runs.length - 1];
+    if (previous && stablePsdSourceStateJson(previous.fontName) === stablePsdSourceStateJson(font)) {
+      previous.end = segment.end;
+    } else {
+      runs.push({ start: cursor, end: segment.end, fontName: font });
+    }
+    cursor = segment.end;
+  }
+  return cursor === length ? { version: 1, length, runs } : null;
+}
+
+function readPsdTextFontRunState(node) {
+  const length = String(node && node.characters || "").length;
+  if (node && typeof node.getStyledTextSegments === "function") {
+    try {
+      const state = normalizePsdTextFontRunState(length, node.getStyledTextSegments(["fontName"]));
+      if (state) return state;
+    } catch (error) { /* 旧宿主或不可读的样式段改用范围 API。 */ }
+  }
+  if (node && typeof node.getRangeFontName === "function") {
+    try {
+      const segments = [];
+      for (let start = 0; start < length; start++) {
+        segments.push({ start, end: start + 1, fontName: node.getRangeFontName(start, start + 1) });
+      }
+      const state = normalizePsdTextFontRunState(length, segments);
+      if (state) return state;
+    } catch (error) { /* 无法读取的 mixed 不得伪装成一个空字体。 */ }
+  }
+  const fontName = node && node.fontName;
+  return fontName && typeof fontName === "object"
+    ? normalizePsdTextFontRunState(length, length ? [{ start: 0, end: length, fontName }] : [])
+    : null;
+}
+
+function resolvePsdLiveFontFamily(node, storedText) {
+  const raw = readSharedPluginData(node, "psdFontRunState");
+  const actual = readPsdTextFontRunState(node);
+  if (raw) {
+    let expected = null;
+    try {
+      const saved = JSON.parse(raw);
+      if (saved && saved.version === 1) expected = normalizePsdTextFontRunState(saved.length, saved.runs);
+    } catch (error) { /* 损坏的分段基线必须表现为冲突。 */ }
+    if (!expected || !actual || stablePsdSourceStateJson(expected) !== stablePsdSourceStateJson(actual)) {
+      return "figma-font-runs-drift:" + hashPsdSourceState(actual);
+    }
+    return String(storedText.fontFamily || "");
+  }
+  const fontName = node.fontName;
+  if (fontName && typeof fontName === "object") return String(fontName.family || "");
+  // 旧 mixed 节点没有逐段基线，沿用可观测到的主字体语义；新节点逐段严格核对。
+  if (actual) {
+    const primaryFamily = readSharedPluginData(node, "fontFamily");
+    const primaryStyle = readSharedPluginData(node, "fontStyle");
+    const primaryPresent = actual.runs.some((run) => isPsdFontFamilyAllowed(storedText, run.fontName.family)
+      && (!primaryFamily || run.fontName.family !== primaryFamily || !primaryStyle || run.fontName.style === primaryStyle));
+    return primaryPresent ? String(storedText.fontFamily || "") : "figma-mixed-font-drift:" + hashPsdSourceState(actual);
+  }
+  return String(storedText.fontFamily || readSharedPluginData(node, "fontFamily") || "");
 }
 
 function firstPsdSolidPaint(paints) {
@@ -4237,6 +4309,7 @@ function buildPsdLiveWritableFieldSignature(node) {
     text: node && node.type === "TEXT" ? {
       characters: String(node.characters || ""),
       fontName: node.fontName,
+      fontRuns: readPsdTextFontRunState(node),
       fontSize: node.fontSize,
       lineHeight: node.lineHeight,
       textAlignHorizontal: node.textAlignHorizontal
@@ -4972,7 +5045,7 @@ function capturePsdLayerMetadata(node) {
   const keys = [
     "rawPsdLayerName", "normalizedLayerName", "semanticMode", "normalizationWarnings", "textRole",
     "psdLayerIndex", "psdLayerId", "psdOriginalName", "psdContentHash", "psdOwnership",
-    "psdSourceState", "psdSourceStateHash"
+    "psdSourceState", "psdSourceStateHash", "psdFontRunState"
   ];
   const values = {};
   for (const key of keys) values[key] = readSharedPluginData(node, key);
@@ -5082,12 +5155,25 @@ function normalizeLayer(layer) {
   applyNestedManifestCompatibility(normalized, layer, mode, width, height);
   assertOrdinaryTextLayer(normalized);
   normalized.sourceState = normalizePsdSourceState({ ...normalized, sourceState: layer.sourceState });
-  if (isOrdinaryTextLayer(normalized) && normalized.sourceState.text) {
+  if (isOrdinaryTextLayer(normalized) && normalized.sourceState.text && !isMultilinePsdText(normalized)) {
     normalized.sourceState.text.lineHeightMode = "AUTO";
     normalized.sourceState.text.leading = 0;
   }
   normalized.sourceStateHash = hashPsdSourceState(normalized.sourceState);
   return normalized;
+}
+
+// 自动宽高 + 自动行高不会裁切；自动宽高 + 固定行距仅在行距小于字号时可能裁掉字形上下沿。
+function isTextClipRisk(node) {
+  if (node.textAutoResize !== "WIDTH_AND_HEIGHT" || !node.lineHeight) return true;
+  if (node.lineHeight.unit === "AUTO") return false;
+  const fontSize = typeof node.fontSize === "number" ? node.fontSize : 0;
+  return !(node.lineHeight.unit === "PIXELS" && Number(node.lineHeight.value) >= fontSize);
+}
+
+// 多行文字的 PSD 行距决定段落外观，普通文字也必须保留；单行文字的行距只影响框高，统一为自动。
+function isMultilinePsdText(layer) {
+  return /[\r\n\u2028\u2029]/.test(String(layer && layer.chars || ""));
 }
 
 // 兼容导出端把九宫和文字数据放在嵌套对象中的 manifest，统一提升为 Relay 创建节点时读取的顶层字段。
@@ -5351,8 +5437,12 @@ async function createTextLayer(root, layer, context) {
   text.characters = String(layer.chars || "");
   const resolvedFontSize = positiveOr(layer.effectiveFontSize, positiveOr(layer.fontSize, Math.max(12, layer.h)));
   text.fontSize = resolvedFontSize;
+  await applyPsdFontRuns(text, layer, context);
+  const fontRunState = Array.isArray(layer.fontRuns) && layer.fontRuns.length ? readPsdTextFontRunState(text) : null;
   const sourceText = layer.sourceState && layer.sourceState.text || {};
-  text.lineHeight = !isOrdinaryTextLayer(layer) && sourceText.lineHeightMode === "PIXELS" && Number(sourceText.leading) > 0
+  // 普通文字仅多行保留 PSD 行距；单行沿用自动行高（与归一化规则一致，直接调用时也成立）。
+  const keepPsdLeading = !isOrdinaryTextLayer(layer) || isMultilinePsdText(layer);
+  text.lineHeight = keepPsdLeading && sourceText.lineHeightMode === "PIXELS" && Number(sourceText.leading) > 0
     ? { unit: "PIXELS", value: Number(sourceText.leading) }
     : { unit: "AUTO" };
   text.textAutoResize = "WIDTH_AND_HEIGHT";
@@ -5391,6 +5481,7 @@ async function createTextLayer(root, layer, context) {
   writeLayerMetadata(text, layer, {
     fontFamily: fontName.family,
     fontStyle: fontName.style,
+    psdFontRunState: fontRunState ? stablePsdSourceStateJson(fontRunState) : "",
     fillHex: String(layer.fillColor && layer.fillColor.hex || ""),
     originalFontSize: String(layer.originalFontSize || layer.fontSize || ""),
     effectiveFontSize: String(resolvedFontSize),
@@ -5411,6 +5502,32 @@ async function createTextLayer(root, layer, context) {
   });
   context.stats.text += 1;
   return text;
+}
+
+// PSD 一段文字内混用多种字体时（如英文 GROBOLD + 中文黑体），按 fontRuns 分段设置字体。
+// 每段只尝试清单声明的候选字体；全部不可用时保留整段默认字体并记录警告。
+async function applyPsdFontRuns(text, layer, context) {
+  const runs = Array.isArray(layer.fontRuns) ? layer.fontRuns : [];
+  const length = text.characters.length;
+  for (const run of runs) {
+    const start = Math.max(0, Math.floor(numericOr(run && run.start, 0)));
+    const end = Math.min(length, Math.floor(numericOr(run && run.end, 0)));
+    if (end <= start) continue;
+    let applied = false;
+    for (const fontName of normalizeFontCandidates(run.fontFallback)) {
+      try {
+        await figma.loadFontAsync(fontName);
+        text.setRangeFontName(start, end, fontName);
+        applied = true;
+        break;
+      } catch (error) {
+        // 继续尝试下一个候选字体。
+      }
+    }
+    if (!applied) {
+      context.warnings.push(`${layer.idx}:${layer.name}: 第 ${start}-${end} 字符的分段字体均不可用，沿用整段字体。`);
+    }
+  }
 }
 
 // 创建九宫、横向三切片或纵向三切片父层，按 slices 数据动态生成子切片。
@@ -5820,7 +5937,7 @@ async function validateImportedRoot(root, orderedLayers, context) {
       if (!String(node.characters || "").length || !String(layer.chars || "").length) {
         validation.emptyTextCount += 1;
       }
-      if (node.textAutoResize !== "WIDTH_AND_HEIGHT" || !node.lineHeight || node.lineHeight.unit !== "AUTO") {
+      if (isTextClipRisk(node)) {
         validation.textClipRiskCount += 1;
       }
       const textResult = validateTextAgainstLayer(node, layer);

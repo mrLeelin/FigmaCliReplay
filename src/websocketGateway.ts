@@ -10,6 +10,7 @@ import { watchRunChanges } from "./runChangeNotifier.js";
 import { UNITY_BRIDGE_PATH } from "./relayProtocol.js";
 import { closeUnitySessions, handleUnityMessage, pruneUnitySessions, unregisterUnitySession } from "./unitySessionRegistry.js";
 import { RELAY_CLI_PATH } from "./relayProtocol.js";
+import { MAX_PLUGIN_MESSAGE_BYTES } from "./psdUploadLimits.js";
 
 const HEARTBEAT_TIMEOUT_MS = 120_000;
 const DEFAULT_ACK_TIMEOUT_MS = 3_000;
@@ -79,7 +80,7 @@ export class WebSocketGateway {
     private readonly ingestLogEvents?: (events: unknown[]) => unknown,
     private readonly bridgeToken = "",
   ) {
-    this.server = new WebSocketServer({ noServer: true });
+    this.server = new WebSocketServer({ noServer: true, maxPayload: MAX_PLUGIN_MESSAGE_BYTES });
     this.server.on("connection", (socket) => this.attach(socket));
     this.unityServer = new WebSocketServer({ noServer: true });
     this.unityServer.on("connection", (socket) => this.attachUnity(socket));
@@ -238,7 +239,7 @@ export class WebSocketGateway {
 
   private attach(socket: WebSocket): void {
     socket.on("message", (raw) => this.handleMessage(socket, String(raw)));
-    socket.on("close", () => {
+    socket.on("close", (code, reason) => {
       this.clearRunSubscription(socket, "figma");
       this.clearRunSubscription(socket);
       this.clearRunSubscription(socket, true);
@@ -248,6 +249,8 @@ export class WebSocketGateway {
         logInfo("Figma plugin WebSocket disconnected", {
           sessionId: session.sessionId,
           fileKey: session.fileKey,
+          closeCode: code,
+          closeReason: reason.toString().slice(0, 200),
           pending: session.pending.size
         });
         this.failPendingForSession(session, "websocket session closed");
@@ -258,7 +261,7 @@ export class WebSocketGateway {
         }
       }
     });
-    socket.on("error", () => {
+    socket.on("error", (error) => {
       this.clearRunSubscription(socket, "figma");
       this.clearRunSubscription(socket);
       this.clearRunSubscription(socket, true);
@@ -268,6 +271,8 @@ export class WebSocketGateway {
         logWarn("Figma plugin WebSocket error", {
           sessionId: session.sessionId,
           fileKey: session.fileKey,
+          error: error.message,
+          errorCode: (error as Error & { code?: string }).code,
           pending: session.pending.size
         });
         this.failPendingForSession(session, "websocket session error");
@@ -482,6 +487,7 @@ export class WebSocketGateway {
     logInfo("Figma plugin relay request received", {
       requestId,
       action,
+      ...(action.startsWith("psd.import.") ? { taskId: payload.taskId || payload.clientRequestId || "" } : {}),
       sessionId: session.sessionId,
       fileKey: session.fileKey
     });

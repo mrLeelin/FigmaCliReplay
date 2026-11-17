@@ -1968,7 +1968,7 @@
           <div>
             <h1>LKS Figma Relay</h1>
           </div>
-          <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.50<!-- END_RELEASE_VERSION --></span>
+          <span class="release-version" title="发布版本"><!-- BEGIN_RELEASE_VERSION -->v0.1.51<!-- END_RELEASE_VERSION --></span>
           <button class="update-notice" id="relayUpdateNoticeBtn" type="button" title="查看版本与更新" hidden>有更新</button>
           <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge --</span>
         </div>
@@ -2783,6 +2783,9 @@
     let pendingFigmaKeyRequestId = "";
     let selectedAiPromptPsdFile = null;
     let aiPromptPsdDragDepth = 0;
+    const PSD_IMPORT_MAX_FILE_BYTES = 1024 * 1024 * 1024;
+    const PSD_IMPORT_INLINE_MAX_FILE_BYTES = 256 * 1024 * 1024;
+    const PSD_IMPORT_CHUNK_BYTES = 4 * 1024 * 1024;
     let psdImportBusy = false;
     let psdImportQueueActive = false;
     let psdImportTaskId = "";
@@ -4478,7 +4481,11 @@
       psdImportCurrentContext = context || { index: 1, total: 1, fileName: file.name || "" };
       psdImportLastRenderedLog = "";
       clearPsdImportPollTimer();
+      var submissionStarted = false;
       try {
+        if (Number(file.size) > PSD_IMPORT_MAX_FILE_BYTES) {
+          throw new Error("PSD 文件超过 1 GiB 上传上限（当前 " + (file.size / 1024 / 1024).toFixed(1) + " MiB），尚未提交导入。");
+        }
         updatePsdImportProgress(0, "读取 PSD 文件…");
         setAiPromptStatus("PSD 导入：读取拖入文件... " + formatPsdImportContext(psdImportCurrentContext));
         appendLog("PSD 导入开始：" + formatPsdImportContext(psdImportCurrentContext));
@@ -4486,24 +4493,31 @@
         var selection = psdImportCurrentContext.selection || await querySelectionForPsdImport();
         var dropMode = psdImportCurrentContext.dropMode || resolvePsdDropMode(selection);
         var target = buildPsdImportTarget(selection, dropMode);
-        var fileBase64 = await readFileAsBase64(file, function (loaded, total) {
-          updatePsdImportProgress(total > 0 ? loaded / total * 5 : 0, "读取 PSD 文件…");
-        });
-        updatePsdImportProgress(5, "上传 PSD，等待 Relay 接收…");
+        psdImportTaskId = "psd-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        appendLog("PSD 上传任务：" + psdImportTaskId + "；文件：" + file.name + "；字节：" + (file.size || 0));
+        var uploadContent;
+        if (Number(file.size) > PSD_IMPORT_INLINE_MAX_FILE_BYTES) {
+          uploadContent = { uploadId: await stagePsdImportFile(file, target) };
+        } else {
+          uploadContent = { fileBase64: await readFileAsBase64(file, function (loaded, total) {
+            updatePsdImportProgress(total > 0 ? loaded / total * 5 : 0, "读取 PSD 文件…");
+          }) };
+        }
+        updatePsdImportProgress(uploadContent.uploadId ? 10 : 5, "上传 PSD，等待 Relay 接收…");
         setAiPromptStatus("PSD 导入：上传 PSD 并启动任务... " + formatPsdImportContext(psdImportCurrentContext));
 
-        psdImportTaskId = "psd-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        submissionStarted = true;
         var data = await sendRelaySocketRequest("psd.import.start", {
             clientRequestId: psdImportTaskId,
             fileName: file.name,
-            fileBase64: fileBase64,
+            ...uploadContent,
             sourceFile: {
               size: file.size || 0,
               lastModified: file.lastModified || 0
             },
             mode: dropMode.mode,
             target: target
-        }, "", 30000);
+        }, "", uploadContent.uploadId ? 120000 : 30000);
         if (data.ok === false) {
           throw new Error(data.error || "PSD import rejected");
         }
@@ -4516,8 +4530,8 @@
         pollPsdImportTaskStatus();
         return await completion;
       } catch (error) {
-        if (error && error.relayTransportFailure && error.relayRequestSent !== false && psdImportTaskId) {
-          setAiPromptStatus("PSD 提交结果待核对，请勿重复提交；重连后查询原任务。");
+        if (submissionStarted && error && error.relayTransportFailure && error.relayRequestSent !== false && psdImportTaskId) {
+          setAiPromptStatus("PSD 提交结果待核对，请勿重复提交；任务：" + psdImportTaskId + "；重连后查询原任务。");
           setPsdImportProgressMessage("等待 Relay 重连，正在核对原任务…");
           var pendingCompletion = waitForPsdImportTaskCompletion();
           if (relaySocketRegistered) pollPsdImportTaskStatus();
@@ -4530,6 +4544,30 @@
       } finally {
         if (!psdImportQueueActive) hidePsdImportProgress();
       }
+    }
+
+    async function stagePsdImportFile(file, target) {
+      var chunkCount = Math.ceil(file.size / PSD_IMPORT_CHUNK_BYTES);
+      for (var index = 0; index < chunkCount; index++) {
+        var start = index * PSD_IMPORT_CHUNK_BYTES;
+        var end = Math.min(file.size, start + PSD_IMPORT_CHUNK_BYTES);
+        var chunkBase64 = await readFileAsBase64(file.slice(start, end));
+        var result = await sendRelaySocketRequest("psd.import.upload-chunk", {
+          clientRequestId: psdImportTaskId,
+          fileName: file.name,
+          totalBytes: file.size,
+          chunkIndex: index,
+          chunkCount: chunkCount,
+          chunkBase64: chunkBase64,
+          sessionId: target.sessionId,
+          fileKey: target.fileKey
+        }, "", 30000);
+        if (result.ok === false || !result.upload || result.upload.uploadId !== psdImportTaskId) {
+          throw new Error(result.error || "PSD chunk upload rejected");
+        }
+        updatePsdImportProgress(5 + (index + 1) / chunkCount * 5, "上传 PSD 分块：" + (index + 1) + "/" + chunkCount);
+      }
+      return psdImportTaskId;
     }
 
     function waitForPsdImportTaskCompletion() {
@@ -4631,16 +4669,16 @@
         await sendRelaySocketRequest("psd.import.subscribe", { taskId: psdImportTaskId }, "", 10000, subscriptionId);
       } catch (error) {
         if (psdImportSubscriptionId !== subscriptionId) return;
-        setAiPromptStatus("PSD 状态待核对，请勿重复提交：" + (error.message || error));
-        setPsdImportProgressMessage("状态待核对：" + (error.message || error));
+        setAiPromptStatus("PSD 状态待核对，请勿重复提交；任务：" + psdImportTaskId + "；" + (error.message || error));
+        setPsdImportProgressMessage("状态待核对：" + psdImportTaskId + "；" + (error.message || error));
       }
     }
 
     function handlePsdImportEvent(message) {
       if (message.subscriptionId !== psdImportSubscriptionId || message.taskId !== psdImportTaskId) return;
       if (message.error) {
-        setAiPromptStatus("PSD 状态待核对，请勿重复提交：" + message.error);
-        setPsdImportProgressMessage("状态待核对：" + message.error);
+        setAiPromptStatus("PSD 状态待核对，请勿重复提交；任务：" + psdImportTaskId + "；" + message.error);
+        setPsdImportProgressMessage("状态待核对：" + psdImportTaskId + "；" + message.error);
         return;
       }
       var data = message.result;
@@ -4705,7 +4743,12 @@
       var stageLabels = {
         queued: "任务排队中…",
         exporting_psd_layers: "正在解析 PSD 并导出图层…",
+        waiting_for_photoshop: "正在等待 Photoshop 导入任务…",
+        rendering_psd_photoshop: "正在用 Photoshop 渲染图层样式与蒙版（大文件需数分钟）…",
+        rendering_psd_tools: "正在用 psd-tools 渲染图层样式与蒙版…",
+        closing_psd_photoshop: "正在关闭本次导入启动的 Photoshop…",
         submitting_figma_import: "正在将图层导入 Figma…",
+        aligning_psd_text: "正在按 PSD 校正文字位置…",
         completed: "PSD 导入完成",
         cancel_requested: "正在取消…"
       };

@@ -10,7 +10,7 @@ import math
 import re
 import struct
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     from PIL import Image, ImageChops, ImageStat
@@ -143,6 +143,29 @@ def _find_duplicate_layer_ids(layers: List[Dict[str, object]]) -> List[int]:
             duplicates.add(layer_id)
         seen.add(layer_id)
     return sorted(duplicates)
+
+
+def _effective_hidden_indices(layers: List[Dict[str, object]]) -> Set[int]:
+    """按 PSD 组层级计算实际隐藏的图层序号：自身隐藏或任一祖先组隐藏都算隐藏。"""
+    hidden: Set[int] = set()
+    # PSD 图层记录自底向上排列：组结束分隔符(3)在下、子图层居中、组起点(1/2)在上。
+    # 倒序遍历即自顶向下，栈顶保存当前所在组（含其祖先）是否隐藏。
+    group_hidden_stack: List[bool] = []
+    for layer in reversed(layers):
+        section_type = layer.get("sectionType")
+        ancestor_hidden = bool(group_hidden_stack) and group_hidden_stack[-1]
+        if section_type == 3:
+            if ancestor_hidden:
+                hidden.add(int(layer["index"]))
+            if group_hidden_stack:
+                group_hidden_stack.pop()
+            continue
+        is_hidden = ancestor_hidden or layer.get("visible") is False
+        if is_hidden:
+            hidden.add(int(layer["index"]))
+        if section_type in (1, 2):
+            group_hidden_stack.append(is_hidden)
+    return hidden
 
 
 def _safe_name(name: str, fallback: str) -> str:
@@ -2372,11 +2395,27 @@ def _render_layer(data: bytes, layer: Dict[str, object]) -> Image.Image:
     return Image.frombytes("RGBA", (width, height), bytes(rgba))
 
 
-def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[str, object]:
+def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool,
+                  include_hidden: bool = False) -> Dict[str, object]:
     """导出 PSD 全部图层并写入 manifest。"""
     data = psd_path.read_bytes()
     canvas, layers = _parse_layer_records(data)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 初次导入忽略隐藏层；增量源状态必须保留这些层，才能识别可见性变更。
+    hidden_indices = _effective_hidden_indices(layers)
+    skipped_hidden_layer_count = 0
+    if include_hidden:
+        # 图层自己的 visible 可能为 True，但任一隐藏祖先都会使它实际不可见。
+        for layer in layers:
+            if int(layer["index"]) in hidden_indices:
+                layer["visible"] = False
+    else:
+        skipped_hidden_layer_count = sum(
+            1
+            for layer in layers
+            if int(layer["index"]) in hidden_indices and int(layer["width"]) > 0 and int(layer["height"]) > 0
+        )
+        layers = [layer for layer in layers if int(layer["index"]) not in hidden_indices]
     nine_slice_family_stats = _build_nine_slice_family_stats(layers)
 
     manifest_layers: List[Dict[str, object]] = []
@@ -2507,6 +2546,7 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool) -> Dict[
         "source": psd_path.as_posix(),
         "canvas": canvas,
         "layerCount": len(manifest_layers),
+        "skippedHiddenLayerCount": skipped_hidden_layer_count,
         "hasGroups": any(layer.get("sectionType") in (1, 2, 3) for layer in manifest_layers),
         "commonComponentCount": sum(1 for layer in manifest_layers if layer.get("mode") == "common-component"),
         "componentSearchCount": sum(1 for layer in manifest_layers if layer.get("componentSearch")),
@@ -2863,11 +2903,12 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True, help="输出目录。")
     parser.add_argument("--composite-check", action="store_true", help="额外输出合成校验图和差异摘要。")
     parser.add_argument("--summary", action="store_true", help="同时生成 manifest_summary.json 精简摘要。")
+    parser.add_argument("--include-hidden", action="store_true", help="保留隐藏层及其有效隐藏状态，供增量预览识别显示变更。")
     parser.add_argument("--match-cache", type=Path, default=None,
                         help="组件缓存目录路径，启用离线组件匹配写入 summary。")
     args = parser.parse_args()
 
-    manifest = _write_layers(args.psd, args.out, args.composite_check)
+    manifest = _write_layers(args.psd, args.out, args.composite_check, include_hidden=args.include_hidden)
     layers = manifest["layers"]  # type: ignore[index]
 
     # 离线组件匹配
@@ -2888,6 +2929,7 @@ def main() -> int:
         "manifest": (args.out / "manifest.json").as_posix(),
         "canvas": manifest["canvas"],
         "layerCount": manifest["layerCount"],
+        "skippedHiddenLayerCount": manifest["skippedHiddenLayerCount"],
         "hasGroups": manifest["hasGroups"],
         "commonComponentCount": manifest["commonComponentCount"],
         "componentSearchCount": manifest["componentSearchCount"],

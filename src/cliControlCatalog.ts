@@ -1,3 +1,5 @@
+import { MAX_PSD_UPLOAD_BYTES, PSD_UPLOAD_CHUNK_BYTES } from "./psdUploadLimits.js";
+
 /** Offline documentation for the control actions accepted by relayControl.ts.
  * These schemas describe inputs; the existing controllers remain the execution validators.
  */
@@ -85,12 +87,23 @@ const operations: ControlOperationDescription[] = [
 
 const psdTarget = object({ ...session, targetNodeId: text("Required for incremental-preview."), targetName: text("Target display name."), targetType: { type: "string", enum: ["FRAME", "COMPONENT"] } });
 operations.push(
-  op("psd.import.start", "Start an initial PSD import or incremental preview in Figma.", object({
+  op("psd.import.upload-chunk", "Stage one PSD file chunk on disk without writing to Figma.", object({
+    ...session, clientRequestId: stableId, fileName: nonempty("Original PSD file name."),
+    totalBytes: integer("Total PSD file bytes, at most 1 GiB.", { minimum: 16, maximum: MAX_PSD_UPLOAD_BYTES }),
+    chunkIndex: integer("Zero-based chunk index.", { minimum: 0, maximum: Math.ceil(MAX_PSD_UPLOAD_BYTES / PSD_UPLOAD_CHUNK_BYTES) - 1 }),
+    chunkCount: integer("Exactly ceil(totalBytes / 4 MiB).", { minimum: 1, maximum: Math.ceil(MAX_PSD_UPLOAD_BYTES / PSD_UPLOAD_CHUNK_BYTES) }),
+    chunkBase64: nonempty("Canonical base64 of at most 4 MiB; only the last chunk may be shorter.", { maxLength: 4 * Math.ceil(PSD_UPLOAD_CHUNK_BYTES / 3) }),
+  }, ["clientRequestId", "fileName", "totalBytes", "chunkIndex", "chunkCount", "chunkBase64"]),
+  { clientRequestId: "psd-001", fileName: "Panel.psd", totalBytes: 16, chunkIndex: 0, chunkCount: 1, chunkBase64: "AAAAAAAAAAAAAAAAAAAAAA==" },
+  [...liveNotes, "Identical chunk retries are idempotent. Metadata, bytes, and the original Figma session cannot change. Finish by psd.import.start with uploadId equal to clientRequestId. Staging never creates a Figma import task."], "src/psdUploadStore.ts"),
+  op("psd.import.start", "Start an initial PSD import or incremental preview in Figma.", { ...object({
     ...session, clientRequestId: stableId, fileName: text("PSD file name.", { pattern: "\\.[pP][sS][dD]$", default: "source.psd" }),
-    fileBase64: nonempty("Base64-encoded PSD bytes."), mode: { type: "string", enum: ["initial", "incremental-preview"], default: "initial" },
-    target: psdTarget, sourceFile: object({ lastModified: { type: "number", minimum: 0 } }),
-  }, ["clientRequestId", "fileBase64"]), { clientRequestId: "psd-001", fileName: "Panel.psd", fileBase64: "<PSD_BASE64>", mode: "initial", target: {} },
-  [...liveNotes, "incremental-preview requires target.targetNodeId and target.targetType FRAME or COMPONENT. Nested target session/file fields must match the resolved session.", uncertainWrite], "src/psdImportTask.ts"),
+    fileBase64: nonempty("Inline base64-encoded PSD bytes, at most 256 MiB before encoding."), uploadId: stableId,
+    mode: { type: "string", enum: ["initial", "incremental-preview"], default: "initial" },
+    target: psdTarget, sourceFile: object({ size: integer("Original file bytes.", { minimum: 0 }), lastModified: { type: "number", minimum: 0 } }),
+  }, ["clientRequestId"]), oneOf: [{ required: ["fileBase64"] }, { required: ["uploadId"] }] },
+  { clientRequestId: "psd-001", fileName: "Panel.psd", fileBase64: "<PSD_BASE64>", mode: "initial", target: {} },
+  [...liveNotes, "Supply exactly one of fileBase64 or uploadId. PSD files above 256 MiB (up to 1 GiB) require upload-chunk, then uploadId equal to clientRequestId. CLI inline payloads must still fit its 16 MiB message limit.", "incremental-preview requires target.targetNodeId and target.targetType FRAME or COMPONENT. Nested target session/file fields must match the resolved session.", uncertainWrite], "src/psdImportTask.ts"),
   op("psd.import.get", "Read the original PSD import task.", object({ ...session, taskId }, ["taskId"]), { taskId: "psd-001" }),
   op("psd.import.cancel", "Request cancellation of a PSD import; inspect accepted and actual task status.", object({ ...session, taskId }, ["taskId"]), { taskId: "psd-001" }, ["A task already submitting to Figma may reject cancellation; CLI success does not prove it was cancelled."]),
   ...["apply", "adopt-baseline"].map((action) => op(`psd.import.${action}`, action === "apply" ? "Apply an existing incremental PSD preview." : "Adopt the baseline from an existing PSD preview.", object({

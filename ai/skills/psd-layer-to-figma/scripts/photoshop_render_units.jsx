@@ -1,5 +1,5 @@
 // Photoshop 渲染单元导出：由 photoshop_render_units.py 注入 __CONFIG__ 后执行。
-// 每个可见视觉单元在独立临时文档中由 Photoshop 自身渲染，图层样式、蒙版、
+// 每个可见视觉单元在源文档中由 Photoshop 自身渲染，图层样式、蒙版、
 // 剪贴蒙版与组级样式全部按 Photoshop 结果输出；普通文字只记录 ID，保持原生 Text。
 var CONFIG = __CONFIG__;
 
@@ -177,57 +177,132 @@ function unionBounds(chain) {
   return r;
 }
 
+// 另存合成 PNG：大文档直接 saveAs 副本可能报 I/O 错误（Photoshop 长时间运行后可复现），
+// 失败后改为“复制为合并文档再保存”，结果与直接另存逐像素一致；之后本次运行都走该路径。
+var useMergedDuplicate = false;
+
+function savePngCopy(doc, file) {
+  var opts = new PNGSaveOptions();
+  opts.compression = 1;
+  if (!useMergedDuplicate) {
+    try {
+      doc.saveAs(file, opts, true, Extension.LOWERCASE);
+      return;
+    } catch (saveError) {
+      useMergedDuplicate = true;
+    }
+  }
+  var merged = doc.duplicate('render_merged', true);
+  try {
+    merged.saveAs(file, opts, true, Extension.LOWERCASE);
+  } finally {
+    merged.close(SaveOptions.DONOTSAVECHANGES);
+    app.activeDocument = doc;
+  }
+}
+
 function containsOrder(list, order) {
   for (var i = 0; i < list.length; i++) if (list[i] === order) return true;
   return false;
 }
 
-function containsLayer(list, layer) {
-  for (var i = 0; i < list.length; i++) if (list[i] === layer || list[i].id === layer.id) return true;
-  return false;
+// 同级图层列表与初始可见状态只读取一次。连续单元只切换差异图层，避免每张 PNG 前后
+// 都隐藏/还原所有兄弟层，让 Photoshop 对大型文档执行数千次不必要的重新合成。
+var siblingVisibility = {};
+var originalVisibility = {};
+var isolatedHidden = {};
+var visibilityCaptured = false;
+
+function visibilityRecord(layer) {
+  var id = String(layer.id);
+  if (!originalVisibility.hasOwnProperty(id)) {
+    originalVisibility[id] = { id: id, layer: layer, visible: layer.visible };
+  }
+  return originalVisibility[id];
 }
 
-// 仅保留渲染单元自身及其祖先路径：逐级隐藏路径外的同级图层，返回被隐藏的图层以便复原。
+function siblingRecords(parent) {
+  var key = parent.typename === 'Document' ? 'document' : String(parent.id);
+  if (!siblingVisibility.hasOwnProperty(key)) {
+    var records = [];
+    var siblings = parent.layers;
+    for (var i = 0; i < siblings.length; i++) records.push(visibilityRecord(siblings[i]));
+    siblingVisibility[key] = records;
+  }
+  return siblingVisibility[key];
+}
+
+function captureVisibility(container) {
+  var records = siblingRecords(container);
+  for (var i = 0; i < records.length; i++) {
+    if (records[i].layer.typename === 'LayerSet') captureVisibility(records[i].layer);
+  }
+}
+
+// 保留单元及祖先路径，原本隐藏的子层/剪贴层始终保持隐藏；原始状态在整个渲染结束时恢复。
 function isolateUnit(unit) {
-  var changed = [];
+  // Photoshop 的子层 visible 会受父组隐藏影响，必须在首次修改前快照整棵树。
+  if (!visibilityCaptured) {
+    captureVisibility(srcDoc);
+    visibilityCaptured = true;
+  }
+  var nextHidden = {};
   var keep = unit.layers;
   var parent = unit.layers[0].parent;
   while (parent) {
-    var siblings = parent.layers;
-    for (var i = 0; i < siblings.length; i++) {
-      var sibling = siblings[i];
-      if (sibling.visible && !containsLayer(keep, sibling)) {
-        sibling.visible = false;
-        changed.push(sibling);
-      }
+    var keepIds = {};
+    for (var k = 0; k < keep.length; k++) keepIds[String(keep[k].id)] = true;
+    var records = siblingRecords(parent);
+    for (var i = 0; i < records.length; i++) {
+      var record = records[i];
+      if (record.visible && !keepIds.hasOwnProperty(record.id)) nextHidden[record.id] = record.layer;
     }
     if (parent.typename === 'Document') break;
     keep = [parent];
     parent = parent.parent;
   }
   for (var t = 0; t < unit.hideTexts.length; t++) {
-    if (unit.hideTexts[t].visible) { unit.hideTexts[t].visible = false; changed.push(unit.hideTexts[t]); }
+    var text = visibilityRecord(unit.hideTexts[t]);
+    if (text.visible) nextHidden[text.id] = text.layer;
   }
-  return changed;
+  for (var oldId in isolatedHidden) {
+    if (isolatedHidden.hasOwnProperty(oldId) && !nextHidden.hasOwnProperty(oldId)) {
+      isolatedHidden[oldId].visible = true;
+      delete isolatedHidden[oldId];
+    }
+  }
+  for (var newId in nextHidden) {
+    if (nextHidden.hasOwnProperty(newId) && !isolatedHidden.hasOwnProperty(newId)) {
+      isolatedHidden[newId] = nextHidden[newId];
+      nextHidden[newId].visible = false;
+    }
+  }
+}
+
+function restoreIsolatedLayers() {
+  var errors = [];
+  for (var id in isolatedHidden) {
+    if (!isolatedHidden.hasOwnProperty(id)) continue;
+    try {
+      isolatedHidden[id].visible = true;
+      delete isolatedHidden[id];
+    } catch (err) { errors.push(String(err)); }
+  }
+  if (errors.length) throw new Error('visibility restore: ' + errors.join('; '));
 }
 
 // 在源文档原位渲染：复制到其他文档会让 Photoshop 重算渐变填充/渐变叠加（结果与源不一致），
 // 且大文档反复复制可能导致崩溃；原位隐藏无关图层后另存 PNG 副本即是 Photoshop 自身合成。
 function renderUnit(unit, index) {
+  // 上个单元可能隐藏了本单元：先应用目标可见状态，再查询其有效边界。
+  isolateUnit(unit);
   var base = unionBounds(unit.layers);
   if (!base) return { skipped: 'empty-bounds' };
   var canvas = [0, 0, srcDoc.width.as('px'), srcDoc.height.as('px')];
   if (!intersect(unit.clip || canvas, canvas)) return { skipped: 'outside-clip' };
-  var changed = isolateUnit(unit);
-  try {
-    var file = new File(CONFIG.outDir + '/u_' + index + '.png');
-    var opts = new PNGSaveOptions();
-    opts.compression = 1;
-    srcDoc.saveAs(file, opts, true, Extension.LOWERCASE);
-    return { file: file.fsName, rect: canvas };
-  } finally {
-    for (var r = changed.length - 1; r >= 0; r--) changed[r].visible = true;
-  }
+  var file = new File(CONFIG.outDir + '/u_' + index + '.png');
+  savePngCopy(srcDoc, file);
+  return { file: file.fsName, rect: canvas };
 }
 
 // 画板背景（默认白色）在隐藏其他图层后会被当作单元像素输出：渲染期间临时改为透明，结束后复原。
@@ -293,9 +368,7 @@ function main() {
   try {
     walk(srcDoc, null, 0, []);
     // 全部图层可见时的 Photoshop 合成图，作为导入后文字对齐与验收的参照。
-    var refOpts = new PNGSaveOptions();
-    refOpts.compression = 1;
-    srcDoc.saveAs(new File(CONFIG.outDir + '/reference.png'), refOpts, true, Extension.LOWERCASE);
+    savePngCopy(srcDoc, new File(CONFIG.outDir + '/reference.png'));
     result.reference = CONFIG.outDir + '/reference.png';
     makeArtboardsTransparent(srcDoc, artboardRestore);
     for (var i = 0; i < units.length; i++) {
@@ -315,7 +388,12 @@ function main() {
       }
       result.units.push(entry);
     }
+  } catch (fatal) {
+    // finally 中的语句会覆盖 ExtendScript 报告的出错行号：在这里带上真实位置再抛出。
+    throw new Error(String(fatal) + ' (jsx line ' + fatal.line + ')');
   } finally {
+    try { restoreIsolatedLayers(); }
+    catch (visibilityErr) { result.errors.push(String(visibilityErr)); }
     for (var a = artboardRestore.length - 1; a >= 0; a--) {
       try { setArtboardBackgroundType(artboardRestore[a].id, artboardRestore[a].type); }
       catch (restoreErr) { result.errors.push('artboard restore: ' + String(restoreErr)); }

@@ -74,6 +74,8 @@ function fixture({ fontFailure = false } = {}) {
     "centerNodeOnLayer", "applyPsdTextShadow", "writeLayerMetadata", "capturePsdLayerMetadata",
     "createTextLayer", "createImageLayer", "createLayerNode", "importPsdJob",
     "appendPsdIncrementalRuntimeConflicts", "applyPsdTextPlan",
+    "isMultilinePsdText", "applyPsdFontRuns", "normalizeFontCandidates", "isTextClipRisk",
+    "readPsdTextFontRunState", "normalizePsdTextFontRunState",
   ];
   vm.createContext(sandbox);
   vm.runInContext(names.map(functionSource).join("\n"), sandbox);
@@ -229,4 +231,57 @@ test("rollback metadata snapshots preserve ordinary text ownership annotation", 
   const snapshot = api.capturePsdLayerMetadata({ metadata: { textRole: "ordinary", psdOwnership: "text-content" } });
   assert.equal(snapshot.textRole, "ordinary");
   assert.equal(snapshot.psdOwnership, "text-content");
+});
+
+function withFontRuntime(api, available) {
+  const ranges = [];
+  const createText = api.figma.createText;
+  api.figma.createText = () => {
+    const node = createText();
+    node.setRangeFontName = (start, end, font) => ranges.push({ start, end, font });
+    return node;
+  };
+  api.figma.loadFontAsync = async font => {
+    if (!available.includes(font.family)) throw new Error(`missing ${font.family}`);
+  };
+  return ranges;
+}
+
+test("multi-line ordinary text keeps the PSD paragraph leading while single-line text stays automatic", async () => {
+  const { api, root, context } = fixture();
+  const multi = api.normalizeLayer(layer({ chars: "第一行\n第二行", sourceState: { text: { lineHeightMode: "PIXELS", leading: 52 }, geometry: {}, display: {} } }));
+  assert.equal(multi.sourceState.text.lineHeightMode, "PIXELS");
+  assert.equal(multi.sourceState.text.leading, 52);
+  const node = await api.createLayerNode(root, multi, context);
+  assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
+  assert.deepEqual({ ...node.lineHeight }, { unit: "PIXELS", value: 52 });
+
+  const single = await api.createLayerNode(root, layer(), context);
+  assert.equal(single.lineHeight.unit, "AUTO");
+});
+
+test("auto-sizing text is a clip risk only when fixed leading is smaller than the font size", () => {
+  const { api } = fixture();
+  const base = { textAutoResize: "WIDTH_AND_HEIGHT", fontSize: 40 };
+  assert.equal(api.isTextClipRisk({ ...base, lineHeight: { unit: "AUTO" } }), false);
+  assert.equal(api.isTextClipRisk({ ...base, lineHeight: { unit: "PIXELS", value: 52 } }), false);
+  assert.equal(api.isTextClipRisk({ ...base, lineHeight: { unit: "PIXELS", value: 30 } }), true);
+  assert.equal(api.isTextClipRisk({ ...base, textAutoResize: "NONE", lineHeight: { unit: "AUTO" } }), true);
+});
+
+test("font runs apply the first loadable declared font per range and warn when none loads", async () => {
+  const { api, root, context } = fixture();
+  const ranges = withFontRuntime(api, ["GROBOLD", "Noto Sans SC"]);
+  const input = layer({
+    chars: "44 FFFFFF 描边4%",
+    fontFallback: [{ family: "GROBOLD", style: "Regular" }],
+    fontRuns: [
+      { start: 0, end: 10, fontFallback: [{ family: "GROBOLD", style: "Regular" }] },
+      { start: 10, end: 13, fontFallback: [{ family: "Adobe Heiti Std", style: "R" }, { family: "Noto Sans SC", style: "Regular" }] },
+      { start: 13, end: 14, fontFallback: [{ family: "Missing", style: "Regular" }] },
+    ],
+  });
+  await api.createLayerNode(root, input, context);
+  assert.deepEqual(ranges.map(r => [r.start, r.end, r.font.family]), [[0, 10, "GROBOLD"], [10, 13, "Noto Sans SC"]]);
+  assert.equal(context.warnings.filter(w => w.includes("13-14")).length, 1);
 });

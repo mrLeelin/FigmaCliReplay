@@ -42,6 +42,7 @@ export function createRelayControlHandler(
     try {
       operation.step("validate", "Validate control target and capability", { action, runId });
       const requiresLiveFigmaSession = [
+        "psd.import.upload-chunk",
         "psd.import.start",
         "psd.import.apply",
         "psd.import.adopt-baseline",
@@ -184,6 +185,7 @@ export function createRelayControlHandler(
           }
           break;
         }
+        case "psd.import.upload-chunk":
         case "psd.import.start":
         case "psd.import.get":
         case "psd.import.cancel":

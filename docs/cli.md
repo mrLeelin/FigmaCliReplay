@@ -102,6 +102,22 @@ node dist/cli.js psd-cancel --session-id <sessionId> --task-id <clientRequestId>
 
 插件进度使用 `psd.import.subscribe/unsubscribe`，与 AI、Prefab 订阅互不替换。旧 PSD HTTP 业务入口返回 410。PSD 状态保留在当前 Relay 进程内，最多 100 项；重启后旧任务 ID 若已有产物则拒绝重新执行，不代表支持重启恢复。请求失败或结果不明时先查询原 taskId，不自动重复写入。
 
+首次 PSD 导入默认优先使用已安装且注册了 COM 的 Photoshop；未检测到 Photoshop 时，使用 `psd-tools` 合成图层，不再回退到只读取原始像素。Python 依赖通过 `server/requirements.txt` 安装，解释器优先级为 `FIGMA_RELAY_PYTHON`、项目 `.venv`、`py -3`、`python`。高级合成需要 psd-tools 的 composite 依赖；缺少依赖时报明确错误，不静默丢弃效果。
+
+Photoshop 会话记录本次是否启动了该实例。导入前已运行的 Photoshop 保持打开；由本次启动的实例在 Figma 导入及文字校正结束后自动退出，失败或取消也执行同样的收尾。释放时核对 PID 和进程创建时间，只连接原实例；用户在导入期间另开了文档时保留 Photoshop 并记录原因，避免关闭用户文件。多个 Photoshop 导入串行到会话释放完成，避免任务之间互相退出进程。
+
+退出检查单独运行，最长等待 30 秒；如果 COM 无响应，只终止本任务的 Python 清理程序并记录警告，不强行终止 Photoshop，也不阻塞后续任务。
+
+诊断时可显式设置 `FIGMA_RELAY_PSD_RENDERER=auto|photoshop|psd-tools|raw`；默认 `auto` 按上述规则选择，`raw` 只用于排查原始通道像素。psd-tools 对部分复杂效果支持有限，渲染器及降级说明记录在任务日志和清单中。
+
+首次导入忽略自身或祖先组隐藏的图层；增量预览保留这些图层的源 layerId，并按有效 `visible=false` 比较和应用，避免把显隐修改误判成源图层删除。
+
+混合字体文本会记录实际字体段，在增量预览中核对字体段和主字体基线；未改动的混合字体不会产生空字体误报，真实字体段修改仍会进入原有文字冲突检查。
+
+Figma 插件拖入 PSD 支持原文件最大 **1 GiB（1,073,741,824 字节）**。超过 256 MiB 的文件按 4 MiB 分块读取和上传，通过 `psd.import.upload-chunk` 写入磁盘，再由 `psd.import.start` 的 `uploadId` 引用；不能将整个 1 GiB 文件编码为单个 Base64 字符串。`uploadId` 必须等于原 `clientRequestId`，所有分块必须来自相同文件、会话和相同上传元数据。相同分块可安全重传，冲突分块和不完整上传会被拒绝；只有最后的 start 会提交 Figma 导入，结果不明时仍须查询原任务。
+
+超限文件在读取和发送前直接拒绝。CLI `/relay` 仍使用 16 MiB 单消息上限，大文件也可逐块调用 upload-chunk 后通过 uploadId 启动。分块上传失败会释放插件界面，不会进入尚未创建的 PSD 任务等待。PSD 上传日志和未知状态提示保留原 taskId，WebSocket 错误日志包含断开原因。
+
 `psd-wait` 经 WebSocket 接收进度，在完成、失败、取消或需要用户处理的预览状态返回；超时或退出 CLI 不取消任务。`psd-cancel` 在导出阶段返回 `accepted: true` 和 `cancel_requested`，导出进程结束且未提交 Figma 后才返回 `cancelled`；空闲预览可立即取消。一旦开始提交 Figma，取消返回 `accepted: false` 并保留实际状态，不终止提交进程或伪造取消成功。CLI 退出码 0 表示请求已成功处理，须检查 `result.accepted` 及 `result.task.status` 判断取消或任务结果。
 
 当前实现会话查询、Figma 通用命令、AI/整理控制，以及任务查询、等待和取消。需要使用本次构建的 Relay，以及重新加载后的 Figma 插件；旧 Relay 或缺少 WebSocket 结果能力的插件会被拒绝。本次代码验证没有重启正在运行的服务。

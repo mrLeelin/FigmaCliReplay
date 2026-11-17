@@ -17,6 +17,7 @@ import type { RelayLogger } from "./logging/relayLogger.js";
 import { logInfo, logWarn } from "./utils/logger.js";
 import type { PythonAlgorithms } from "./pythonAlgorithms.js";
 import { startPsdImportTask, getPsdImportTask, applyPsdImportTask, adoptPsdImportBaseline, cancelPsdImportTask } from "./psdImportTask.js";
+import { stagePsdUploadChunk } from "./psdUploadStore.js";
 import type { JsonObject, AlgorithmStatus, RelayJob } from "./types.js";
 import { constantTimeEqual, isRecord, makeRequestId, sleep, validOperationId } from "./utils.js";
 import type { WebSocketGateway } from "./websocketGateway.js";
@@ -387,6 +388,9 @@ export class RuntimeRelay {
       return { ok: true, task };
     }
     if (action.startsWith("psd.import.")) {
+      if (action === "psd.import.upload-chunk") {
+        return { ok: true, upload: stagePsdUploadChunk(payload) };
+      }
       if (action === "psd.import.start") {
         const target = isRecord(payload.target) ? payload.target : {};
         if ((target.sessionId && target.sessionId !== payload.sessionId) || (target.fileKey && target.fileKey !== payload.fileKey)) {
