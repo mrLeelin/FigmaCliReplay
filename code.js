@@ -1,4 +1,4 @@
-// Figma Relay build #335
+// Figma Relay build #338
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #335
+// Figma Relay build #338
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (335 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 335)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "335" });
+// DIAG: 插件启动标记 (338 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 338)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "338" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "335",
+        build: "338",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -12128,11 +12128,15 @@ async function createTextLayer(root, layer, context) {
   text.textAlignVertical = "CENTER";
   text.fills = [solidPaintFromManifest(layer.fillColor, 1)];
   if (layer.stroke && layer.stroke.enabled === true) {
+    // PSD 描边不透明度（如 56%）写入描边 Paint，旧 manifest 无此字段时回退 sourceState 或 1。
+    const sourceStroke = sourceText.stroke || {};
+    const rawStrokeOpacity = layer.stroke.opacity != null ? layer.stroke.opacity : sourceStroke.opacity;
+    const strokeOpacity = rawStrokeOpacity != null ? numericOr(rawStrokeOpacity, 1) : 1;
     text.strokes = [solidPaintFromManifest({
       r: layer.stroke.r,
       g: layer.stroke.g,
       b: layer.stroke.b
-    }, 1)];
+    }, strokeOpacity)];
     text.strokeWeight = numericOr(layer.stroke.size, 1);
     text.strokeAlign = "OUTSIDE";
   } else {

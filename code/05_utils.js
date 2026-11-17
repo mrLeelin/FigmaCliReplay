@@ -5360,11 +5360,15 @@ async function createTextLayer(root, layer, context) {
   text.textAlignVertical = "CENTER";
   text.fills = [solidPaintFromManifest(layer.fillColor, 1)];
   if (layer.stroke && layer.stroke.enabled === true) {
+    // PSD 描边不透明度（如 56%）写入描边 Paint，旧 manifest 无此字段时回退 sourceState 或 1。
+    const sourceStroke = sourceText.stroke || {};
+    const rawStrokeOpacity = layer.stroke.opacity != null ? layer.stroke.opacity : sourceStroke.opacity;
+    const strokeOpacity = rawStrokeOpacity != null ? numericOr(rawStrokeOpacity, 1) : 1;
     text.strokes = [solidPaintFromManifest({
       r: layer.stroke.r,
       g: layer.stroke.g,
       b: layer.stroke.b
-    }, 1)];
+    }, strokeOpacity)];
     text.strokeWeight = numericOr(layer.stroke.size, 1);
     text.strokeAlign = "OUTSIDE";
   } else {

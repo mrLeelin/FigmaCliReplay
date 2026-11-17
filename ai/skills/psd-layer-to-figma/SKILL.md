@@ -112,6 +112,22 @@ python .agents\skills\psd-layer-to-figma\scripts\export_psd_layers.py `
 
 脚本不依赖 `psd_tools`，但需要 Pillow。脚本支持 PSD v1、RGB/8-bit、Raw 和 PackBits RLE 通道数据。
 
+### 高保真模式：Photoshop 渲染（PSD 含图层样式/蒙版/剪贴/画板时必须使用）
+
+`export_psd_layers.py` 只读原始通道像素，图层样式（描边、内阴影、颜色/渐变叠加、投影）、蒙版、剪贴蒙版、组级样式和画板裁切都会丢失。本机装有 Photoshop（COM `Photoshop.Application`）时按以下三步导入：
+
+```powershell
+# 1. 先用 export_psd_layers.py --summary 生成基础 manifest（复用原生 Text 数据），再让 Photoshop 渲染视觉单元
+python ai\skills\psd-layer-to-figma\scripts\photoshop_render_units.py <psd> --out <dir> --base-manifest <base>\manifest_summary.json
+# 2. 提交 <dir>\manifest_summary.json（submit_psd_import_job.py，参数同普通导入）
+# 3. 以 Photoshop 合成图 <dir>\ps_render\reference.png 校正文字位置（先不带 --apply 查看报告）
+python ai\skills\psd-layer-to-figma\scripts\align_psd_text_to_reference.py <rootNodeId> <dir>\manifest_summary.json <dir>\ps_render\reference.png --session-id <id> --apply
+```
+
+- 渲染在源文档内原位进行（隐藏无关图层后另存 PNG 副本），禁止复制图层到新文档：会重算渐变并可能导致 Photoshop 崩溃。详见 `ReportError/2026-11-17-psd-import-photoshop-render-fidelity.md`。
+- 验收：导入截图与 `reference.png` 逐像素比较，非文字区域差异必须为 0；文字区域只允许抗锯齿级差异。
+- PSD 字体本机缺失时先找 Photoshop 自带字体（如 `Required\PDFL\Resource\Fonts\AdobeHeitiStd-Regular.otf`），安装后需重新加载 Figma 文件才能使用。
+
 ## 命名预处理与 Unity 友好整理
 
 执行 PSD → Figma 导入前，必须读取 `references/figma-layer-naming-unity-import.md` 并应用其中规则。

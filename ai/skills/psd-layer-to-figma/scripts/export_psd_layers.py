@@ -2810,6 +2810,7 @@ def _generate_summary(
                 "g": stroke.get("color", {}).get("g", 0),
                 "b": stroke.get("color", {}).get("b", 0),
                 "size": stroke.get("size", 0),
+                "opacity": stroke.get("opacity"),
             } if stroke else None
             drop_shadow = t.get("effects", {}).get("dropShadow")
             entry["dropShadow"] = {
