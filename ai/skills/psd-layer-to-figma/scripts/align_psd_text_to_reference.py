@@ -86,7 +86,7 @@ def main() -> int:
     positions: List[Dict[str, Any]] = []
     report: List[Dict[str, Any]] = []
     for node in root.get("children", []):
-        if node["type"] != "TEXT":
+        if node["type"] != "TEXT" or node.get("visible") is False:
             continue
         prefix = node["name"].split("_", 1)[0]
         layer = layers.get(int(prefix)) if prefix.isdigit() else None

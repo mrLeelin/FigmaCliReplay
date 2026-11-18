@@ -1,4 +1,4 @@
-// Figma Relay build #343
+// Figma Relay build #346
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #343
+// Figma Relay build #346
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (343 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 343)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "343" });
+// DIAG: 插件启动标记 (346 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 346)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "346" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "343",
+        build: "346",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -10563,6 +10563,16 @@ function appendPsdMutationPreflightConflicts(diff, plans, target) {
       diff.conflicts.push({ kind: "unsafe-component-boundary-write", layerId: plan.layerId, nodeId: plan.nodeId });
       continue;
     }
+    if (node.type === "TEXT" && psdTextFillAffected(plan)) {
+      const baseline = plan.baseline.text || {};
+      const incoming = plan.incoming.text || {};
+      const source = plan.baseline.geometry;
+      if ((baseline.fillGradient || incoming.fillGradient)
+        && !psdTextFillMatches(node, baseline, source.width, source.height)) {
+        diff.conflicts.push({ kind: "unsafe-text-gradient-override", layerId: plan.layerId, nodeId: plan.nodeId });
+        continue;
+      }
+    }
     if (requiresGeometry) {
       const parent = node.parent;
       if (!parent || !target.absoluteTransform || !parent.absoluteTransform) {
@@ -10699,7 +10709,15 @@ function buildPsdLiveSourceState(node, root, storedSourceState) {
     liveState.text.leading = lineHeight.unit === "PIXELS" ? numericOr(lineHeight.value, 0) : 0;
     liveState.text.lineHeightMode = lineHeight.unit === "PIXELS" ? "PIXELS" : "AUTO";
     liveState.text.textAlignHorizontal = String(node.textAlignHorizontal || liveState.text.textAlignHorizontal || "LEFT");
-    liveState.text.fillColor = buildPsdLiveTextFillColor(node, liveState.text.fillColor);
+    const storedGradient = liveState.text.fillGradient;
+    if (storedGradient || (Array.isArray(node.fills) && node.fills.some((paint) => paint.type === "GRADIENT_LINEAR"))) {
+      const source = storedSourceState.geometry || {};
+      if (!storedGradient || !psdTextFillMatches(node, liveState.text, source.width, source.height)) {
+        liveState.text.fillGradient = { figmaDrift: "changed-gradient-fill", fills: clonePsdValue(node.fills) };
+      }
+    } else {
+      liveState.text.fillColor = buildPsdLiveTextFillColor(node, liveState.text.fillColor);
+    }
     liveState.text.stroke = buildPsdLiveTextStroke(node, liveState.text.stroke);
     liveState.text.dropShadow = buildPsdLiveTextShadow(node, liveState.text.dropShadow);
   }
@@ -11356,9 +11374,6 @@ async function applyPsdTextPlan(plan, pair, prepared) {
   if (plan.changedPaths.includes("text.textAlignHorizontal")) {
     node.textAlignHorizontal = text.textAlignHorizontal;
   }
-  if (plan.changedPaths.includes("text.fillColor")) {
-    node.fills = [solidPaintFromManifest(text.fillColor || {}, 1)];
-  }
   if (plan.changedPaths.includes("text.stroke")) applyPsdTextStroke(node, text.stroke);
   if (plan.changedPaths.includes("text.dropShadow")) applyPsdTextShadow(node, text.dropShadow);
   node.textAutoResize = "NONE";
@@ -11416,6 +11431,10 @@ async function applyPsdMutationPlans(prepared) {
       category === "position" || category === "size" || category === "rotation"
     ))) {
       applyPsdGeometryPlan(plan, node);
+    }
+    if (psdTextFillAffected(plan)) {
+      const source = plan.incoming.geometry;
+      node.fills = [createPsdTextFillPaint(plan.incoming.text, node, source.width, source.height)];
     }
     if (plan.categories.includes("display")) applyPsdDisplayPlan(plan, node);
     if (plan.categories.includes("nineSlice")) await applyPsdNineSlicePlan(plan, pair, prepared);
@@ -11527,6 +11546,10 @@ function verifyPsdAppliedFields(plans) {
     const geometry = plan.expectedGeometry;
     const display = plan.incoming.display || {};
     const text = plan.incoming.text || {};
+    if (psdTextFillAffected(plan)) {
+      const source = plan.incoming.geometry;
+      if (!psdTextFillMatches(node, text, source.width, source.height)) errors.push(`${plan.layerId}:text.fill`);
+    }
     for (const path of plan.changedPaths) {
       let valid = true;
       if (path === "geometry.x") valid = geometry && psdNumberMatches(node.x, geometry.localPosition.x);
@@ -11556,9 +11579,7 @@ function verifyPsdAppliedFields(plans) {
           : { unit: "AUTO" };
         valid = stablePsdSourceStateJson(node.lineHeight) === stablePsdSourceStateJson(expectedLineHeight);
       } else if (path === "text.textAlignHorizontal") valid = node.textAlignHorizontal === text.textAlignHorizontal;
-      else if (path === "text.fillColor") {
-        valid = Array.isArray(node.fills) && node.fills.length === 1 && psdSolidPaintMatches(node.fills[0], text.fillColor || {});
-      } else if (path === "text.stroke") valid = verifyPsdTextStroke(node, text.stroke);
+      else if (path === "text.stroke") valid = verifyPsdTextStroke(node, text.stroke);
       else if (path === "text.dropShadow") valid = verifyPsdTextShadow(node, text.dropShadow);
       else if (path === "nineSlice") {
         const slices = "children" in node ? node.children.filter(isPsdOwnedSliceChild) : [];
@@ -11923,6 +11944,9 @@ function normalizeLayer(layer) {
   applyNestedManifestCompatibility(normalized, layer, mode, width, height);
   assertOrdinaryTextLayer(normalized);
   normalized.sourceState = normalizePsdSourceState({ ...normalized, sourceState: layer.sourceState });
+  if (normalized.fillGradient && normalized.sourceState.text) {
+    normalized.sourceState.text.fillGradient = normalized.fillGradient;
+  }
   if (isOrdinaryTextLayer(normalized) && normalized.sourceState.text && !isMultilinePsdText(normalized)) {
     normalized.sourceState.text.lineHeightMode = "AUTO";
     normalized.sourceState.text.leading = 0;
@@ -11960,6 +11984,7 @@ function applyNestedManifestCompatibility(normalized, layer, mode, width, height
 
   if (mode === "text") {
     const text = layer.text && typeof layer.text === "object" ? layer.text : {};
+    const sourceText = layer.sourceState && layer.sourceState.text || {};
     const effects = text.effects && typeof text.effects === "object" ? text.effects : {};
     normalized.chars = String(firstDefined(layer.chars, firstDefined(text.characters, "")));
     normalized.fontSize = positiveOr(firstDefined(layer.fontSize, text.fontSize), Math.max(12, height));
@@ -11968,7 +11993,11 @@ function applyNestedManifestCompatibility(normalized, layer, mode, width, height
     normalized.effectiveSizeSource = String(firstDefined(layer.effectiveSizeSource, text.effectiveSizeSource || ""));
     normalized.textTransform = layer.textTransform || text.textTransform || null;
     normalized.leading = firstDefined(layer.leading, text.leading);
-    normalized.fillColor = layer.fillColor || text.fillColor || {};
+    normalized.fillColor = layer.fillColor || text.fillColor || sourceText.fillColor || {};
+    normalized.fillGradient = firstDefined(layer.fillGradient, firstDefined(text.fillGradient, sourceText.fillGradient));
+    if (normalized.fillGradient != null && !isValidPsdTextGradient(normalized.fillGradient)) {
+      throw new Error(`Invalid PSD text gradient: ${normalized.name}`);
+    }
     normalized.textAlign = firstDefined(layer.textAlign, text.textAlignHorizontal);
     normalized.fontFallback = Array.isArray(layer.fontFallback)
       ? layer.fontFallback
@@ -12216,7 +12245,6 @@ async function createTextLayer(root, layer, context) {
   text.textAutoResize = "WIDTH_AND_HEIGHT";
   text.textAlignHorizontal = normalizeTextAlign(layer.textAlign, layer, context.manifest.canvas);
   text.textAlignVertical = "CENTER";
-  text.fills = [solidPaintFromManifest(layer.fillColor, 1)];
   if (layer.stroke && layer.stroke.enabled === true) {
     // PSD 描边不透明度（如 56%）写入描边 Paint，旧 manifest 无此字段时回退 sourceState 或 1。
     const sourceStroke = sourceText.stroke || {};
@@ -12237,6 +12265,7 @@ async function createTextLayer(root, layer, context) {
   centerNodeOnLayer(text, layer);
   const sourceGeometry = layer.sourceState && layer.sourceState.geometry || {};
   if (Number.isFinite(sourceGeometry.rotation)) text.rotation = sourceGeometry.rotation;
+  text.fills = [createPsdTextFillPaint(layer, text, layer.w, layer.h)];
   if ("constraints" in text && layer.constraints) {
     text.constraints = {
       horizontal: normalizeConstraint(layer.constraints.horizontal, "MIN"),
@@ -12696,7 +12725,8 @@ async function validateImportedRoot(root, orderedLayers, context) {
       validation.missingNodeCount += 1;
       continue;
     }
-    validation.emptyImageFillCount += countEmptyImageFills(node);
+    const expectsImageFill = node.type === "RECTANGLE" && (layer.mode === "image" || layer.mode === "common-component");
+    validation.emptyImageFillCount += countEmptyImageFills(node, expectsImageFill);
     validation.badTransformCount += countBadTransforms(node);
     if (node.type !== "TEXT") {
       validateLayerGeometry(layer, node, validation);
@@ -13146,11 +13176,7 @@ function parseIndexFromName(name) {
 // Text 创建后与 manifest 的颜色、描边做全量对比。
 function validateTextAgainstLayer(node, layer) {
   const result = { fillMismatch: false, strokeMismatch: false };
-  const fill = Array.isArray(node.fills) && node.fills[0] && node.fills[0].type === "SOLID" ? node.fills[0] : null;
-  const expectedFill = layer.fillColor || {};
-  if (!fill || !closeNumber(fill.color.r, expectedFill.r) || !closeNumber(fill.color.g, expectedFill.g) || !closeNumber(fill.color.b, expectedFill.b)) {
-    result.fillMismatch = true;
-  }
+  result.fillMismatch = !psdTextFillMatches(node, layer, layer.w, layer.h);
   const strokes = Array.isArray(node.strokes) ? node.strokes : [];
   if (layer.stroke && layer.stroke.enabled === true) {
     const stroke = strokes[0] && strokes[0].type === "SOLID" ? strokes[0] : null;
@@ -13161,6 +13187,73 @@ function validateTextAgainstLayer(node, layer) {
     result.strokeMismatch = true;
   }
   return result;
+}
+
+function isValidPsdTextGradient(gradient) {
+  const isUnit = (value) => Number.isFinite(value) && value >= 0 && value <= 1;
+  return !!gradient && Number.isFinite(gradient.angle)
+    && Number.isFinite(1 / gradient.scale) && Number.isFinite(gradient.scale) && gradient.scale > 0 && gradient.scale <= 1.5
+    && Array.isArray(gradient.stops) && gradient.stops.length >= 2 && gradient.stops.length <= 32
+    && gradient.stops.every((stop, index) => stop && isUnit(stop.position)
+      && (index === 0 || stop.position >= gradient.stops[index - 1].position)
+      && stop.color && ["r", "g", "b", "a"].every((channel) => isUnit(stop.color[channel])));
+}
+
+function psdTextFillAffected(plan) {
+  return plan.changedPaths.includes("text.fillColor") || plan.changedPaths.includes("text.fillGradient")
+    || (!!(plan.incoming.text && plan.incoming.text.fillGradient) && plan.changedPaths.some((path) => (
+      path === "geometry.width" || path === "geometry.height" || path === "geometry.rotation"
+    )));
+}
+
+function createPsdTextFillPaint(text, node, sourceWidth, sourceHeight) {
+  if (text.fillGradient) {
+    return createPsdTextGradientPaint(text.fillGradient, node.width, node.height, sourceWidth, sourceHeight, node.rotation);
+  }
+  const color = text.fillColor || {};
+  return solidPaintFromManifest(color, firstDefined(color.a, 1));
+}
+
+function createPsdTextGradientPaint(gradient, width, height, sourceWidth = width, sourceHeight = height, rotation = 0) {
+  const angle = (gradient.angle % 360) * Math.PI / 180;
+  const localAngle = angle - rotation * Math.PI / 180;
+  // PSD scales the centered ramp to the bounds of the styled layer, which can include a stroke.
+  const span = gradient.scale * (Math.abs(Math.cos(angle)) * sourceWidth + Math.abs(Math.sin(angle)) * sourceHeight);
+  const alongX = Math.cos(localAngle) * width / span;
+  const alongY = -Math.sin(localAngle) * height / span;
+  // Figma maps normalized node coordinates into gradient coordinates. Counter the text rotation
+  // so the ramp runs at its PSD angle.
+  const crossSpan = Math.abs(Math.sin(localAngle)) * width + Math.abs(Math.cos(localAngle)) * height;
+  const crossX = Math.sin(localAngle) * width / crossSpan;
+  const crossY = Math.cos(localAngle) * height / crossSpan;
+  return {
+    type: "GRADIENT_LINEAR",
+    gradientTransform: [
+      [alongX, alongY, (1 - alongX - alongY) / 2],
+      [crossX, crossY, (1 - crossX - crossY) / 2]
+    ],
+    gradientStops: gradient.stops.map(({ position, color }) => ({ position, color: { ...color } }))
+  };
+}
+
+function psdTextFillMatches(node, text, sourceWidth, sourceHeight) {
+  if (!Array.isArray(node.fills) || node.fills.length !== 1 || node.fills[0].visible === false) return false;
+  const actual = node.fills[0];
+  const expected = createPsdTextFillPaint(text, node, sourceWidth, sourceHeight);
+  if (actual.type !== expected.type || !closeNumber(firstDefined(actual.opacity, 1), firstDefined(expected.opacity, 1))) return false;
+  if (expected.type === "SOLID") {
+    return ["r", "g", "b"].every((channel) => closeNumber(actual.color[channel], expected.color[channel]));
+  }
+  return Array.isArray(actual.gradientTransform)
+    && expected.gradientTransform.every((row, i) => Array.isArray(actual.gradientTransform[i])
+      && row.every((value, j) => closeNumber(actual.gradientTransform[i][j], value)))
+    && Array.isArray(actual.gradientStops)
+    && actual.gradientStops.length === expected.gradientStops.length
+    && expected.gradientStops.every((stop, index) => {
+      const actualStop = actual.gradientStops[index];
+      return closeNumber(actualStop.position, stop.position)
+        && ["r", "g", "b", "a"].every((channel) => closeNumber(actualStop.color[channel], stop.color[channel]));
+    });
 }
 
 // 判断数值近似相等。
@@ -13837,9 +13930,9 @@ function removeDirectSliceChildren(source) {
   return sliceChildren.length;
 }
 
-// 统计空 IMAGE fill，避免“节点存在但缺图”。
-function countEmptyImageFills(node) {
-  let count = hasEmptyImageFill(node) ? 1 : 0;
+// 按节点统计缺失的图片填充。普通图片和通用组件降级图必须存在 IMAGE fill。
+function countEmptyImageFills(node, expectsImageFill = false) {
+  let count = hasEmptyImageFill(node, expectsImageFill) ? 1 : 0;
   if ("children" in node) {
     for (const child of node.children) {
       count += countEmptyImageFills(child);
@@ -13849,11 +13942,11 @@ function countEmptyImageFills(node) {
 }
 
 // 判断节点是否存在空图片填充。
-function hasEmptyImageFill(node) {
-  if (!("fills" in node) || !Array.isArray(node.fills)) {
-    return false;
-  }
-  return node.fills.some((fill) => fill && fill.type === "IMAGE" && !fill.imageHash);
+function hasEmptyImageFill(node, expectsImageFill) {
+  const fills = Array.isArray(node.fills) ? node.fills : [];
+  const imageFills = fills.filter((fill) => fill && fill.type === "IMAGE");
+  return (expectsImageFill && imageFills.length === 0)
+    || imageFills.some((fill) => typeof fill.imageHash !== "string" || !fill.imageHash.trim());
 }
 
 // 统计 CROP 矩阵越界数量。
@@ -15224,7 +15317,7 @@ var PSD_SOURCE_FIELD_DESCRIPTORS = [
   ["text.fontFallback", "textStyle"], ["text.fontSize", "textStyle"],
   ["text.effectiveFontSize", "textStyle"], ["text.leading", "textStyle"],
   ["text.lineHeightMode", "textStyle"], ["text.textAlignHorizontal", "textStyle"],
-  ["text.fillColor", "textStyle"], ["text.stroke", "textStyle"],
+  ["text.fillColor", "textStyle"], ["text.fillGradient", "textStyle"], ["text.stroke", "textStyle"],
   ["text.dropShadow", "textStyle"],
   ["nineSlice", "nineSlice"],
 ];
@@ -15267,7 +15360,7 @@ function psdValuesEqualWithinTolerance(left, right, tolerance) {
 
 function psdValuesEqualForPath(path, before, after) {
   var tolerance = psdNumericToleranceForPath(path);
-  if (path === "text.fillColor" || path === "text.stroke" || path === "text.dropShadow") {
+  if (path === "text.fillColor" || path === "text.fillGradient" || path === "text.stroke" || path === "text.dropShadow") {
     tolerance = 0.001;
   }
   return tolerance > 0 && psdValuesEqualWithinTolerance(before, after, tolerance);
@@ -16812,11 +16905,25 @@ function designEditRgbToHex(color) {
   return "#" + channel(color && color.r) + channel(color && color.g) + channel(color && color.b);
 }
 
-/** 只展开 SOLID；其他 paint 类型只报告 type，避免返回渐变/图片的大载荷。 */
+/** 报告纯色与有界的线性渐变参数，图片只暴露类型和显隐。 */
 function designEditSummarizePaints(paints, mixed) {
   if (paints === mixed) return "mixed";
   if (!Array.isArray(paints)) return undefined;
   return paints.map((paint) => {
+    if (paint?.type === "GRADIENT_LINEAR" && Array.isArray(paint.gradientTransform) && Array.isArray(paint.gradientStops)) {
+      return {
+        type: paint.type,
+        transform: paint.gradientTransform.map((row) => row.map((value) => designEditRound(value, 6))),
+        stops: paint.gradientStops.slice(0, 32).map((stop) => ({
+          position: designEditRound(stop.position, 6),
+          color: designEditRgbToHex(stop.color),
+          opacity: designEditRound(stop.color.a, 3),
+        })),
+        stopCount: paint.gradientStops.length,
+        opacity: designEditRound(paint.opacity ?? 1, 3),
+        visible: paint.visible !== false,
+      };
+    }
     if (!paint || paint.type !== "SOLID") return { type: paint && paint.type ? String(paint.type) : "UNKNOWN", visible: paint ? paint.visible !== false : false };
     return {
       type: "SOLID",
@@ -16934,6 +17041,7 @@ function designEditDescribeNode(node, options) {
     y: designEditRound(node.y),
     width: designEditRound(node.width),
     height: designEditRound(node.height),
+    rotation: designEditRound(node.rotation, 6),
     visible: node.visible !== false,
     opacity: designEditRound(node.opacity === undefined ? 1 : node.opacity, 3),
   };
@@ -17025,7 +17133,7 @@ async function designEditInspectNodes(job, getNodeById, mixed, getMainComponent)
 // runtime 注入：getNodeById、loadFont、getMainComponent、getVariableById、createFrame、createText、bindPaint、mixed、log。
 
 const DESIGN_EDIT_SUPPORTED_OPS = [
-  "setFill", "setStroke", "setCornerRadius", "setOpacity", "setVisible", "rename",
+  "setFill", "setLinearGradientFill", "setImageFill", "setStroke", "setCornerRadius", "setOpacity", "setVisible", "rename",
   "setText", "setTextStyle", "setAutoLayout", "setLayoutSizing",
   "createFrame", "createText", "createInstance", "setInstanceProperties", "bindVariable",
 ];
@@ -17057,7 +17165,7 @@ const DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX = "componentProperty:";
 /** 每种 op 会改动的节点属性；快照与回滚只处理这些键（尺寸与位置另由 geometry 记录）。 */
 function designEditPropertyKeys(edit) {
   switch (edit.op) {
-    case "setFill": return ["fills"];
+    case "setFill": case "setLinearGradientFill": case "setImageFill": return ["fills"];
     case "setStroke": return edit.weight === undefined ? ["strokes"] : ["strokes", "strokeWeight"];
     case "setCornerRadius": return ["cornerRadius"];
     case "setOpacity": return ["opacity"];
@@ -17103,6 +17211,14 @@ function designEditHexToRgb(hex) {
 
 function designEditSolidPaint(color, opacity) {
   return [{ type: "SOLID", color: designEditHexToRgb(color), opacity: opacity === undefined ? 1 : opacity, visible: true }];
+}
+
+function designEditFillPaint(edit) {
+  if (edit.op === "setFill") return designEditSolidPaint(edit.color, edit.opacity);
+  return [{
+    type: "GRADIENT_LINEAR", gradientTransform: edit.transform, gradientStops: edit.stops,
+    opacity: edit.opacity ?? 1, visible: true,
+  }];
 }
 
 /** 深拷贝 Figma 属性值；Paint 数组、fontName、lineHeight 等都是可 JSON 化的普通对象。figma.mixed 等 symbol 原样保留。 */
@@ -17322,10 +17438,30 @@ async function designEditSimulateProperty(edit, index, ctx, step) {
   const get = (key) => designEditViewGet(view, key);
   const set = (key, value) => view.values.set(key, value);
   switch (edit.op) {
-    case "setFill":
+    case "setFill": case "setLinearGradientFill":
       if (!designEditViewHas(view, "fills")) return view.type + " does not support fills";
-      set("fills", designEditSolidPaint(edit.color, edit.opacity));
+      set("fills", designEditFillPaint(edit));
       return null;
+    case "setImageFill": {
+      if (view.type !== "RECTANGLE" || view.created || view.insideInstance) return "setImageFill requires an existing RECTANGLE outside an instance";
+      const bytes = ctx.runtime.getImageBytes?.(edit.assetId);
+      if (!bytes?.byteLength) return "image asset missing or empty: " + edit.assetId;
+      if (edit.bounds) {
+        const parent = designEditParentView(ctx.sim, view);
+        const layout = parent && designEditViewGet(parent, "layoutMode");
+        if (parent?.type === "GROUP" || (layout && layout !== "NONE" && get("layoutPositioning") !== "ABSOLUTE")) {
+          return "image bounds require a free-positioned rectangle outside a GROUP";
+        }
+        if (designEditBoundId(view.node, "width") || designEditBoundId(view.node, "height")) {
+          return "image bounds cannot replace width or height bound to a variable";
+        }
+        if (typeof view.node.resize !== "function") return "rectangle does not support resizing";
+        for (const [key, value] of Object.entries(edit.bounds)) set(key, value);
+      }
+      step.imageBytes = bytes;
+      set("fills", [{ type: "IMAGE" }]);
+      return null;
+    }
     case "setStroke":
       if (!designEditViewHas(view, "strokes") || DESIGN_EDIT_STROKE_TYPES_EXCLUDED.has(view.type)) return view.type + " does not support strokes";
       set("strokes", designEditSolidPaint(edit.color, 1));
@@ -17494,7 +17630,18 @@ function designEditBindPaint(node, field, variable, runtime) {
 function designEditApplyOne(step, node, runtime) {
   const edit = step.edit;
   switch (edit.op) {
-    case "setFill": node.fills = designEditSolidPaint(edit.color, edit.opacity); return;
+    case "setFill": case "setLinearGradientFill": node.fills = designEditFillPaint(edit); return;
+    case "setImageFill": {
+      if (edit.bounds) {
+        designEditResize(node, edit.bounds.width, edit.bounds.height);
+        node.x = edit.bounds.x;
+        node.y = edit.bounds.y;
+        if (!designEditBoundsMatch(node, edit.bounds)) throw new Error("image rectangle bounds did not apply");
+      }
+      node.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: step.imageHash, opacity: 1, visible: true }];
+      if (node.fills.length !== 1 || node.fills[0].imageHash !== step.imageHash) throw new Error("image fill did not apply");
+      return;
+    }
     case "setStroke":
       node.strokes = designEditSolidPaint(edit.color, 1);
       if (edit.weight !== undefined) node.strokeWeight = edit.weight;
@@ -17530,16 +17677,25 @@ function designEditApplyOne(step, node, runtime) {
 // ─── 快照与回滚 ───
 // 回滚表只登记已有节点；新建节点记在 state.created，回滚时直接删除。
 
+function designEditBounds(node) {
+  return { x: node.x, y: node.y, width: node.width, height: node.height };
+}
+
+function designEditBoundsMatch(node, bounds) {
+  return Object.entries(bounds).every(([key, value]) => Math.abs(node[key] - value) <= 0.001);
+}
+
 function designEditSnapshotFor(node) {
   return {
     node, values: new Map(), bindings: new Map(),
-    geometry: { x: node.x, y: node.y, width: node.width, height: node.height }, children: null,
+    geometry: designEditBounds(node), children: null,
   };
 }
 
 /** 记录单条 edit 将改动的键在执行前的原值、数值变量绑定，以及 auto layout 可能挪动的子节点几何。 */
 function designEditCaptureSnapshot(node, edit) {
   const snapshot = designEditSnapshotFor(node);
+  snapshot.verifyGeometry = edit.op === "setImageFill" && Boolean(edit.bounds);
   for (const key of designEditPropertyKeys(edit)) {
     if (designEditHasKey(node, key)) snapshot.values.set(key, designEditCloneValue(designEditReadKey(node, key)));
   }
@@ -17561,6 +17717,7 @@ function designEditMergeSnapshot(entries, snapshot) {
   for (const [key, value] of snapshot.values) if (!existing.values.has(key)) existing.values.set(key, value);
   for (const [key, value] of snapshot.bindings) if (!existing.bindings.has(key)) existing.bindings.set(key, value);
   if (!existing.children && snapshot.children) existing.children = snapshot.children;
+  if (snapshot.verifyGeometry) existing.verifyGeometry = true;
 }
 
 /** 失败那条可能已写入部分属性：只保留实际发生变化的键，避免回滚时重写刚被 Figma 拒绝的属性。 */
@@ -17652,6 +17809,7 @@ async function designEditRollback(state, runtime) {
   }
   for (const node of created) if (!node.removed) mismatches.push({ nodeId: node.id, key: "removed" });
   for (const entry of ordered) {
+    if (entry.verifyGeometry && !designEditBoundsMatch(entry.node, entry.geometry)) mismatches.push({ nodeId: entry.node.id, key: "geometry" });
     for (const [key, expected] of entry.values) {
       if (expected !== mixed && !designEditSameValue(designEditReadKey(entry.node, key), expected)) mismatches.push({ nodeId: entry.node.id, key });
     }
@@ -17686,6 +17844,10 @@ function designEditDescribeStep(step, node, mixed, phase) {
     const values = {};
     for (const key of designEditPropertyKeys(edit)) if (designEditHasKey(node, key)) values[key] = designEditBriefValue(key, designEditReadKey(node, key), mixed);
     if (edit.op === "bindVariable") values["binding:" + edit.field] = designEditBoundId(node, edit.field) || (edit.field === "fills" || edit.field === "strokes" ? designEditPaintBinding(node, edit.field) : null);
+    if (edit.op === "setImageFill") {
+      if (edit.bounds) values.bounds = designEditBounds(node);
+      if (Array.isArray(node.fills) && node.fills[0]?.type === "IMAGE") values.imageHash = node.fills[0].imageHash;
+    }
     item[phase] = values;
   }
   return item;
@@ -17734,6 +17896,24 @@ async function designEditApplyEdits(job, runtime) {
       status: "completed", allPass: true, dryRun: true, applied: 0, edits: preview, blockingErrors: [], errors: [],
       summary: { editCount: edits.length, applied: 0, created: 0, blocking: 0, dryRun: true },
     };
+  }
+
+  const imageHashes = new Map();
+  for (const step of steps) {
+    if (!step.imageBytes) continue;
+    const { assetId, nodeId, op } = step.edit;
+    try {
+      if (!imageHashes.has(assetId)) {
+        const image = runtime.createImage(step.imageBytes);
+        if (!image?.hash) throw new Error("image registration returned no hash");
+        imageHashes.set(assetId, image.hash);
+      }
+      step.imageHash = imageHashes.get(assetId);
+    } catch (error) {
+      return designEditBlockedResult("blocked", false, preview, [
+        { index: step.index, op, nodeId, message: "cannot load image " + assetId + ": " + designEditErrorMessage(error) },
+      ], edits.length);
+    }
   }
 
   // 2. 逐条应用。已有节点：执行前快照，成功后并入回滚表；新建节点：登记到 created。任一失败即回滚。
@@ -17802,6 +17982,7 @@ async function handleFigmaApplyEdits(message) {
   });
   let result;
   try {
+    const assetBytes = buildAssetBytesMap(message.assets);
     result = await designEditApplyEdits(job, {
       getNodeById: (id) => figma.getNodeByIdAsync(id).catch(() => null),
       loadFont: (font) => figma.loadFontAsync(font),
@@ -17809,6 +17990,8 @@ async function handleFigmaApplyEdits(message) {
       getVariableById: (id) => figma.variables.getVariableByIdAsync(id).catch(() => null),
       createFrame: () => figma.createFrame(),
       createText: () => figma.createText(),
+      getImageBytes: (id) => assetBytes.get(id),
+      createImage: (bytes) => figma.createImage(bytes),
       bindPaint: (paint, field, variable) => figma.variables.setBoundVariableForPaint(paint, field, variable),
       mixed: figma.mixed,
       log: (stage, data) => operation.step(stage, "设计编辑 " + stage, data),

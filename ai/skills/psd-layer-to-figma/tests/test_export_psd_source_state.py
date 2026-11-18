@@ -3,6 +3,8 @@ import math
 import unittest
 from pathlib import Path
 
+from psd_tools.psd.descriptor import Bool, Descriptor, DescriptorBlock2, Double, Enumerated, Integer, List
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "export_psd_layers.py"
 SPEC = importlib.util.spec_from_file_location("export_psd_layers", SCRIPT)
@@ -11,7 +13,98 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def _effect_payload(items, master_enabled=True):
+    return DescriptorBlock2(items={b"masterFXSwitch": Bool(master_enabled), **items}).tobytes()
+
+
+def _rgb(red, green, blue):
+    return Descriptor({b"Rd  ": Double(red), b"Grn ": Double(green), b"Bl  ": Double(blue)}, classID=b"RGBC")
+
+
+def _overlay(class_id, settings, enabled=True):
+    return Descriptor({
+        b"enab": Bool(enabled),
+        b"present": Bool(True),
+        b"Md  ": Enumerated(b"BlnM", b"Nrml"),
+        b"Opct": Double(100),
+        **settings,
+    }, classID=class_id)
+
+
+def _gradient(reverse=False, gradient_type=b"Lnr "):
+    colors = [
+        Descriptor({b"Lctn": Integer(location), b"Mdpn": Integer(50), b"Clr ": _rgb(*color)})
+        for location, color in [
+            (0, (248, 240, 85)), (1935, (248, 212, 85)),
+            (1986, (255, 255, 255)), (4096, (255, 207, 41)),
+        ]
+    ]
+    opacity_stops = [
+        Descriptor({b"Lctn": Integer(location), b"Mdpn": Integer(50), b"Opct": Double(100)})
+        for location in (0, 4096)
+    ]
+    return _overlay(b"GrFl", {
+        b"Type": Enumerated(b"GrdT", gradient_type), b"Angl": Double(90), b"Scl ": Double(87),
+        b"Algn": Bool(True), b"Rvrs": Bool(reverse),
+        b"Grad": Descriptor({
+            b"GrdF": Enumerated(b"GrdF", b"CstS"), b"Clrs": List(colors), b"Trns": List(opacity_stops),
+        }),
+    })
+
+
+def _text_info(effects):
+    return MODULE._build_text_info({
+        "TySh": b"\x00" * 52 + b"/Text (Example) /FontSize 36 /FillColor << /Values [1 0 0 0] >>",
+        "lfx2": effects,
+    })
+
+
 class PsdSourceStateTests(unittest.TestCase):
+    def test_opaque_normal_color_overlay_overrides_engine_fill(self):
+        white = _overlay(b"SoFi", {b"Clr ": _rgb(255, 255, 255)})
+        active = _text_info(_effect_payload({b"SoFi": white}))
+        disabled = _text_info(_effect_payload({b"SoFi": white}, master_enabled=False))
+
+        self.assertEqual(active["fillColor"], {"r": 1, "g": 1, "b": 1, "a": 1, "hex": "#FFFFFF"})
+        self.assertEqual(disabled["fillColor"]["hex"], "#000000")
+
+    def test_enabled_linear_overlay_and_ignored_disabled_color_overlay_survive_manifest(self):
+        style = _effect_payload({
+            b"SoFi": _overlay(b"SoFi", {b"Clr ": _rgb(255, 165, 25)}, enabled=False),
+            b"gradientFillMulti": List([_gradient()]),
+        })
+        text = _text_info(style)
+        layer = {
+            "index": 1, "layerId": 39, "name": "Example", "mode": "text", "text": text,
+            "x": 0, "y": 0, "width": 800, "height": 145, "opacity": 255, "visible": True,
+            "path": "text.png",
+        }
+        layer["sourceState"] = MODULE._build_psd_source_state(
+            layer=layer, mode="text", content_hash="example", constraints={},
+            text_info=text, nine_slice_info=None,
+        )
+        manifest = MODULE._generate_summary({"canvas": {"width": 800, "height": 145}, "layers": [layer]}, None)
+        gradient = manifest["layers"][0]["fillGradient"]
+
+        self.assertEqual(gradient["scale"], 0.87)
+        self.assertEqual(gradient["angle"], 90)
+        self.assertEqual([stop["position"] for stop in gradient["stops"]], [0, 1935 / 4096, 1986 / 4096, 1])
+        self.assertEqual(gradient["stops"][-1]["color"], {"r": 1, "g": 207 / 255, "b": 41 / 255, "a": 1})
+        self.assertEqual(manifest["layers"][0]["sourceState"]["text"]["fillGradient"], gradient)
+
+    def test_reversed_gradient_reverses_stops_and_positions(self):
+        gradient = _text_info(_effect_payload({b"GrFl": _gradient(reverse=True)}))["fillGradient"]
+
+        self.assertEqual([stop["position"] for stop in gradient["stops"]], [0, 1 - 1986 / 4096, 1 - 1935 / 4096, 1])
+        self.assertEqual(gradient["stops"][0]["color"], {"r": 1, "g": 207 / 255, "b": 41 / 255, "a": 1})
+
+    def test_unsupported_overlay_keeps_engine_fill_and_reports_limitation(self):
+        text = _text_info(_effect_payload({b"GrFl": _gradient(gradient_type=b"Rdl ")}))
+
+        self.assertEqual(text["fillColor"]["hex"], "#000000")
+        self.assertNotIn("fillGradient", text)
+        self.assertTrue(any("Gradient Overlay" in warning for warning in text["warnings"]))
+
     def test_source_state_contains_geometry_display_text_and_content(self):
         angle = math.radians(15)
         layer = {

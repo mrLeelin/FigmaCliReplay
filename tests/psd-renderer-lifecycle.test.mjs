@@ -34,6 +34,7 @@ mock.method(childProcess, 'spawn', (_command, args, options) => {
     events.push({ script, taskId, args: [...args] });
     let code = 0;
     let output = '';
+    let stderr = '';
     if (script === 'export_psd_layers.py') {
       write(path.join(value('--out'), 'manifest_summary.json'), { canvas: { width: 100, height: 100 }, layers: [] });
     } else if (script === 'photoshop_render_units.py' || script === 'psd_tools_render_units.py') {
@@ -44,8 +45,11 @@ mock.method(childProcess, 'spawn', (_command, args, options) => {
         if (scenario.failRender) code = 1;
       }
     } else if (script === 'submit_psd_import_job.py') {
-      if (scenario.failSubmit) code = 1;
-      else write(value('--result-output'), { result: value('--import-mode') === 'incremental-preview'
+      if (scenario.failSubmit) {
+        code = 1;
+        output = scenario.submitStdout || '';
+        stderr = scenario.submitStderr || '';
+      } else write(value('--result-output'), { result: value('--import-mode') === 'incremental-preview'
         ? { status: 'preview-no-changes', baselineFingerprint: 'preview-fingerprint', canApply: false }
         : { status: 'completed', rootNodeId: '12:34' } });
     } else if (script === 'photoshop_lifecycle.py') {
@@ -55,6 +59,7 @@ mock.method(childProcess, 'spawn', (_command, args, options) => {
     }
     const finish = () => {
       if (output) child.stdout.emit('data', Buffer.from(output));
+      if (stderr) child.stderr.emit('data', Buffer.from(stderr));
       child.emit('close', code);
     };
     if ((script === 'photoshop_render_units.py' && scenario.holdRender)
@@ -161,6 +166,32 @@ for (const phase of ['failRender', 'failSubmit']) {
     if (phase === 'failRender') assert.ok(!scripts(task).includes('submit_psd_import_job.py'));
   });
 }
+
+const cliDiagnostic = JSON.stringify({ level: 30, time: 1794973186635,
+  module: 'relay-cli', operationId: 'cli-operation', msg: 'Run project CLI command' });
+
+test('PSD import surfaces an explicit Python failure ahead of Relay CLI diagnostics', async () => {
+  const reason = "Preflight failed: preflight /health failed: {'code': 'UPGRADE_REQUIRED', 'message': 'Upgrade the CLI and Relay together to matching versions.'}";
+  scenario.failSubmit = true;
+  scenario.submitStdout = [
+    '[PREFLIGHT] relay health + target...',
+    `[FAIL] ${reason}`,
+    '  Timeline JSON: timeline.json',
+  ].join('\r\n');
+  scenario.submitStderr = (cliDiagnostic + '\r\n').repeat(10);
+  const result = await completed(start());
+  assert.equal(result.status, 'error');
+  assert.equal(result.error, `submit_psd_import_job.py exited with code 1: ${reason}`);
+});
+
+test('PSD import surfaces the final Python exception when stdout has no explicit failure', async () => {
+  scenario.failSubmit = true;
+  scenario.submitStderr = [cliDiagnostic, 'Traceback (most recent call last):',
+    '  File "submit_psd_import_job.py", line 1, in main', 'ValueError: invalid manifest', cliDiagnostic].join('\r\n');
+  const result = await completed(start());
+  assert.equal(result.status, 'error');
+  assert.equal(result.error, 'submit_psd_import_job.py exited with code 1: ValueError: invalid manifest');
+});
 
 test('cancelling rendering releases the owned instance and never writes to Figma', async () => {
   scenario.holdRender = true;

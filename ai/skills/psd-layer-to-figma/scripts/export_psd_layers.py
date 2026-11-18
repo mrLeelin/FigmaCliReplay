@@ -760,6 +760,10 @@ def _build_psd_source_state(
             "stroke": effects.get("stroke"),
             "dropShadow": effects.get("dropShadow"),
         }
+        if text_info.get("fillGradient"):
+            text_state["fillGradient"] = text_info["fillGradient"]
+        if text_info.get("unsupportedFillOverlay"):
+            unsupported.append({"path": "text.fillOverlay", "value": text_info["unsupportedFillOverlay"]})
 
     nine_slice_state = None
     if mode == "nine-slice" and nine_slice_info:
@@ -1030,6 +1034,102 @@ def _parse_drop_shadow_effect(payload: Optional[bytes]) -> Optional[Dict[str, An
     }
 
 
+def _effect_value(descriptor: Any, key: bytes, default: Any = None) -> Any:
+    return getattr(descriptor.get(key), "value", default)
+
+
+def _effect_rgb(descriptor: Any) -> Optional[Dict[str, float]]:
+    if not hasattr(descriptor, "get"):
+        return None
+    channels = [_effect_value(descriptor, key) for key in (b"Rd  ", b"Grn ", b"Bl  ")]
+    if any(not isinstance(channel, (int, float)) or not 0 <= channel <= 255 for channel in channels):
+        return None
+    red, green, blue = channels
+    return {"r": red / 255, "g": green / 255, "b": blue / 255, "a": 1.0}
+
+
+def _read_linear_overlay(effect: Any) -> Optional[Dict[str, Any]]:
+    gradient = effect.get(b"Grad")
+    offset = effect.get(b"Ofst")
+    scale = _effect_value(effect, b"Scl ", 100)
+    angle = _effect_value(effect, b"Angl", 0)
+    if (
+        getattr(effect.get(b"Type"), "enum", None) != b"Lnr "
+        or not _effect_value(effect, b"Algn", True)
+        or (offset and any(_effect_value(offset, key, 0) != 0 for key in (b"Hrzn", b"Vrtc")))
+        or not math.isfinite(angle)
+        or not 0 < scale <= 150
+        or not hasattr(gradient, "get")
+        or getattr(gradient.get(b"GrdF"), "enum", None) != b"CstS"
+    ):
+        return None
+
+    color_stops = gradient.get(b"Clrs", [])
+    opacity_stops = gradient.get(b"Trns", [])
+    if not (2 <= len(color_stops) <= 32) or any(_effect_value(stop, b"Opct") != 100 for stop in opacity_stops):
+        return None
+    stops = []
+    for stop in color_stops:
+        location = _effect_value(stop, b"Lctn", -1)
+        color = _effect_rgb(stop.get(b"Clr "))
+        if color is None or not 0 <= location <= 4096 or _effect_value(stop, b"Mdpn", 50) != 50:
+            return None
+        stops.append({"position": location / 4096, "color": color})
+
+    stops.sort(key=lambda stop: stop["position"])
+    if _effect_value(effect, b"Rvrs", False):
+        stops = [{"position": 1 - stop["position"], "color": stop["color"]} for stop in reversed(stops)]
+    return {"angle": angle, "scale": scale / 100, "stops": stops}
+
+
+def _read_text_fill_overlay(payload: Optional[bytes]) -> Dict[str, Any]:
+    """读取作用于文字填充的 Photoshop 图层样式。"""
+    if not payload or not any(marker in payload for marker in (b"SoFi", b"GrFl", b"patternFill")):
+        return {}
+    try:
+        from psd_tools.psd.descriptor import Descriptor, DescriptorBlock2, List as DescriptorList
+
+        effects = DescriptorBlock2.frombytes(payload)
+    except Exception:
+        # 保留不依赖 psd-tools 的原始文字解析；无法读取样式时在导入清单中标明。
+        return {"unsupportedFillOverlay": "Could not read Photoshop text fill overlays"}
+    if not _effect_value(effects, b"masterFXSwitch", True):
+        return {}
+
+    fill_types = {b"SoFi": "Color Overlay", b"GrFl": "Gradient Overlay", b"patternFill": "Pattern Overlay"}
+    overlays = [
+        effect
+        for item in effects.values()
+        for effect in (item if isinstance(item, DescriptorList) else [item])
+        if isinstance(effect, Descriptor)
+        and effect.classID in fill_types
+        and _effect_value(effect, b"enab", False)
+        and _effect_value(effect, b"present", True)
+        and _effect_value(effect, b"Opct", 100) > 0
+    ]
+    if not overlays:
+        return {}
+    if len(overlays) != 1:
+        return {"unsupportedFillOverlay": "Multiple active Photoshop text fill overlays"}
+
+    overlay = overlays[0]
+    unsupported = {"unsupportedFillOverlay": f"Unsupported Photoshop text {fill_types[overlay.classID]}"}
+    if getattr(overlay.get(b"Md  "), "enum", b"Nrml") != b"Nrml" or _effect_value(overlay, b"Opct", 100) != 100:
+        return unsupported
+    if overlay.classID == b"SoFi":
+        color = _effect_rgb(overlay.get(b"Clr "))
+        if color:
+            return {"fillColor": {**color, "hex": _rgb_to_hex(color["r"], color["g"], color["b"])}}
+    if overlay.classID == b"GrFl":
+        try:
+            gradient = _read_linear_overlay(overlay)
+        except (AttributeError, TypeError, ValueError):
+            return unsupported
+        if gradient:
+            return {"fillGradient": gradient}
+    return unsupported
+
+
 def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]:
     """根据 TySh/lfx2 附加信息创建可编辑文字导入元数据。"""
     tysh_payload = tag_payloads.get("TySh")
@@ -1053,7 +1153,10 @@ def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]
     if font_size is None:
         warnings.append("text layer font size was not parsed")
 
-    effects_payload = tag_payloads.get("lfx2") or tag_payloads.get("lfx ")
+    effects_payload = next((tag_payloads[tag] for tag in ("lfx2", "lmfx", "lfxs", "lfx ") if tag_payloads.get(tag)), None)
+    fill_overlay = _read_text_fill_overlay(effects_payload)
+    if fill_overlay.get("unsupportedFillOverlay"):
+        warnings.append(fill_overlay["unsupportedFillOverlay"])
     has_multiline = "\n" in characters if characters else False
     line_height_mode = "PIXELS" if has_multiline and leading is not None and leading > 0.01 else "AUTO"
     return {
@@ -1068,6 +1171,7 @@ def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]
         "leading": leading,
         "lineHeightMode": line_height_mode,
         "fillColor": _extract_engine_color(engine_text, "FillColor"),
+        **fill_overlay,
         "textAlignHorizontal": alignment,
         "source": "TySh/EngineData",
         "effects": {
@@ -2316,7 +2420,7 @@ def _parse_layer_records(data: bytes) -> Tuple[Dict[str, int], List[Dict[str, ob
             pos += 12
             payload = data[pos:pos + tag_len]
             tags.append(key)
-            if key in ("TySh", "lfx2", "lfx ", "lyid", "SoLd", "PlLd", "PlcL"):
+            if key in ("TySh", "lfx2", "lmfx", "lfxs", "lfx ", "lyid", "SoLd", "PlLd", "PlcL"):
                 tag_payloads[key] = payload
             if key == "luni" and len(payload) >= 4:
                 char_count = struct.unpack(">I", payload[:4])[0]
@@ -2843,6 +2947,8 @@ def _generate_summary(
             entry["lineHeightMode"] = t.get("lineHeightMode")
             entry["textAlign"] = t.get("textAlignHorizontal")
             entry["fillColor"] = t.get("fillColor", {})
+            if t.get("fillGradient"):
+                entry["fillGradient"] = t["fillGradient"]
             stroke = t.get("effects", {}).get("stroke")
             entry["stroke"] = {
                 "enabled": stroke.get("enabled", False),

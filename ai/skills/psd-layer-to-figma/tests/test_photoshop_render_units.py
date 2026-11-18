@@ -74,6 +74,24 @@ class BuildManifestTest(unittest.TestCase):
         self.assertEqual(manifest["layers"][1]["textRole"], "ordinary")
         self.assertEqual(manifest["textCount"], 1)
 
+    def test_composite_text_keeps_editable_metadata_but_is_hidden_over_the_render(self) -> None:
+        source = _text_layer(30)
+        source["visible"] = True
+        source["sourceState"] = {"display": {"visible": True, "opacity": 0.75}}
+        self.base.write_text(json.dumps({"layers": [source]}), encoding="utf-8")
+        self.ps_result["units"][1]["compositeLayerId"] = 10
+        manifest = self.build()
+        image, text = manifest["layers"]
+        self.assertEqual((image["mode"], text["mode"], text["chars"]), ("image", "text", "Hello"))
+        self.assertFalse(text["visible"])
+        self.assertEqual(text["sourceState"]["display"], {"visible": False, "opacity": 0.75})
+
+        # If the paired image could not be exported, the editable text stays on the canvas.
+        self.ps_result["units"][0].pop("file")
+        [text] = self.build()["layers"]
+        self.assertTrue(text["visible"])
+        self.assertTrue(text["sourceState"]["display"]["visible"])
+
     def test_empty_units_are_skipped_and_reference_is_reported(self) -> None:
         manifest = self.build()
         self.assertEqual(manifest["imageCount"], 1)

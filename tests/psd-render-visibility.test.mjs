@@ -65,6 +65,36 @@ test('nested groups, clipping chains and hidden children keep the same saved pix
   assert.deepEqual(h.visibleLeaves(), ['a', 'text', 'base', 'clipped']);
 });
 
+test('atomic groups retain text affected by overlapping artwork and keep other editable text visible', () => {
+  const h = renderHarness();
+  const group = h.layer('CASH', h.doc, true, true);
+  group.info = { effects: true, blend: 'passThrough' };
+  const highlight = h.layer('highlight', group);
+  highlight.info = { blend: 'colorDodge', bounds: [0, 0, 20, 20] };
+  const title = h.layer('Cash', group);
+  title.kind = 'text';
+  const hiddenHighlight = h.layer('hidden highlight', group, false);
+  hiddenHighlight.info = { blend: 'multiply', bounds: [25, 25, 40, 40] };
+  const label = h.layer('untouched label', group);
+  label.kind = 'text';
+  label.info = { bounds: [25, 25, 40, 40] };
+  const hiddenGroup = h.layer('hidden group', group, false, true);
+  h.layer('hidden text', hiddenGroup).kind = 'text';
+  const lowerHighlight = h.layer('lower highlight', group);
+  lowerHighlight.info = { blend: 'screen', bounds: [25, 25, 40, 40] };
+  h.context.layerInfo = (layer) => ({ bounds: [0, 0, 20, 20], opacity: 255, blend: 'normal', ...layer.info });
+
+  h.context.walk(h.doc, null, 0, []);
+  const [groupUnit, cashUnit, labelUnit] = Array.from(h.context.units);
+  assert.deepEqual(Array.from(groupUnit.hideTexts, (item) => item.name), ['untouched label']);
+  assert.equal(cashUnit.compositeLayerId, group.id);
+  assert.equal(labelUnit.compositeLayerId, undefined);
+  assert.equal(h.context.units.length, 3);
+  h.render(groupUnit, 0);
+  assert.deepEqual(h.snapshots, [['highlight', 'Cash', 'lower highlight']]);
+  h.restore();
+});
+
 test('an unsuccessful PNG save still allows the next unit and final visibility restoration', () => {
   const h = renderHarness();
   const a = h.layer('a');

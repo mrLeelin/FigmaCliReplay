@@ -71,6 +71,9 @@ function fixture({ fontFailure = false } = {}) {
     "isOrdinaryTextLayer", "assertOrdinaryTextLayer", "normalizeManifest", "normalizeLayer",
     "applyNestedManifestCompatibility", "extractTextFontFallback", "normalizeTextStroke",
     "normalizeConstraint", "normalizeTextAlign", "solidPaintFromManifest", "applyLayerCommonState",
+    "createPsdTextFillPaint", "createPsdTextGradientPaint", "psdTextFillMatches", "closeNumber", "validateTextAgainstLayer",
+    "isValidPsdTextGradient", "psdTextFillAffected", "appendPsdMutationPreflightConflicts",
+    "applyPsdGeometryPlan", "applyPsdMutationPlans",
     "centerNodeOnLayer", "applyPsdTextShadow", "writeLayerMetadata", "capturePsdLayerMetadata",
     "createTextLayer", "createImageLayer", "createLayerNode", "importPsdJob",
     "appendPsdIncrementalRuntimeConflicts", "applyPsdTextPlan",
@@ -115,6 +118,68 @@ test("ordinary Unicode text imports without PNG bytes, stays automatic and keeps
   assert.equal(context.stats.text, 1);
   assert.deepEqual(calls, ["loadFont", "createText"]);
   assert.equal(root.children.length, 1);
+});
+
+test("PSD title gradient is written as native text and validated with the Photoshop layer bounds", async () => {
+  const { api, root, context } = fixture();
+  const gradient = { angle: 90, scale: 0.87, stops: [
+    { position: 0, color: { r: 248 / 255, g: 240 / 255, b: 85 / 255, a: 1 } },
+    { position: 1935 / 4096, color: { r: 248 / 255, g: 212 / 255, b: 85 / 255, a: 1 } },
+    { position: 1986 / 4096, color: { r: 1, g: 1, b: 1, a: 1 } },
+    { position: 1, color: { r: 1, g: 207 / 255, b: 41 / 255, a: 1 } },
+  ] };
+  const input = api.normalizeLayer(layer({ chars: "LEVEL UP!", fillGradient: gradient, w: 832, h: 167 }));
+  const node = await api.createLayerNode(root, input, context);
+
+  assert.equal(node.type, "TEXT");
+  assert.equal(node.fills[0].type, "GRADIENT_LINEAR");
+  assert.equal(node.fills[0].gradientStops[2].position, 1986 / 4096);
+  const [columnX, columnY, translation] = node.fills[0].gradientTransform[0];
+  assert.ok(Math.abs(columnX) < 1e-12);
+  assert.ok(Math.abs(columnY + node.height / (167 * 0.87)) < 1e-10);
+  assert.ok(Math.abs(0.5 * columnY + translation - 0.5) < 1e-10);
+  assert.equal(api.validateTextAgainstLayer(node, input).fillMismatch, false);
+  node.fills[0].gradientStops[2].color.g = 0;
+  assert.equal(api.validateTextAgainstLayer(node, input).fillMismatch, true);
+  assert.equal(incremental.diffPsdSourceStates(
+    { text: { fillColor: input.fillColor } },
+    { text: { fillColor: input.fillColor, fillGradient: gradient } },
+  ).changes[0]?.path, "text.fillGradient");
+});
+
+test("malformed PSD text gradient fails before the initial import creates any node", async () => {
+  const { api, root, calls } = fixture();
+  const input = layer({ fillGradient: { angle: 90, scale: 0, stops: [] } });
+  await assert.rejects(() => api.importPsdJob({ manifest: { layers: [input] } }, []), /Invalid PSD text gradient/);
+  assert.deepEqual(calls, []);
+  assert.equal(root.children.length, 0);
+});
+
+test("incremental rotation recomputes the PSD gradient and refuses to replace a user-edited fill", async () => {
+  const { api } = fixture();
+  const gradient = { angle: 90, scale: 0.87, stops: [
+    { position: 0, color: { r: 0, g: 0, b: 0, a: 1 } },
+    { position: 1, color: { r: 1, g: 1, b: 1, a: 1 } },
+  ] };
+  const node = { type: "TEXT", width: 80, height: 40, rotation: 0, fills: [] };
+  const source = { width: 100, height: 50 };
+  const text = { fillGradient: gradient };
+  node.fills = [api.createPsdTextFillPaint(text, node, source.width, source.height)];
+  const plan = {
+    target: { node }, nodeId: "1:1", layerId: "101",
+    baseline: { text, geometry: source }, incoming: { mode: "text", text, geometry: source },
+    categories: ["rotation"], changedPaths: ["geometry.rotation"], expectedGeometry: { rotation: 15 },
+  };
+  await api.applyPsdMutationPlans({ plans: [plan] });
+  assert.equal(node.rotation, 15);
+  assert.ok(Math.abs(node.fills[0].gradientTransform[0][0]) > 0.4);
+  assert.equal(api.psdTextFillMatches(node, text, source.width, source.height), true);
+
+  node.fills = [api.solidPaintFromManifest({ r: 0, g: 0, b: 1 }, 1)];
+  const diff = { conflicts: [] };
+  api.appendPsdMutationPreflightConflicts(diff, [plan], null);
+  assert.equal(diff.conflicts[0]?.kind, "unsafe-text-gradient-override");
+  assert.equal(node.fills[0].type, "SOLID");
 });
 
 test("mixed native text and decorative raster retain their respective node types", async () => {

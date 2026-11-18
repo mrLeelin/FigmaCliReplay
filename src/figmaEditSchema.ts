@@ -16,6 +16,11 @@ const unit = z.number().finite().min(0).max(1);
 const size = z.number().finite().min(0.01).max(100000);
 const coordinate = z.number().finite().min(-1000000).max(1000000);
 const spacing = z.number().finite().min(0).max(10000);
+const transformRow = z.array(coordinate).min(3).max(3);
+const gradientStop = z.object({
+  position: unit,
+  color: z.object({ r: unit, g: unit, b: unit, a: unit }).strict(),
+}).strict();
 const fontStyleFields = {
   fontFamily: z.string().trim().min(1).max(200).optional(),
   fontStyle: z.string().trim().min(1).max(100).optional(),
@@ -34,6 +39,17 @@ export const BINDABLE_FIELDS = [
 
 const editOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("setFill"), nodeId: nodeRef, color: hexColor, opacity: unit.optional() }).strict(),
+  z.object({
+    op: z.literal("setLinearGradientFill"), nodeId: nodeRef,
+    transform: z.array(transformRow).min(2).max(2),
+    stops: z.array(gradientStop).min(2).max(32),
+    opacity: unit.optional(),
+  }).strict(),
+  z.object({
+    op: z.literal("setImageFill"), nodeId: figmaNodeId,
+    assetId: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/, "invalid image asset ID"),
+    bounds: z.object({ x: coordinate, y: coordinate, width: size, height: size }).strict().optional(),
+  }).strict(),
   z.object({ op: z.literal("setStroke"), nodeId: nodeRef, color: hexColor, weight: z.number().finite().min(0).max(100).optional() }).strict(),
   z.object({ op: z.literal("setCornerRadius"), nodeId: nodeRef, radius: z.number().finite().min(0).max(10000) }).strict(),
   z.object({ op: z.literal("setOpacity"), nodeId: nodeRef, opacity: unit }).strict(),
@@ -89,7 +105,9 @@ export type FigmaEditOp = z.infer<typeof editOp>;
 /** 每种 op 实际写入的属性键，用于拒绝同批内对同一节点同一属性的重复修改。 */
 function touchedKeys(edit: FigmaEditOp): string[] {
   switch (edit.op) {
-    case "setFill": return ["fills"];
+    case "setFill": case "setLinearGradientFill": return ["fills"];
+    case "setImageFill":
+      return ["fills", "boundVariable:fills", ...(edit.bounds ? ["boundVariable:width", "boundVariable:height"] : [])];
     case "setStroke": return ["strokes", ...(edit.weight === undefined ? [] : ["strokeWeight"])];
     case "setCornerRadius": return ["cornerRadius"];
     case "setOpacity": return ["opacity"];
@@ -132,6 +150,15 @@ export const figmaApplyEditsJobSchema = z.object({
     }
     if (edit.op === "setLayoutSizing" && !edit.horizontal && !edit.vertical) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["edits", index], message: "setLayoutSizing requires horizontal or vertical" });
+    }
+    if (edit.op === "setLinearGradientFill") {
+      const [[a, b], [c, d]] = edit.transform;
+      if (Math.abs(a * d - b * c) < 1e-10) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["edits", index, "transform"], message: "gradient transform must be invertible" });
+      }
+      if (edit.stops.some((stop, stopIndex) => stopIndex > 0 && stop.position < edit.stops[stopIndex - 1].position)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["edits", index, "stops"], message: "gradient stops must be sorted by position" });
+      }
     }
     if ("nodeId" in edit) {
       for (const key of touchedKeys(edit)) {
@@ -176,6 +203,11 @@ export function validateFigmaEditJob(jobType: string, job: Record<string, unknow
   const data = parsed.data as Record<string, unknown>;
   const edits = Array.isArray(data.edits) ? data.edits as FigmaEditOp[] : [];
   const opCounts: Record<string, number> = {};
-  for (const edit of edits) opCounts[edit.op] = (opCounts[edit.op] || 0) + 1;
+  const imageAssetIds = new Set<string>();
+  for (const edit of edits) {
+    opCounts[edit.op] = (opCounts[edit.op] || 0) + 1;
+    if (edit.op === "setImageFill") imageAssetIds.add(edit.assetId);
+  }
+  if (imageAssetIds.size > 0) data.assets = Array.from(imageAssetIds, (id) => ({ id }));
   return { ok: true, job: data, editCount: edits.length, opCounts };
 }

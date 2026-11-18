@@ -123,7 +123,7 @@ var PSD_SOURCE_FIELD_DESCRIPTORS = [
   ["text.fontFallback", "textStyle"], ["text.fontSize", "textStyle"],
   ["text.effectiveFontSize", "textStyle"], ["text.leading", "textStyle"],
   ["text.lineHeightMode", "textStyle"], ["text.textAlignHorizontal", "textStyle"],
-  ["text.fillColor", "textStyle"], ["text.stroke", "textStyle"],
+  ["text.fillColor", "textStyle"], ["text.fillGradient", "textStyle"], ["text.stroke", "textStyle"],
   ["text.dropShadow", "textStyle"],
   ["nineSlice", "nineSlice"],
 ];
@@ -166,7 +166,7 @@ function psdValuesEqualWithinTolerance(left, right, tolerance) {
 
 function psdValuesEqualForPath(path, before, after) {
   var tolerance = psdNumericToleranceForPath(path);
-  if (path === "text.fillColor" || path === "text.stroke" || path === "text.dropShadow") {
+  if (path === "text.fillColor" || path === "text.fillGradient" || path === "text.stroke" || path === "text.dropShadow") {
     tolerance = 0.001;
   }
   return tolerance > 0 && psdValuesEqualWithinTolerance(before, after, tolerance);

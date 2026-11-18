@@ -638,10 +638,22 @@ function runPythonScript(task: PsdImportTask, scriptPath: string, args: string[]
       if (code === 0) {
         resolve(out);
       } else {
-        reject(new Error(`${path.basename(scriptPath)} exited with code ${code}${err ? `: ${trimText(err, 1000)}` : ""}`));
+        const detail = pythonFailureDetail(out, err);
+        reject(new Error(`${path.basename(scriptPath)} exited with code ${code}${detail ? `: ${trimText(detail, 1000)}` : ""}`));
       }
     });
   });
+}
+
+function pythonFailureDetail(stdout: string, stderr: string): string | undefined {
+  const failure = stdout.split(/\r?\n/).reverse()
+    .map((line) => line.trim().match(/^\[FAIL\]\s+(.+)$/)?.[1])
+    .find(Boolean);
+  if (failure) return failure;
+
+  // Python forwards structured diagnostics from both its own logger and the Relay CLI.
+  return stderr.split(/\r?\n/).reverse().map((line) => line.trim())
+    .find((line) => line && !line.startsWith(PYTHON_LOG_MARKER) && !/^\{"level":\d+,"time":/.test(line));
 }
 
 function startTaskOperation(task: PsdImportTask, name: string, message: string): void {

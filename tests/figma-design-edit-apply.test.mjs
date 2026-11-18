@@ -5,6 +5,117 @@ import { designEditApplyEdits, designEditRollback } from "../code/10_design_edit
 
 const MIXED = Symbol("mixed");
 
+test("a linear gradient replaces only the fill of an existing editable text node", async () => {
+  const title = text("1:2", new Set());
+  const target = page(title);
+  const transform = [[0, -1, 1], [1, 0, 0]];
+  const stops = [
+    { position: 0, color: { r: 1, g: 1, b: 0, a: 1 } },
+    { position: 1, color: { r: 1, g: 0.5, b: 0, a: 1 } },
+  ];
+  const edit = { op: "setLinearGradientFill", nodeId: title.id, transform, stops };
+  const api = runtime([target]);
+  const preview = await designEditApplyEdits({ edits: [edit], dryRun: true }, api);
+  assert.equal(preview.allPass, true);
+  assert.equal(title.fills[0].type, "SOLID");
+  const result = await designEditApplyEdits({ edits: [edit] }, api);
+  assert.equal(result.allPass, true);
+  assert.deepEqual(title.fills, [{
+    type: "GRADIENT_LINEAR", gradientTransform: transform, gradientStops: stops, opacity: 1, visible: true,
+  }]);
+  assert.equal(title.type, "TEXT");
+  assert.equal(title.characters, "旧文字");
+  assert.equal(title.parent.id, target.id);
+  assert.deepEqual(result.edits[0].after.fills[0].stops, [
+    { position: 0, color: "#FFFF00", opacity: 1 },
+    { position: 1, color: "#FF8000", opacity: 1 },
+  ]);
+});
+
+test("an image asset replaces a rectangle fill and updates its bounds in place", async () => {
+  const imageBytes = Uint8Array.of(137, 80, 78, 71);
+  const original = { type: "IMAGE", scaleMode: "FILL", imageHash: "old-image", visible: true };
+  const rectangle = frame("1:2", { type: "RECTANGLE", fills: [original], name: "CASH", strokes: [{ type: "SOLID" }] });
+  const label = text("1:3", new Set());
+  const target = page(frame("1:1", { children: [rectangle, label] }));
+  const parent = target.children[0];
+  rectangle.parent = label.parent = parent;
+  const api = runtime([target]);
+  let imageCreates = 0;
+  api.getImageBytes = (id) => id === "cash" ? imageBytes : undefined;
+  api.createImage = (bytes) => {
+    assert.equal(bytes, imageBytes);
+    imageCreates += 1;
+    return { hash: "source-image" };
+  };
+  const bounds = { x: 1230, y: 238, width: 447, height: 201 };
+  const edits = [
+    { op: "setImageFill", nodeId: rectangle.id, assetId: "cash", bounds },
+    { op: "setVisible", nodeId: label.id, visible: false },
+  ];
+  assert.equal((await designEditApplyEdits({ edits, dryRun: true }, api)).allPass, true);
+  assert.equal(imageCreates, 0);
+  assert.equal(rectangle.fills[0], original);
+  assert.equal(label.visible, true);
+
+  const result = await designEditApplyEdits({ edits }, api);
+  assert.equal(result.allPass, true);
+  assert.equal(imageCreates, 1);
+  assert.deepEqual(result.edits[0].after.bounds, bounds);
+  assert.equal(result.edits[0].after.imageHash, "source-image");
+  assert.equal(rectangle.name, "CASH");
+  assert.deepEqual(rectangle.strokes, [{ type: "SOLID" }]);
+  assert.equal(rectangle.fills[0].imageHash, "source-image");
+  assert.equal(rectangle.parent, parent);
+  assert.equal(label.visible, false);
+  assert.equal(label.characters, "旧文字");
+
+  assert.equal((await designEditApplyEdits({ edits: [{ ...edits[0], assetId: "missing" }] }, api)).status, "blocked");
+  assert.equal((await designEditApplyEdits({ edits: [{ ...edits[0], nodeId: label.id }] }, api)).status, "blocked");
+  assert.equal(imageCreates, 1);
+});
+
+test("a failure after applying an image restores the previous rectangle bounds and fill", async () => {
+  const original = { type: "IMAGE", scaleMode: "FILL", imageHash: "old-image" };
+  const rectangle = frame("1:2", { type: "RECTANGLE", fills: [original], x: 12, y: 34 });
+  const label = text("1:3", new Set());
+  Object.defineProperty(label, "visible", {
+    get: () => true,
+    set() { throw new Error("failed to hide text"); },
+  });
+  const api = runtime([page(rectangle, label)]);
+  api.getImageBytes = () => Uint8Array.of(1);
+  api.createImage = () => ({ hash: "source-image" });
+  const result = await designEditApplyEdits({
+    edits: [
+      { op: "setImageFill", nodeId: rectangle.id, assetId: "cash", bounds: { x: 5, y: 6, width: 7, height: 8 } },
+      { op: "setVisible", nodeId: label.id, visible: false },
+    ],
+  }, api);
+  assert.equal(result.status, "error");
+  assert.equal(result.rollback.pass, true);
+  assert.deepEqual(rectangle.fills, [original]);
+  assert.deepEqual([rectangle.x, rectangle.y, rectangle.width, rectangle.height], [12, 34, 100, 50]);
+});
+
+test("an undecodable image blocks the batch before any rectangle or text mutation", async () => {
+  const rectangle = frame("1:2", { type: "RECTANGLE" });
+  const label = text("1:3", new Set());
+  const api = runtime([page(rectangle, label)]);
+  api.getImageBytes = () => Uint8Array.of(1);
+  api.createImage = () => { throw new Error("invalid image bytes"); };
+  const result = await designEditApplyEdits({
+    edits: [
+      { op: "setVisible", nodeId: label.id, visible: false },
+      { op: "setImageFill", nodeId: rectangle.id, assetId: "cash" },
+    ],
+  }, api);
+  assert.equal(result.status, "blocked");
+  assert.match(result.errors[0], /invalid image bytes/);
+  assert.equal(label.visible, true);
+  assert.equal(rectangle.fills[0].type, "SOLID");
+});
+
 function page(...children) {
   const node = { id: "0:1", type: "PAGE", name: "Page", children: [], parent: null };
   for (const child of children) adopt(node, child);

@@ -241,6 +241,7 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
     local_fonts = _figma_local_fonts() if font_runs else {}
 
     layers: List[Dict[str, Any]] = []
+    rendered_image_ids = set()
     warnings: List[str] = list(ps.get("errors", []))
     for unit in ps["units"]:
         layer_id = int(unit["layerId"])
@@ -255,6 +256,13 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
             # 普通原生文字：插件按自动宽高 + 自动行高创建，导入后由 align_psd_text_to_reference 按
             # Photoshop 合成图校正位置；旧式固定尺寸文字会被导入验收记为裁切风险而判定失败。
             entry["textRole"] = "ordinary"
+            if unit.get("compositeLayerId") in rendered_image_ids:
+                entry["visible"] = False
+                source_state = entry.get("sourceState")
+                if isinstance(source_state, dict):
+                    display = dict(source_state.get("display") or {})
+                    display["visible"] = False
+                    entry["sourceState"] = {**source_state, "display": display}
             if layer_id in font_runs:
                 _attach_font_runs(entry, font_runs[layer_id], local_fonts, warnings)
             layers.append(entry)
@@ -285,6 +293,7 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
         entry = _image_entry(unit, png, x, y, w, h, constraints)
         entry["path"] = png.as_posix()
         layers.append(entry)
+        rendered_image_ids.add(layer_id)
 
     for index, layer in enumerate(layers, start=1):
         layer["idx"] = index

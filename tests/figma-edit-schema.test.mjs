@@ -56,6 +56,34 @@ test("value formats and ranges are enforced", () => {
   rejected({ edits: [{ op: "setText", nodeId: "1:2", characters: "x".repeat(5001) }] }, /edits\.0\.characters/);
 });
 
+test("linear gradients require an invertible transform and ordered bounded stops", () => {
+  const edit = {
+    op: "setLinearGradientFill",
+    nodeId: "1:2",
+    transform: [[0, -1, 1], [1, 0, 0]],
+    stops: [
+      { position: 0, color: { r: 1, g: 1, b: 0, a: 1 } },
+      { position: 1, color: { r: 1, g: 0.5, b: 0, a: 1 } },
+    ],
+  };
+  assert.equal(apply({ edits: [edit] }).ok, true);
+  rejected({ edits: [{ ...edit, transform: [[1, 1, 0], [1, 1, 1]] }] }, /gradient transform must be invertible/);
+  rejected({ edits: [{ ...edit, stops: [...edit.stops].reverse() }] }, /gradient stops must be sorted/);
+  rejected({ edits: [edit, { op: "setFill", nodeId: edit.nodeId, color: "#FFFFFF" }] }, /fills of 1:2 is already changed/);
+});
+
+test("image edits derive their registered assets and reject conflicting fills", () => {
+  const edit = { op: "setImageFill", nodeId: "1:2", assetId: "cash", bounds: { x: 1230, y: 238, width: 447, height: 201 } };
+  const result = apply({ edits: [edit, { ...edit, nodeId: "1:3" }] });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.job.assets, [{ id: "cash" }]);
+  rejected({ edits: [{ ...edit, assetId: "../cash.png" }] }, /invalid image asset ID/);
+  rejected({ edits: [{ ...edit, nodeId: "temp:cash" }] }, /invalid Figma node id/);
+  rejected({ edits: [{ ...edit, bounds: { ...edit.bounds, width: 0 } }] }, /bounds\.width/);
+  rejected({ edits: [edit, { op: "setFill", nodeId: edit.nodeId, color: "#FFFFFF" }] }, /fills of 1:2 is already changed/);
+  rejected({ edits: [edit, { op: "bindVariable", nodeId: edit.nodeId, field: "fills", variableId: "VariableID:1:2" }] }, /boundVariable:fills of 1:2 is already changed/);
+});
+
 test("batch size limits are enforced", () => {
   rejected({ edits: [] }, /edits/);
   const tooMany = Array.from({ length: MAX_EDITS_PER_BATCH + 1 }, (_, index) => ({ op: "setOpacity", nodeId: `1:${index + 1}`, opacity: 1 }));

@@ -48,6 +48,7 @@ class RenderUnit:
     clip: Rect
     native_text: bool = False
     hide_texts: Tuple[int, ...] = ()
+    composite_group_id: Optional[int] = None
 
 
 def _intersection(a: Rect, b: Rect) -> Optional[Rect]:
@@ -76,6 +77,23 @@ def _native_texts(layer: Layer) -> Iterator[Layer]:
                 yield from _native_texts(child)
     elif layer.kind == "type" and not layer.clipping and not layer.has_clip_layers(visible=True):
         yield layer
+
+
+def _has_blended_artwork_above(text: Layer, group: Layer, clip: Rect) -> bool:
+    """Check for artwork that blends with the text inside the atomic group."""
+    text_area = _intersection(text.bbox, clip)
+    if text_area is None:
+        return False
+    branch = text
+    while branch is not group:
+        parent = branch.parent
+        for sibling in parent[parent.index(branch) + 1:]:
+            if (sibling.is_visible() and sibling.opacity > 0 and not sibling.clipping
+                    and sibling.blend_mode not in (BlendMode.NORMAL, BlendMode.PASS_THROUGH)
+                    and _intersection(sibling.bbox, text_area) is not None):
+                return True
+        branch = parent
+    return False
 
 
 def _text_ancestor_opacity(layer: Layer, warnings: List[str]) -> float:
@@ -125,19 +143,19 @@ def collect_units(psd: PSDImage, warnings: List[str]) -> List[RenderUnit]:
                 continue
             native_text = layer.kind == "type" and not clipped
             texts = list(_native_texts(layer)) if layer.is_group() else []
+            composited_text_ids = {id(text) for text in texts if _has_blended_artwork_above(text, layer, layer_clip)}
             units.append(RenderUnit(layer, ids[id(layer)], chain_ids, unit_path, layer_clip,
                                     native_text=native_text,
-                                    hide_texts=tuple(id(text) for text in texts)))
+                                    hide_texts=tuple(id(text) for text in texts if id(text) not in composited_text_ids)))
             for text in texts:
-                # Native text is kept directly above the composited group image,
-                # matching the Photoshop renderer's existing import contract.
                 text_path = [str(text.name)]
                 parent = text.parent
                 while parent is not None and parent is not layer:
                     text_path.insert(0, str(parent.name))
                     parent = getattr(parent, "parent", None)
                 units.append(RenderUnit(text, ids[id(text)], [ids[id(text)]],
-                                        unit_path + text_path, layer_clip, native_text=True))
+                                        unit_path + text_path, layer_clip, native_text=True,
+                                        composite_group_id=ids[id(layer)] if id(text) in composited_text_ids else None))
 
     walk(psd, canvas, [])
     return units
@@ -187,6 +205,7 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path] 
     font_runs = _psd_font_runs(psd_path, text_ids)
     fonts = _figma_local_fonts() if font_runs else {}
     layers: List[Dict[str, Any]] = []
+    rendered_image_ids: set[int] = set()
     logger = logging.getLogger("psd_tools")
     collector = _WarningCollector(warnings)
     logger.addHandler(collector)
@@ -200,12 +219,17 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path] 
                 entry.pop("idx", None)
                 entry["textRole"] = "ordinary"
                 entry["renderSource"] = "psd-tools"
-                ancestor_opacity = _text_ancestor_opacity(unit.layer, warnings)
-                if ancestor_opacity != 1.0:
-                    entry["opacity"] = round(float(entry.get("opacity", 255)) * ancestor_opacity)
-                    display = (entry.get("sourceState") or {}).get("display")
+                display = (entry.get("sourceState") or {}).get("display")
+                if unit.composite_group_id in rendered_image_ids:
+                    entry["visible"] = False
                     if display is not None:
-                        display["opacity"] = float(display.get("opacity", 1.0)) * ancestor_opacity
+                        display["visible"] = False
+                else:
+                    ancestor_opacity = _text_ancestor_opacity(unit.layer, warnings)
+                    if ancestor_opacity != 1.0:
+                        entry["opacity"] = round(float(entry.get("opacity", 255)) * ancestor_opacity)
+                        if display is not None:
+                            display["opacity"] = float(display.get("opacity", 1.0)) * ancestor_opacity
                 if unit.layer_id in font_runs:
                     _attach_font_runs(entry, font_runs[unit.layer_id], fonts, warnings)
                 layers.append(entry)
@@ -240,6 +264,8 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path] 
                 rendered.close()
             if max(w, h) > FIGMA_IMAGE_LIMIT:
                 warnings.append(f"{unit.layer.name}: {w}x{h} exceeds Figma's {FIGMA_IMAGE_LIMIT}px image limit")
+            else:
+                rendered_image_ids.add(unit.layer_id)
             constraints = (source or {}).get("constraints") or _infer_constraints(
                 float(x), float(y), float(w), float(h), float(psd.width), float(psd.height))
             entry = _image_entry({"name": str(unit.layer.name), "layerId": unit.layer_id,

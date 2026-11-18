@@ -182,6 +182,37 @@ class PsdToolsRenderTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "editable text metadata is missing"):
             self.build(patch_open=True)
 
+    def test_color_dodge_text_is_baked_with_a_hidden_editable_copy(self):
+        group = self.group("CASH", opacity=240)
+        texts = []
+        for name, left in (("Cash", 4), ("Keep", 15)):
+            pixels = self.pixel(name, group, color=(255, 166, 25, 255), left=left)
+            text = TypeLayer(group, pixels._record, pixels._channels)
+            group._layers[group.index(pixels)] = text
+            texts.append(text)
+            self.base_layers.append({
+                "name": name, "layerId": text.layer_id, "mode": "text", "chars": name,
+                "x": left, "y": 3, "w": 8, "h": 8, "visible": True,
+                "sourceState": {"display": {"visible": True, "opacity": 1.0}},
+            })
+        highlight = self.pixel("highlight", group, color=(244, 162, 70, 255))
+        highlight.blend_mode = BlendMode.COLOR_DODGE
+        hidden = self.pixel("hidden highlight", group, left=15)
+        hidden.blend_mode = BlendMode.COLOR_DODGE
+        hidden.visible = False
+
+        result = self.build(patch_open=True)
+        cash, keep = result["textLayers"]
+        self.assertEqual(cash["chars"], "Cash")
+        self.assertEqual(cash["layerId"], texts[0].layer_id)
+        self.assertFalse(cash["visible"])
+        self.assertFalse(cash["sourceState"]["display"]["visible"])
+        self.assertTrue(keep["visible"])
+        self.assertTrue(keep["sourceState"]["display"]["visible"])
+        with group.composite(viewport=(4, 3, 12, 11), force=True, color=1.0, alpha=0.0) as reference, \
+                self.image(result["imageLayers"][0]) as image:
+            self.assertEqual(image.getpixel((2, 2)), reference.getpixel((2, 2)))
+
     def test_adjustments_keep_their_group_atomic_and_root_adjustments_warn(self):
         group = self.group("adjusted")
         self.pixel("red", group)

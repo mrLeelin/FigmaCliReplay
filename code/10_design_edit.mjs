@@ -13,11 +13,25 @@ export function designEditRgbToHex(color) {
   return "#" + channel(color && color.r) + channel(color && color.g) + channel(color && color.b);
 }
 
-/** 只展开 SOLID；其他 paint 类型只报告 type，避免返回渐变/图片的大载荷。 */
+/** 报告纯色与有界的线性渐变参数，图片只暴露类型和显隐。 */
 export function designEditSummarizePaints(paints, mixed) {
   if (paints === mixed) return "mixed";
   if (!Array.isArray(paints)) return undefined;
   return paints.map((paint) => {
+    if (paint?.type === "GRADIENT_LINEAR" && Array.isArray(paint.gradientTransform) && Array.isArray(paint.gradientStops)) {
+      return {
+        type: paint.type,
+        transform: paint.gradientTransform.map((row) => row.map((value) => designEditRound(value, 6))),
+        stops: paint.gradientStops.slice(0, 32).map((stop) => ({
+          position: designEditRound(stop.position, 6),
+          color: designEditRgbToHex(stop.color),
+          opacity: designEditRound(stop.color.a, 3),
+        })),
+        stopCount: paint.gradientStops.length,
+        opacity: designEditRound(paint.opacity ?? 1, 3),
+        visible: paint.visible !== false,
+      };
+    }
     if (!paint || paint.type !== "SOLID") return { type: paint && paint.type ? String(paint.type) : "UNKNOWN", visible: paint ? paint.visible !== false : false };
     return {
       type: "SOLID",
@@ -135,6 +149,7 @@ export function designEditDescribeNode(node, options) {
     y: designEditRound(node.y),
     width: designEditRound(node.width),
     height: designEditRound(node.height),
+    rotation: designEditRound(node.rotation, 6),
     visible: node.visible !== false,
     opacity: designEditRound(node.opacity === undefined ? 1 : node.opacity, 3),
   };
@@ -226,7 +241,7 @@ export async function designEditInspectNodes(job, getNodeById, mixed, getMainCom
 // runtime 注入：getNodeById、loadFont、getMainComponent、getVariableById、createFrame、createText、bindPaint、mixed、log。
 
 export const DESIGN_EDIT_SUPPORTED_OPS = [
-  "setFill", "setStroke", "setCornerRadius", "setOpacity", "setVisible", "rename",
+  "setFill", "setLinearGradientFill", "setImageFill", "setStroke", "setCornerRadius", "setOpacity", "setVisible", "rename",
   "setText", "setTextStyle", "setAutoLayout", "setLayoutSizing",
   "createFrame", "createText", "createInstance", "setInstanceProperties", "bindVariable",
 ];
@@ -258,7 +273,7 @@ const DESIGN_EDIT_COMPONENT_PROPERTY_PREFIX = "componentProperty:";
 /** 每种 op 会改动的节点属性；快照与回滚只处理这些键（尺寸与位置另由 geometry 记录）。 */
 function designEditPropertyKeys(edit) {
   switch (edit.op) {
-    case "setFill": return ["fills"];
+    case "setFill": case "setLinearGradientFill": case "setImageFill": return ["fills"];
     case "setStroke": return edit.weight === undefined ? ["strokes"] : ["strokes", "strokeWeight"];
     case "setCornerRadius": return ["cornerRadius"];
     case "setOpacity": return ["opacity"];
@@ -304,6 +319,14 @@ function designEditHexToRgb(hex) {
 
 function designEditSolidPaint(color, opacity) {
   return [{ type: "SOLID", color: designEditHexToRgb(color), opacity: opacity === undefined ? 1 : opacity, visible: true }];
+}
+
+function designEditFillPaint(edit) {
+  if (edit.op === "setFill") return designEditSolidPaint(edit.color, edit.opacity);
+  return [{
+    type: "GRADIENT_LINEAR", gradientTransform: edit.transform, gradientStops: edit.stops,
+    opacity: edit.opacity ?? 1, visible: true,
+  }];
 }
 
 /** 深拷贝 Figma 属性值；Paint 数组、fontName、lineHeight 等都是可 JSON 化的普通对象。figma.mixed 等 symbol 原样保留。 */
@@ -523,10 +546,30 @@ async function designEditSimulateProperty(edit, index, ctx, step) {
   const get = (key) => designEditViewGet(view, key);
   const set = (key, value) => view.values.set(key, value);
   switch (edit.op) {
-    case "setFill":
+    case "setFill": case "setLinearGradientFill":
       if (!designEditViewHas(view, "fills")) return view.type + " does not support fills";
-      set("fills", designEditSolidPaint(edit.color, edit.opacity));
+      set("fills", designEditFillPaint(edit));
       return null;
+    case "setImageFill": {
+      if (view.type !== "RECTANGLE" || view.created || view.insideInstance) return "setImageFill requires an existing RECTANGLE outside an instance";
+      const bytes = ctx.runtime.getImageBytes?.(edit.assetId);
+      if (!bytes?.byteLength) return "image asset missing or empty: " + edit.assetId;
+      if (edit.bounds) {
+        const parent = designEditParentView(ctx.sim, view);
+        const layout = parent && designEditViewGet(parent, "layoutMode");
+        if (parent?.type === "GROUP" || (layout && layout !== "NONE" && get("layoutPositioning") !== "ABSOLUTE")) {
+          return "image bounds require a free-positioned rectangle outside a GROUP";
+        }
+        if (designEditBoundId(view.node, "width") || designEditBoundId(view.node, "height")) {
+          return "image bounds cannot replace width or height bound to a variable";
+        }
+        if (typeof view.node.resize !== "function") return "rectangle does not support resizing";
+        for (const [key, value] of Object.entries(edit.bounds)) set(key, value);
+      }
+      step.imageBytes = bytes;
+      set("fills", [{ type: "IMAGE" }]);
+      return null;
+    }
     case "setStroke":
       if (!designEditViewHas(view, "strokes") || DESIGN_EDIT_STROKE_TYPES_EXCLUDED.has(view.type)) return view.type + " does not support strokes";
       set("strokes", designEditSolidPaint(edit.color, 1));
@@ -695,7 +738,18 @@ function designEditBindPaint(node, field, variable, runtime) {
 function designEditApplyOne(step, node, runtime) {
   const edit = step.edit;
   switch (edit.op) {
-    case "setFill": node.fills = designEditSolidPaint(edit.color, edit.opacity); return;
+    case "setFill": case "setLinearGradientFill": node.fills = designEditFillPaint(edit); return;
+    case "setImageFill": {
+      if (edit.bounds) {
+        designEditResize(node, edit.bounds.width, edit.bounds.height);
+        node.x = edit.bounds.x;
+        node.y = edit.bounds.y;
+        if (!designEditBoundsMatch(node, edit.bounds)) throw new Error("image rectangle bounds did not apply");
+      }
+      node.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: step.imageHash, opacity: 1, visible: true }];
+      if (node.fills.length !== 1 || node.fills[0].imageHash !== step.imageHash) throw new Error("image fill did not apply");
+      return;
+    }
     case "setStroke":
       node.strokes = designEditSolidPaint(edit.color, 1);
       if (edit.weight !== undefined) node.strokeWeight = edit.weight;
@@ -731,16 +785,25 @@ function designEditApplyOne(step, node, runtime) {
 // ─── 快照与回滚 ───
 // 回滚表只登记已有节点；新建节点记在 state.created，回滚时直接删除。
 
+function designEditBounds(node) {
+  return { x: node.x, y: node.y, width: node.width, height: node.height };
+}
+
+function designEditBoundsMatch(node, bounds) {
+  return Object.entries(bounds).every(([key, value]) => Math.abs(node[key] - value) <= 0.001);
+}
+
 function designEditSnapshotFor(node) {
   return {
     node, values: new Map(), bindings: new Map(),
-    geometry: { x: node.x, y: node.y, width: node.width, height: node.height }, children: null,
+    geometry: designEditBounds(node), children: null,
   };
 }
 
 /** 记录单条 edit 将改动的键在执行前的原值、数值变量绑定，以及 auto layout 可能挪动的子节点几何。 */
 function designEditCaptureSnapshot(node, edit) {
   const snapshot = designEditSnapshotFor(node);
+  snapshot.verifyGeometry = edit.op === "setImageFill" && Boolean(edit.bounds);
   for (const key of designEditPropertyKeys(edit)) {
     if (designEditHasKey(node, key)) snapshot.values.set(key, designEditCloneValue(designEditReadKey(node, key)));
   }
@@ -762,6 +825,7 @@ function designEditMergeSnapshot(entries, snapshot) {
   for (const [key, value] of snapshot.values) if (!existing.values.has(key)) existing.values.set(key, value);
   for (const [key, value] of snapshot.bindings) if (!existing.bindings.has(key)) existing.bindings.set(key, value);
   if (!existing.children && snapshot.children) existing.children = snapshot.children;
+  if (snapshot.verifyGeometry) existing.verifyGeometry = true;
 }
 
 /** 失败那条可能已写入部分属性：只保留实际发生变化的键，避免回滚时重写刚被 Figma 拒绝的属性。 */
@@ -853,6 +917,7 @@ export async function designEditRollback(state, runtime) {
   }
   for (const node of created) if (!node.removed) mismatches.push({ nodeId: node.id, key: "removed" });
   for (const entry of ordered) {
+    if (entry.verifyGeometry && !designEditBoundsMatch(entry.node, entry.geometry)) mismatches.push({ nodeId: entry.node.id, key: "geometry" });
     for (const [key, expected] of entry.values) {
       if (expected !== mixed && !designEditSameValue(designEditReadKey(entry.node, key), expected)) mismatches.push({ nodeId: entry.node.id, key });
     }
@@ -887,6 +952,10 @@ function designEditDescribeStep(step, node, mixed, phase) {
     const values = {};
     for (const key of designEditPropertyKeys(edit)) if (designEditHasKey(node, key)) values[key] = designEditBriefValue(key, designEditReadKey(node, key), mixed);
     if (edit.op === "bindVariable") values["binding:" + edit.field] = designEditBoundId(node, edit.field) || (edit.field === "fills" || edit.field === "strokes" ? designEditPaintBinding(node, edit.field) : null);
+    if (edit.op === "setImageFill") {
+      if (edit.bounds) values.bounds = designEditBounds(node);
+      if (Array.isArray(node.fills) && node.fills[0]?.type === "IMAGE") values.imageHash = node.fills[0].imageHash;
+    }
     item[phase] = values;
   }
   return item;
@@ -935,6 +1004,24 @@ export async function designEditApplyEdits(job, runtime) {
       status: "completed", allPass: true, dryRun: true, applied: 0, edits: preview, blockingErrors: [], errors: [],
       summary: { editCount: edits.length, applied: 0, created: 0, blocking: 0, dryRun: true },
     };
+  }
+
+  const imageHashes = new Map();
+  for (const step of steps) {
+    if (!step.imageBytes) continue;
+    const { assetId, nodeId, op } = step.edit;
+    try {
+      if (!imageHashes.has(assetId)) {
+        const image = runtime.createImage(step.imageBytes);
+        if (!image?.hash) throw new Error("image registration returned no hash");
+        imageHashes.set(assetId, image.hash);
+      }
+      step.imageHash = imageHashes.get(assetId);
+    } catch (error) {
+      return designEditBlockedResult("blocked", false, preview, [
+        { index: step.index, op, nodeId, message: "cannot load image " + assetId + ": " + designEditErrorMessage(error) },
+      ], edits.length);
+    }
   }
 
   // 2. 逐条应用。已有节点：执行前快照，成功后并入回滚表；新建节点：登记到 created。任一失败即回滚。
@@ -1003,6 +1090,7 @@ async function handleFigmaApplyEdits(message) {
   });
   let result;
   try {
+    const assetBytes = buildAssetBytesMap(message.assets);
     result = await designEditApplyEdits(job, {
       getNodeById: (id) => figma.getNodeByIdAsync(id).catch(() => null),
       loadFont: (font) => figma.loadFontAsync(font),
@@ -1010,6 +1098,8 @@ async function handleFigmaApplyEdits(message) {
       getVariableById: (id) => figma.variables.getVariableByIdAsync(id).catch(() => null),
       createFrame: () => figma.createFrame(),
       createText: () => figma.createText(),
+      getImageBytes: (id) => assetBytes.get(id),
+      createImage: (bytes) => figma.createImage(bytes),
       bindPaint: (paint, field, variable) => figma.variables.setBoundVariableForPaint(paint, field, variable),
       mixed: figma.mixed,
       log: (stage, data) => operation.step(stage, "设计编辑 " + stage, data),

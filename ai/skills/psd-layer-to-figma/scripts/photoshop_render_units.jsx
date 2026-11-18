@@ -95,11 +95,28 @@ function isText(layer) {
   return layer.typename === 'ArtLayer' && layer.kind === LayerKind.TEXT;
 }
 
-function collectTexts(layer, out) {
-  if (layer.typename === 'LayerSet') {
-    for (var i = 0; i < layer.layers.length; i++) collectTexts(layer.layers[i], out);
-  } else if (isText(layer) && layer.visible) {
-    out.push(layer);
+function collectTexts(group, out, ancestorBlendBounds) {
+  var blendBounds = ancestorBlendBounds.slice(0);
+  for (var i = 0; i < group.layers.length; i++) {
+    var child = group.layers[i];
+    if (!child.visible) continue;
+    var info = layerInfo(child);
+    if (child.typename === 'LayerSet') {
+      collectTexts(child, out, blendBounds);
+    } else if (isText(child)) {
+      var composited = false;
+      for (var b = 0; info.bounds && b < blendBounds.length; b++) {
+        if (intersect(info.bounds, blendBounds[b])) {
+          composited = true;
+          break;
+        }
+      }
+      out.push({ layer: child, composited: composited });
+    }
+    // A non-normal layer uses the pixels beneath it when Photoshop computes the blend.
+    if (info.bounds && info.blend !== 'normal' && info.blend !== 'passThrough') {
+      blendBounds.push(info.bounds);
+    }
   }
 }
 
@@ -139,12 +156,17 @@ function walk(container, clipRect, depth, path) {
         continue;
       }
       var texts = [];
-      collectTexts(layer, texts);
+      collectTexts(layer, texts, []);
+      var hideTexts = [];
       units.push({ kind: 'image', layers: chain, layerId: layer.id, name: name, path: unitPath,
-        clip: clipRect, blend: info.blend, hideTexts: texts, group: true });
+        clip: clipRect, blend: info.blend, hideTexts: hideTexts, group: true });
       for (var t = 0; t < texts.length; t++) {
-        units.push({ kind: 'text', layers: [texts[t]], layerId: texts[t].id, name: texts[t].name,
-          path: unitPath.concat([texts[t].name]), clip: clipRect, blend: 'normal', hideTexts: [] });
+        var text = texts[t].layer;
+        var textUnit = { kind: 'text', layers: [text], layerId: text.id, name: text.name,
+          path: unitPath.concat([text.name]), clip: clipRect, blend: 'normal', hideTexts: [] };
+        if (texts[t].composited) textUnit.compositeLayerId = layer.id;
+        else hideTexts.push(text);
+        units.push(textUnit);
       }
       continue;
     }
@@ -376,6 +398,7 @@ function main() {
       if (CONFIG.onlyOrders && !containsOrder(CONFIG.onlyOrders, i)) continue;
       var entry = { order: i, kind: unit.kind, layerId: unit.layerId, name: unit.name, path: unit.path,
         clip: unit.clip, blend: unit.blend, group: !!unit.group, layerIds: [] };
+      if (unit.compositeLayerId !== undefined) entry.compositeLayerId = unit.compositeLayerId;
       for (var k = 0; k < unit.layers.length; k++) entry.layerIds.push(unit.layers[k].id);
       if (unit.kind === 'image') {
         try {
