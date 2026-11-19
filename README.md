@@ -29,6 +29,8 @@ figma-relay --help
 
 启动是独立操作，业务 CLI 不自动管理服务。后台日志位于 `.logs`。Figma 开发插件导入 `manifest.json`；Unity Bridge 与其 `.meta` 一起安装到目标项目 `Assets/Editor`，工程里已存在的 `.meta` 原样保留，模板 GUID 与工程内其它资产冲突时自动改用新 GUID。
 
+Windows 的「加入Relay开机自启.bat」在登录后运行 Relay 启动器，Relay 意外退出时自动恢复。使用源码开发时，`npm run build` 成功后会标记完整构建。重新打开 Figma 插件时，启动器管理的 Relay 会等当前任务完成，再载入新的本地构建。已运行的普通源码实例可在空闲时执行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_relay.ps1 -Restart -Supervise`，切换到受启动器管理的模式。
+
 CLI 默认连接 `ws://127.0.0.1:32130/relay`，插件连接 `/figma`；Unity Bridge **主动出站**连中继的 `/unity`（一条长连接，断线退避重连）。Bridge 不再监听本地端口、不写发现文件、也不做端口级联——因此**运行中的 Relay 必须是支持 `/unity` 的版本**（升级后需重启 Relay），否则 Unity 侧只会记录"未连接"而不会回退到旧路径。Unity 出站端口由 EditorPrefs `FigmaBridge_RelayPort` 决定（默认 32130）。CLI 读取 `FIGMA_RELAY_TOKEN` 或 `.local/admin-token.txt`；需要多轮请求时可使用长驻模式 `node dist/cli.js serve`（一个进程 + 一条连接）。各端发布版本必须一致。
 
 ## 控制与验证

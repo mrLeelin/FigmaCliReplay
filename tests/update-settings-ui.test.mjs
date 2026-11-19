@@ -5,7 +5,8 @@ import test from "node:test";
 
 const html = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
 const block = html.split("// RELAY_UPDATE_SETTINGS_BEGIN")[1].split("// RELAY_UPDATE_SETTINGS_END")[0];
-const ids = ["relayUpdateNoticeBtn", "relayUpdateCheckBtn", "relayUpdateInstallBtn", "relayUpdateAutoCheck",
+const headerIds = ["relayVersionBadge", "guiVersionWarning", "relayUpdateNoticeBtn"];
+const ids = [...headerIds, "relayUpdateCheckBtn", "relayUpdateInstallBtn", "relayUpdateAutoCheck",
   "relayUpdateBridgeCheck", "relayUpdateBridgeLabel", "relayUpdateBadge", "relayUpdateCurrentVersion",
   "relayUpdateRelayVersion", "relayUpdateLatestVersion", "relayUpdateNotes", "relayUpdateProgress", "relayUpdateStatus"];
 const status = (extra = {}) => ({
@@ -23,6 +24,7 @@ function harness(responder = async () => status()) {
     removeAttribute(key) { delete this.attributes[key]; delete this[key]; },
   }]));
   const calls = [];
+  const logs = [];
   const timers = new Map();
   let timerId = 0;
   let generation = 0;
@@ -32,13 +34,20 @@ function harness(responder = async () => status()) {
     captureRelayRequestContext: () => ({ generation }),
     relayRequestIsCurrent: c => c.generation === generation,
     sendRelaySocketRequest: async (...args) => { calls.push(args); return responder(...args); },
+    uiLogger: { startOperation(name) {
+      return {
+        step(step, message, data) { logs.push({ name, step, data }); },
+        succeed() { logs.push({ name, status: "succeeded" }); },
+        fail(error) { logs.push({ name, status: "failed", message: error.message }); },
+      };
+    } },
     setTimeout: (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; },
     clearTimeout: id => timers.delete(id),
     fetch() { throw new Error("Updates must use authenticated Relay WebSocket controls"); },
   });
   vm.runInContext(block, context);
   return {
-    nodes, calls, timers, context,
+    nodes, calls, logs, timers, context,
     async tick() {
       const [id, timer] = timers.entries().next().value;
       timers.delete(id);
@@ -65,7 +74,7 @@ test("version card, automatic-check default and header shortcut are wired into e
   const updatesPage = html.slice(html.indexOf('class="tab-page" id="updates-tab"'), html.indexOf('class="tab-page active" id="sync-unity-tab"'));
   assert.match(html, /data-tab="updates-tab"[^>]*>版本与更新<\/button>/);
   assert.doesNotMatch(settingsPage, /relayUpdate/);
-  for (const id of ids.filter(id => id !== "relayUpdateNoticeBtn")) assert.ok(updatesPage.includes(`id="${id}"`), id);
+  for (const id of ids.filter(id => !headerIds.includes(id))) assert.ok(updatesPage.includes(`id="${id}"`), id);
   assert.match(html, /"updates-tab": "版本与更新"/);
   assert.match(html, /if \(tabId === "updates-tab"\) refreshRelayUpdateStatus\(\)/);
   assert.doesNotMatch(html, /if \(tabId === "settings-tab"\) refreshRelayUpdateStatus\(\)/);
@@ -76,6 +85,28 @@ test("version card, automatic-check default and header shortcut are wired into e
   assert.match(html.slice(html.indexOf("function syncRelayUrlInput"), html.indexOf("function renderUnityProjects")), /resetRelayUpdateSettings/);
   assert.match(html.slice(html.indexOf("function switchTab(tabId)"), html.indexOf("function switchSyncTab")), /refreshRelayUpdateStatus/);
   assert.match(block, /更新修复\.bat/);
+});
+
+test("the header shows the running Relay and loaded GUI separately from the update shortcut", async () => {
+  const h = harness(async action => action === "relay.update.check"
+    ? available({ currentVersion: "0.1.48" }) : status({ currentVersion: "0.1.48" }));
+  await h.context.startRelayUpdateConnection();
+  assert.deepEqual(h.calls.map(c => c[0]), ["relay.update.status", "relay.update.check"]);
+  assert.equal(h.nodes.relayVersionBadge.textContent, "Relay 0.1.48");
+  assert.equal(h.nodes.guiVersionWarning.hidden, false);
+  assert.equal(h.nodes.relayUpdateNoticeBtn.hidden, false);
+  assert.equal(h.nodes.relayUpdateInstallBtn.disabled, false);
+  assert.deepEqual(h.logs.map(event => event.step || event.status), ["compare", "succeeded"]);
+  assert.equal(h.logs[0].data.matches, false);
+  h.disconnect();
+  assert.equal(h.nodes.relayVersionBadge.textContent, "Relay 未连接");
+  assert.equal(h.nodes.guiVersionWarning.hidden, true);
+  assert.equal(h.nodes.relayUpdateNoticeBtn.hidden, true);
+  h.reconnect();
+  h.context.renderRelayUpdateStatus(status());
+  assert.equal(h.nodes.relayVersionBadge.textContent, "Relay 0.1.49");
+  assert.equal(h.nodes.guiVersionWarning.hidden, true);
+  assert.equal(h.logs.at(-2).data.matches, true);
 });
 
 test("initial unverified and disconnected states never enable install or make network requests", async () => {
@@ -239,6 +270,7 @@ test("Relay URL switch discards old responses without clearing a newer request's
   const current = h.context.refreshRelayUpdateStatus();
   resolvers[0](available());
   await previous;
+  assert.equal(h.nodes.relayVersionBadge.textContent, "Relay 未连接");
   assert.equal(h.nodes.relayUpdateLatestVersion.textContent, "未检查");
   assert.equal(h.nodes.relayUpdateCheckBtn.disabled, true);
   resolvers[1](status({ configured: false }));
@@ -251,7 +283,7 @@ test("disconnect during install stops polling and stale write completion cannot 
   let resolve;
   let reads = 0;
   const h = harness(async action => action === "relay.update.install" ? new Promise(done => { resolve = done; })
-    : ++reads === 1 ? available() : status({ currentVersion: "0.1.50", phase: "up-to-date", message: "新版本已启动。" }));
+    : ++reads === 1 ? available() : status({ currentVersion: "0.1.50", phase: "restart-required", message: "新版本已启动。" }));
   await h.context.refreshRelayUpdateStatus();
   const installing = h.context.installRelayUpdate();
   h.disconnect();
@@ -264,13 +296,17 @@ test("disconnect during install stops polling and stale write completion cannot 
   await installing;
   assert.equal(h.nodes.relayUpdateStatus.textContent, message);
   assert.equal(h.nodes.relayUpdateBadge.textContent, "请重新打开插件");
-  assert.equal(h.nodes.relayUpdateNoticeBtn.hidden, false);
+  assert.equal(h.nodes.guiVersionWarning.hidden, false);
+  assert.equal(h.nodes.relayUpdateNoticeBtn.hidden, true);
   assert.equal(h.calls.filter(c => c[0] === "relay.update.install").length, 1);
 });
 
 test("unsupported and malformed backends clear verification and offer standalone recovery", async () => {
   const old = harness(async () => { throw new Error("Unsupported Relay control action: relay.update.status"); });
   await old.context.refreshRelayUpdateStatus();
+  assert.equal(old.nodes.relayVersionBadge.textContent, "Relay 未报告");
+  assert.equal(old.nodes.guiVersionWarning.hidden, true);
+  assert.equal(old.logs.at(-1).status, "failed");
   assert.match(old.nodes.relayUpdateStatus.textContent, /当前 Relay 不支持在线更新/);
   assert.match(old.nodes.relayUpdateStatus.textContent, /更新修复\.bat/);
   const malformed = harness(async () => available({ autoCheck: undefined }));
@@ -278,6 +314,18 @@ test("unsupported and malformed backends clear verification and offer standalone
   assert.match(malformed.nodes.relayUpdateStatus.textContent, /状态返回不完整/);
   assert.equal(malformed.nodes.relayUpdateInstallBtn.disabled, true);
   assert.equal(malformed.nodes.relayUpdateLatestVersion.textContent, "未检查");
+});
+
+test("a failed update check keeps the version reported by the connected Relay", async () => {
+  const h = harness(async action => {
+    if (action === "relay.update.check") throw new Error("timeout");
+    return status({ currentVersion: "0.1.48" });
+  });
+  await h.context.startRelayUpdateConnection();
+  assert.equal(h.nodes.relayUpdateBadge.textContent, "检查失败");
+  assert.equal(h.nodes.relayVersionBadge.textContent, "Relay 0.1.48");
+  assert.equal(h.nodes.guiVersionWarning.hidden, false);
+  assert.equal(h.nodes.relayUpdateNoticeBtn.hidden, true);
 });
 
 test("reopening the matching plugin clears the reopen prompt even while durable update record remains", async () => {

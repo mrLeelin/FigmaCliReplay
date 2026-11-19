@@ -28,8 +28,10 @@ test("Figma location stays on the main screen before feature navigation", () => 
   assert.ok(locationIndex >= 0 && locationIndex < tabsIndex);
 });
 
-test("top bar shows Bridge version immediately after the plugin release version", () => {
-  assert.match(ui, /BEGIN_RELEASE_VERSION[\s\S]*?END_RELEASE_VERSION[\s\S]*?id="bridgeVersionBadge"[^>]*>Bridge --<\/span>/);
+test("top bar shows Relay, GUI and Bridge versions in order, with an independent update shortcut", () => {
+  const header = ui.slice(ui.indexOf('<div class="brand">'), ui.indexOf('class="section global-section"'));
+  assert.match(header, /id="relayVersionBadge"[^>]*>Relay 未连接<\/span>[\s\S]*?GUI <span id="guiReleaseVersion">[\s\S]*?id="bridgeVersionBadge"[^>]*>Bridge 未连接<\/span>/);
+  assert.match(header, /id="relayUpdateNoticeBtn"[^>]* hidden>有更新<\/button>/);
 });
 
 test("Unity gateway address is auto-discovered instead of manually edited", () => {

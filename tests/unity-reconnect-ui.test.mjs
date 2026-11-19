@@ -22,9 +22,13 @@ function harness(send = async () => ({ ok: true })) {
     unityConnected: false, unityConnectionState: "restoring", unityConnectionAttempt: 0,
     unityProjectRefreshSequence: 0, unityAutoConnectPending: true, unityAutoReconnectEnabled: true,
     unityBridgeVersionMismatch: null, unityGatewayProjectPath: "", pluginReleaseVersion: "0.1.48",
+    folderRefreshInFlight: false, exportImagesBtn: node(),
     settingsTabBtn: node(), unityBadge: node(), unityProjectStatus: node(), unityUrlInput: node(),
     captureRelayRequestContext: () => ({ generation: 1 }), relayRequestIsCurrent: value => value.generation === 1,
-    sendRelaySocketRequest: send, setBridgeVersionBadge() {}, refreshUnityControls() {}, appendLog() {},
+    sendRelaySocketRequest: send,
+    setBridgeVersionBadge(version, state) { context.bridgeVersion = version; context.bridgeState = state; },
+    refreshUnityControls() { context.exportImagesBtn.disabled = !context.unityConnected; },
+    appendLog() {},
     setSelectedFolder() {}, setSelectedImageTargetInfo() {}, setSelectedTextTarget() {}, setUnityPrefabPath() {},
     startSelectedFolderRefresh() {}, stopSelectedFolderRefresh() {},
     setUnityStatus(value) { context.status = value; },
@@ -36,7 +40,8 @@ function harness(send = async () => ({ ok: true })) {
     renderUnityProjects(data) { context.selectedUnityProject = data.projects.find(item => item.id === data.lastSelectedProjectId) || null; },
   });
   for (const name of ["unityConnectionIsPending", "unityConnectionRequestIsCurrent", "refreshSettingsConnectionAlert", "setUnityBadge",
-    "resetUnityForRelayDisconnect", "readSelectedUnityGatewayConfig", "probeUnityUrl", "connectUnity", "disconnectUnity", "refreshUnityProjects"]) {
+    "resetUnityForRelayDisconnect", "readSelectedUnityGatewayConfig", "probeUnityUrl", "applyUnityConnection", "connectUnity", "disconnectUnity", "refreshUnityProjects",
+    "refreshSelectedFolderQuietly"]) {
     vm.runInContext(source(name), context);
   }
   return context;
@@ -90,6 +95,64 @@ test("a transient Bridge disconnect retries only connection reads and then resto
   assert.equal(lookups, 2);
   assert.equal(healthChecks, 1);
   assert.equal(c.unityConnected, true);
+});
+
+test("a registered Bridge dropping out disables export until the same project returns and passes health", async () => {
+  const c = harness();
+  let gatewayAvailable = true;
+  let healthCalls = 0;
+  c.readSelectedUnityGatewayConfig = async () => gatewayAvailable ? "relay-session://inbound" : "";
+  c.requestUnityCommand = async action => {
+    assert.equal(action, "unity.health");
+    healthCalls++;
+    return { projectPath: "E:/Saved/Unity", version: "0.1.48" };
+  };
+  await c.connectUnity();
+  assert.equal(c.unityBadge.textContent, "已连接");
+  assert.equal(c.exportImagesBtn.disabled, false);
+
+  c.fetchUnitySelectionStatus = async () => { throw new Error("Unity command timed out"); };
+  await c.refreshSelectedFolderQuietly();
+  assert.equal(c.unityBadge.textContent, "已连接");
+
+  gatewayAvailable = false;
+  c.fetchUnitySelectionStatus = async () => { throw new Error("Unity is not connected: keep the Unity Editor open."); };
+  await c.refreshSelectedFolderQuietly();
+  assert.equal(c.unityConnected, false);
+  assert.equal(c.unityBadge.textContent, "连接中");
+  assert.equal(c.bridgeState, "disconnected");
+  assert.equal(c.exportImagesBtn.disabled, true);
+  await c.refreshSelectedFolderQuietly();
+  assert.equal(healthCalls, 1, "offline polling should only read gateway registration");
+
+  gatewayAvailable = true;
+  await c.refreshSelectedFolderQuietly();
+  assert.equal(healthCalls, 2);
+  assert.equal(c.unityBadge.textContent, "已连接");
+  assert.equal(c.bridgeVersion, "0.1.48");
+  assert.equal(c.exportImagesBtn.disabled, false);
+});
+
+test("Bridge recovery cannot re-enable export after manual disconnect or with the wrong Bridge version", async () => {
+  for (const manualDisconnect of [true, false]) {
+    const c = harness();
+    c.readSelectedUnityGatewayConfig = async () => "relay-session://inbound";
+    c.requestUnityCommand = async () => ({ projectPath: "E:/Saved/Unity", version: "0.1.48" });
+    await c.connectUnity();
+    c.fetchUnitySelectionStatus = async () => { throw new Error("Unity disconnected before the command was submitted."); };
+    await c.refreshSelectedFolderQuietly();
+
+    let finishHealth;
+    c.requestUnityCommand = () => new Promise(resolve => { finishHealth = resolve; });
+    const pending = c.refreshSelectedFolderQuietly();
+    await new Promise(setImmediate);
+    if (manualDisconnect) c.disconnectUnity();
+    finishHealth({ projectPath: "E:/Saved/Unity", version: manualDisconnect ? "0.1.48" : "0.1.47" });
+    await pending;
+    assert.equal(c.unityConnectionState, "disconnected");
+    assert.equal(c.unityBadge.textContent, manualDisconnect ? "未连接" : "版本错误");
+    assert.equal(c.exportImagesBtn.disabled, true);
+  }
 });
 
 test("startup waits for Relay registration and does not invent a different project", async () => {

@@ -1,4 +1,4 @@
-﻿param([int]$Port = 32130, [switch]$Foreground, [switch]$Restart)
+﻿param([int]$Port = 32130, [switch]$Foreground, [switch]$Restart, [switch]$Supervise)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'relay_logging.ps1')
 $launchLog = [RelayScriptLogger]::new('relay.launch')
@@ -16,6 +16,10 @@ if (Test-Path -LiteralPath (Join-Path $localNode 'node.exe')) { $env:Path = "$lo
 $node = (Get-Command node -ErrorAction Stop).Source
 $entry = Join-Path $PluginRoot 'dist\index.js'
 if (-not (Test-Path -LiteralPath $entry)) { throw 'Run npm ci and npm run build before starting Relay.' }
+$supervisor = Join-Path $PSScriptRoot 'relay_supervisor.mjs'
+$useSupervisor = $Supervise -or (Test-Path -LiteralPath (Join-Path $PluginRoot '.git'))
+if ($useSupervisor -and -not (Test-Path -LiteralPath $supervisor -PathType Leaf)) { throw 'Relay supervisor is missing.' }
+$launchEntry = if ($useSupervisor) { $supervisor } else { $entry }
 if ($Port -lt 1 -or $Port -gt 65535) { throw 'Invalid port' }
 $dataRoot = if ($env:FIGMA_RELAY_DATA_ROOT) { [System.IO.Path]::GetFullPath($env:FIGMA_RELAY_DATA_ROOT) } else { $PluginRoot }
 $localDir = Join-Path $dataRoot '.local'
@@ -30,7 +34,15 @@ if ($listeners.Count -gt 0) {
     $ownerPid = $listeners[0].OwningProcess
     $ownerName = (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue).ProcessName
     $ownerIsRelay = $false
-    try { $ownerIsRelay = ((Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid").CommandLine -like '*dist\index.js*') } catch { $ownerIsRelay = $false }
+    $relaySupervisor = $null
+    try {
+        $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid"
+        $ownerIsRelay = $owner.CommandLine -like '*dist\index.js*'
+        if ($ownerIsRelay) {
+            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($owner.ParentProcessId)"
+            if ($parent.CommandLine -like ('*' + [WildcardPattern]::Escape($supervisor) + '*')) { $relaySupervisor = $parent }
+        }
+    } catch { $ownerIsRelay = $false }
     if (-not $Restart) {
         $occupied = "端口 $Port 已在运行：pid=$ownerPid ($ownerName)。未启动第二个实例；要载入新构建请执行 scripts\start_relay.ps1 -Restart"
         Write-Host "[Relay] $occupied"
@@ -39,13 +51,27 @@ if ($listeners.Count -gt 0) {
     }
     if (-not $ownerIsRelay) { throw "端口 $Port 被非 Relay 进程占用：pid=$ownerPid ($ownerName)，未做任何改动。" }
     Stop-Process -Id $ownerPid -Force
+    if ($relaySupervisor) {
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline) {
+            $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($listener -and $listener.OwningProcess -ne $ownerPid) {
+                $replacement = Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)"
+                if ($replacement.ParentProcessId -ne $relaySupervisor.ProcessId) { throw "端口 $Port 已由其他进程占用。" }
+                $launchLog.Write('succeeded', "Relay supervisor replaced pid=$ownerPid with pid=$($replacement.ProcessId)")
+                exit 0
+            }
+            Start-Sleep -Milliseconds 250
+        }
+        throw "Relay supervisor did not restore port $Port within 20 seconds. Check relay.stderr.log."
+    }
     for ($i = 0; $i -lt 40 -and @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count -gt 0; $i++) { Start-Sleep -Milliseconds 100 }
     if (@(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count -gt 0) { throw "结束旧 Relay pid=$ownerPid 后端口 $Port 仍被占用。" }
     Write-Host "[Relay] 已结束旧实例 pid=$ownerPid 并释放端口 $Port，正在启动载入最新构建的新实例。"
     $launchLog.Write('progress', "已结束旧 Relay pid=$ownerPid 并释放端口")
 }
 if ($Foreground) {
-    & $node $entry --port $Port
+    & $node $launchEntry --port $Port
     $relayExitCode = $LASTEXITCODE
     if ($relayExitCode -ne 0) { throw "Relay exited with code $relayExitCode" }
     $launchLog.Write('succeeded', 'Foreground Relay exited normally')
@@ -53,7 +79,7 @@ if ($Foreground) {
 }
 $logs = Join-Path $dataRoot '.logs'
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
-$process = Start-Process -FilePath $node -ArgumentList @(('"' + $entry + '"'), '--port', $Port) -WorkingDirectory $PluginRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logs 'relay.stdout.log') -RedirectStandardError (Join-Path $logs 'relay.stderr.log') -PassThru
+$process = Start-Process -FilePath $node -ArgumentList @(('"' + $launchEntry + '"'), '--port', $Port) -WorkingDirectory $PluginRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logs 'relay.stdout.log') -RedirectStandardError (Join-Path $logs 'relay.stderr.log') -PassThru
 # 启动后确认真的活着：否则失败只留在 .logs\relay.stderr.log 里，用户以为已经重启。
 Start-Sleep -Milliseconds 900
 if ($process.HasExited) {

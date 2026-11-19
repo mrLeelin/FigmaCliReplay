@@ -62,6 +62,7 @@ export class WebSocketGateway {
   private onJobReceived?: (requestId: string, operationId?: string) => void;
   private onJobUndelivered?: (requestId: string, reason: string) => void;
   private onSessionDisconnected?: (sessionId: string, reason: string) => void;
+  private onPluginOpened?: (sessionId: string) => void;
   private onRelayClientRequest?: RelayClientRequestHandler;
   private onJobResult?: (requestId: string, result: Record<string, unknown>) => boolean;
   private taskControlHandler?: (action: string, payload: Record<string, unknown>, sessionId: string) => Record<string, unknown>;
@@ -155,6 +156,10 @@ export class WebSocketGateway {
 
   onDisconnected(callback: (sessionId: string, reason: string) => void): void {
     this.onSessionDisconnected = callback;
+  }
+
+  onRegistered(callback: (sessionId: string) => void): void {
+    this.onPluginOpened = callback;
   }
 
   onClientRequest(callback: RelayClientRequestHandler): void {
@@ -338,6 +343,7 @@ export class WebSocketGateway {
         page: session.currentPageName,
         editorType: session.editorType
       });
+      if (session.sessionId && session.editorType === "figma") this.onPluginOpened?.(session.sessionId);
       return;
     }
     if (type === "relay.request") {

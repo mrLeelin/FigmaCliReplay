@@ -86,10 +86,22 @@ test("top Bridge badge renders disconnected, connected, mismatch, and missing ve
   const context = {};
   vm.runInNewContext(`${functionMatch[0]}; this.getBridgeVersionBadgeState = getBridgeVersionBadgeState;`, context);
 
-  assert.deepEqual({ ...context.getBridgeVersionBadgeState("", "disconnected") }, { text: "Bridge --", state: "idle" });
+  assert.deepEqual({ ...context.getBridgeVersionBadgeState("", "disconnected") }, { text: "Bridge 未连接", state: "idle" });
   assert.deepEqual({ ...context.getBridgeVersionBadgeState("0.1.37", "connected") }, { text: "Bridge 0.1.37", state: "online" });
   assert.deepEqual({ ...context.getBridgeVersionBadgeState("1.0.0", "mismatch") }, { text: "Bridge 1.0.0", state: "error" });
   assert.deepEqual({ ...context.getBridgeVersionBadgeState("", "mismatch") }, { text: "Bridge 未报告", state: "error" });
+});
+
+test("the Unity connection failure explains the required GUI and reported Bridge versions", () => {
+  const start = ui.indexOf("function evaluateBridgeVersion(");
+  const next = ui.indexOf("function createBridgeVersionMismatchError(");
+  const end = ui.indexOf("\n    }", next) + "\n    }".length;
+  const context = { pluginReleaseVersion: "0.1.53", selectedUnityProject: { id: "project-a" } };
+  vm.runInNewContext(ui.slice(start, end), context);
+  const error = context.createBridgeVersionMismatchError("0.1.51");
+  assert.equal(error.message, "无法连接 Unity：GUI 需要 Bridge 0.1.53，当前为 0.1.51。");
+  assert.equal(error.bridgeVersionMismatch, true);
+  assert.equal(error.projectId, "project-a");
 });
 
 test("Bridge badge follows the Unity connection lifecycle", () => {

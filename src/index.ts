@@ -4,7 +4,7 @@ import { RuntimeRelay } from "./runtimeRelay.js";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { INSTALL_ROOT, LOCAL_DIR, PLUGIN_ROOT, parseArgs, publicUrl } from "./config.js";
+import { INSTALL_ROOT, LOCAL_DIR, PLUGIN_ROOT, SERVER_VERSION, parseArgs, publicUrl } from "./config.js";
 import { probePythonWorker } from "./pythonWorker.js";
 import { PythonAlgorithms } from "./pythonAlgorithms.js";
 import { WebSocketGateway } from "./websocketGateway.js";
@@ -20,6 +20,7 @@ import { activeFigmaPrefabImportCount } from "./figmaPrefabImportTask.js";
 import { activeRuntimeControls } from "./updateActivity.js";
 import { UpdateService, writeUpdateJson } from "./updateService.js";
 import { resumeRequestedBridgeUpdate } from "./updateBridge.js";
+import { createSourceRelayReload } from "./sourceRelayReload.js";
 
 async function main(): Promise<void> {
   const logging = getLoggingRuntime();
@@ -64,10 +65,11 @@ async function main(): Promise<void> {
   const cleanupRuntime = getCleanupRuntime();
   configureLocalAiCleanupDispatcher(createConversationCleanupDispatcher(new CleanupExecutor()));
   const unityProjects = new UnityProjectRegistry();
+  const activity = () => relay.status().pending + Number(algorithms.status().processRunning) + activeLocalAiRunCount()
+    + activePsdImportCount() + activeFigmaPrefabImportCount() + (cleanupRuntime.controller.activeCount?.() ?? 0) + activeRuntimeControls();
   const update = new UpdateService({
     refreshBridge: () => resumeRequestedBridgeUpdate(),
-    activity: () => relay.status().pending + Number(algorithms.status().processRunning) + activeLocalAiRunCount()
-      + activePsdImportCount() + activeFigmaPrefabImportCount() + (cleanupRuntime.controller.activeCount?.() ?? 0) + activeRuntimeControls(),
+    activity,
     shutdown: () => void shutdown("update"),
   });
   const cliControlHandler = createRelayControlHandler(relay, cleanupRuntime, undefined, unityProjects, config.bridgeToken, undefined, undefined, update);
@@ -116,10 +118,11 @@ async function main(): Promise<void> {
   });
 
   let shuttingDown = false;
-  const shutdown = async (signal: string) => {
+  const shutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
     const operation = processLogger.startOperation("relay.shutdown", "开始关闭 Figma Relay", { signal });
+    sourceReload.stop();
     for (const timer of disconnectGraceTimers.values()) clearTimeout(timer);
     disconnectGraceTimers.clear();
     relay.dispose();
@@ -135,8 +138,15 @@ async function main(): Promise<void> {
     await logging.flush();
     await new Promise<void>((resolve) => finalServer.close(() => resolve()));
     await logging.close();
-    process.exit(0);
+    process.exit(exitCode);
   };
+  const sourceReload = createSourceRelayReload({
+    root: PLUGIN_ROOT, version: SERVER_VERSION, activity,
+    supervised: () => !INSTALL_ROOT && process.connected === true && process.env.FIGMA_RELAY_SOURCE_SUPERVISED === "1",
+    restart: () => void shutdown("source-reload", 75),
+    logger: processLogger,
+  });
+  gateway.onRegistered(sourceReload.pluginOpened);
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   void resumeRequestedBridgeUpdate().catch((error) => processLogger.error("Bridge 更新恢复失败", error));
