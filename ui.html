@@ -2164,6 +2164,7 @@
   <div class="tab-page" id="tools-tab">
     <div class="sync-tabs" role="tablist" aria-label="工具">
       <button class="sync-tab-button active" data-tools-tab="nine-slice-tab" type="button">切九宫</button>
+      <button class="sync-tab-button" data-tools-tab="merge-image-layers-tab" type="button">合并图层</button>
     </div>
     <div class="sync-sub-page active" id="nine-slice-tab">
     <div class="section" id="nine-slice-section">
@@ -2197,6 +2198,15 @@
       </div>
       <div class="status-box" id="nine-slice-status">选择 1 个带图片填充的节点，可自动识别或手动输入 Unity spriteBorder。Frame/Group 会在原节点内生成 __slice_*；Rectangle 这类叶子节点会原地转换为同名 Frame。</div>
     </div>
+    </div>
+    <div class="sync-sub-page" id="merge-image-layers-tab">
+      <div class="section">
+        <h2>合并图层</h2>
+        <div class="status-box" id="merge-image-layers-status" role="status">在画布中选择两张或更多图片，在选区右侧生成一张透明背景的合并图。</div>
+        <div class="row">
+          <button id="mergeImageLayersBtn" type="button">合并选中的图片</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2548,6 +2558,9 @@
     const syncSubPages = Array.prototype.slice.call(document.querySelectorAll("#sync-unity-tab .sync-sub-page"));
     const toolsTabButtons = Array.prototype.slice.call(document.querySelectorAll(".sync-tab-button[data-tools-tab]"));
     const toolsSubPages = Array.prototype.slice.call(document.querySelectorAll("#tools-tab .sync-sub-page"));
+    const mergeImageLayersBtn = document.getElementById("mergeImageLayersBtn");
+    const mergeImageLayersStatus = document.getElementById("merge-image-layers-status");
+    let mergeImageLayersRequestId = "";
     const exportTabButtons = Array.prototype.slice.call(document.querySelectorAll(".sync-tab-button[data-export-tab]"));
     const exportSubPages = Array.prototype.slice.call(
       document.querySelectorAll("#export-tab .sync-sub-page")
@@ -3801,6 +3814,30 @@
       toolsSubPages.forEach(function (page) {
         page.classList.toggle("active", page.id === tabId);
       });
+    }
+
+    function requestMergeImageLayers() {
+      if (mergeImageLayersRequestId) return;
+      mergeImageLayersRequestId = uiLogger.idFactory();
+      mergeImageLayersBtn.disabled = true;
+      mergeImageLayersStatus.textContent = "正在合并选中的图片…";
+      parent.postMessage({
+        pluginMessage: { type: "MERGE_IMAGE_LAYERS", requestId: mergeImageLayersRequestId }
+      }, "*");
+    }
+
+    function handleMergeImageLayersResult(message) {
+      if (!mergeImageLayersRequestId || message.requestId !== mergeImageLayersRequestId) return;
+      mergeImageLayersRequestId = "";
+      mergeImageLayersBtn.disabled = false;
+      const result = message.result || {};
+      if (!result.ok) {
+        mergeImageLayersStatus.textContent = result.error || "合并图层失败，请重试。";
+        return;
+      }
+      mergeImageLayersStatus.textContent = "已合并 " + result.count + " 张图片，生成 "
+        + result.width + " × " + result.height + " px 的新图层。"
+        + (result.scale < 1 ? "图片已按 Figma 的像素上限等比缩小。" : "");
     }
 
     function switchExportTab(tabId) {
@@ -9311,6 +9348,11 @@
         return;
       }
 
+      if (message.type === "MERGE_IMAGE_LAYERS_RESULT") {
+        handleMergeImageLayersResult(message);
+        return;
+      }
+
       if (message.type === "EXPORT_SELECTED_TEXT_STYLE_TO_UNITY_RESULT") {
         handleTextStyleExportResult(message);
         return;
@@ -9662,6 +9704,7 @@
         switchToolsTab(button.getAttribute("data-tools-tab"));
       });
     });
+    mergeImageLayersBtn.addEventListener("click", requestMergeImageLayers);
     exportTabButtons.forEach(function (button) {
       button.addEventListener("click", function () {
         switchExportTab(button.getAttribute("data-export-tab"));

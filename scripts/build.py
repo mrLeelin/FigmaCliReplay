@@ -70,6 +70,7 @@ ORDER = [
     "08_cleanup_transaction.mjs",
     "09_export_psd.js",
     "10_design_edit.mjs",
+    "11_merge_image_layers.js",
 ]
 
 PROMPT_FILES = {

@@ -230,6 +230,11 @@ await handleFigmaHierarchyCleanupAnalyze(message);
     return;
   }
 
+  if (message.type === "MERGE_IMAGE_LAYERS") {
+    await handleMergeImageLayers(message);
+    return;
+  }
+
   if (message.type === "FIGMA_HIERARCHY_SET_NODE_POSITIONS") {
     await handleFigmaHierarchySetNodePositions(message);
     return;
