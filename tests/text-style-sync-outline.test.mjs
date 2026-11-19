@@ -78,7 +78,22 @@ test("Unity text style sync applies face dilate by alignment and calibrates with
   assert.match(sync, /public string strokeAlign;/);
   assert.match(sync, /public float faceDilate;/);
   assert.match(sync, /SetMaterialFloat\(material, "_FaceDilate", hasOutline \? ResolveFaceDilate\(spec\) : 0f\)/);
-  assert.match(sync, /HasStrokeAlign\(spec\)\s*&& !MaterialFloatApprox\(material, "_FaceDilate", ResolveFaceDilate\(spec\)\)/);
-  assert.match(sync, /CalibrateOutlineForFont\(style\.textMaterial, style\.fontSize\);/);
+  assert.match(sync, /CalibrateOutlineForFont\(style\.textMaterial, style\.fontSize, tmpText\.font\);/);
+  assert.match(sync, /font = ResolveOutlineFont\(font\);\s*float pointSize =/);
   assert.match(sync, /sourceStrokeWeight \* pointSize \/ \(2f \* padding \* fontSize\)/);
+});
+
+test("Unity calibrates a static font with no characters using its only fallback", () => {
+  const sync = fs.readFileSync(new URL("../unity/Assets/Editor/FigmaBridge/FigmaTextStyleSyncUtility.cs", import.meta.url), "utf8");
+  assert.match(sync, /font\.atlasPopulationMode == AtlasPopulationMode\.Static\s*&& font\.characterTable\.Count == 0 && font\.fallbackFontAssetTable is \{ Count: 1 \}/);
+  assert.match(sync, /fallback\.characterTable\.Count > 0\)\s*\{\s*return fallback;/);
+});
+
+test("Unity text style sync preserves the selected text font and material atlas", () => {
+  const sync = fs.readFileSync(new URL("../unity/Assets/Editor/FigmaBridge/FigmaTextStyleSyncUtility.cs", import.meta.url), "utf8");
+  assert.doesNotMatch(sync, /\b(?:tmpText|text)\.font\s*=(?!=)|CommonFontPath/);
+  assert.match(sync, /currentMaterial\.mainTexture != atlas/);
+  assert.match(sync, /new Material\(currentMaterial\)/);
+  assert.match(sync, /candidate\.mainTexture != material\.mainTexture/);
+  assert.match(sync, /material\.name = candidate\.name;\s*if \(candidate\.ComputeCRC\(\) == material\.ComputeCRC\(\)\)/);
 });

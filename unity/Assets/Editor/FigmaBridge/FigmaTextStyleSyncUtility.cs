@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
@@ -13,55 +12,6 @@ namespace MagicWarrior.Editor.FigmaBridge
     /// </summary>
     internal static class FigmaTextStyleSyncUtility
     {
-        /// <summary>未配置导入字体时的兼容路径。</summary>
-        private const string DefaultCommonFontPath =
-            "Assets/MagicWarrior/_Resources/Font/Package/CommonFont.asset";
-
-        private const string NestedCommonFontPath =
-            "Assets/MagicWarrior/_Resources/Font/Package/CommonFont/CommonFont.asset";
-
-        /// <summary>
-        /// 项目通用 TMP 字体资产路径。与 Prefab 生成器共用 ProjectSettings 配置，
-        /// 以支持 CommonFont 放在 Package 子目录等项目布局。
-        /// </summary>
-        private static string CommonFontPath
-        {
-            get
-            {
-                string configuredPath = FigmaBridgeImportSettings.FontPath;
-                if (!string.IsNullOrWhiteSpace(configuredPath))
-                {
-                    return configuredPath.Replace("\\", "/");
-                }
-
-                // Older projects used the flat path; current projects commonly keep
-                // the font and its material in a CommonFont subdirectory.
-                string[] candidates = { NestedCommonFontPath, DefaultCommonFontPath };
-                foreach (string candidate in candidates)
-                {
-                    if (AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(candidate) != null)
-                    {
-                        return candidate;
-                    }
-                }
-
-                return DefaultCommonFontPath;
-            }
-        }
-
-        /// <summary>项目通用 TMP 字体材质路径。</summary>
-        private static string CommonFontMatPath => Path.ChangeExtension(CommonFontPath, ".mat").Replace("\\", "/");
-
-        /// <summary>Figma 专用 TMP 材质输出目录。</summary>
-        private static string FigmaTextMaterialDir =>
-            Path.GetDirectoryName(CommonFontPath)?.Replace("\\", "/") ?? "Assets/MagicWarrior/_Resources/Font/Package";
-
-        /// <summary>TMP 材质浮点参数近似匹配误差。</summary>
-        private const float MaterialFloatTolerance = 0.015f;
-
-        /// <summary>TMP 材质颜色近似匹配误差。</summary>
-        private const float MaterialColorTolerance = 0.015f;
-
         /// <summary>
         /// 将 Figma 文本样式同步到 Unity 当前选中的 TMP 文本对象或 TMP 材质球。
         /// </summary>
@@ -78,7 +28,6 @@ namespace MagicWarrior.Editor.FigmaBridge
             }
 
             options ??= TextStyleSyncOptions.Default;
-            CalibrateOutlineForFont(style.textMaterial, style.fontSize);
             var result = new TextStyleSyncResult
             {
                 ok = true,
@@ -93,14 +42,17 @@ namespace MagicWarrior.Editor.FigmaBridge
 
             if (activeGameObject != null && TryGetSelectedTmpText(activeGameObject, out TMP_Text tmpText))
             {
-                Material material = ResolveTextMaterial(style.textMaterial, result.warnings);
+                CalibrateOutlineForFont(style.textMaterial, style.fontSize, tmpText.font);
+                Material material = ResolveTextMaterial(tmpText, style.textMaterial, result.warnings);
                 ApplyToTmpText(tmpText, style, material, options, result);
                 return result;
             }
 
             if (activeObject is Material selectedMaterial)
             {
-                ApplyToMaterial(selectedMaterial, style.textMaterial, result);
+                var font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(AssetDatabase.GetAssetPath(selectedMaterial.mainTexture));
+                CalibrateOutlineForFont(style.textMaterial, style.fontSize, font);
+                ApplyToMaterial(selectedMaterial, style.textMaterial);
                 result.targetName = selectedMaterial.name;
                 result.targetType = "Material";
                 result.materialPath = AssetDatabase.GetAssetPath(selectedMaterial);
@@ -166,87 +118,107 @@ namespace MagicWarrior.Editor.FigmaBridge
                 }
             }
 
-            var commonFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(CommonFontPath);
-            if (commonFont != null)
-            {
-                tmpText.font = commonFont;
-            }
-            else
-            {
-                result.warnings.Add($"未找到 CommonFont 字体资产：{CommonFontPath}");
-            }
-
             if (material != null)
             {
-                tmpText.fontSharedMaterial = material;
+                if (tmpText.fontSharedMaterial != material)
+                {
+                    tmpText.fontSharedMaterial = material;
+                }
                 result.materialPath = AssetDatabase.GetAssetPath(material);
             }
-            else
-            {
-                result.warnings.Add("没有可绑定的 TMP 材质，已只同步字体颜色。");
-            }
 
+            PrefabUtility.RecordPrefabInstancePropertyModifications(tmpText);
             EditorUtility.SetDirty(tmpText);
             result.targetName = tmpText.gameObject.name;
             result.targetType = tmpText.GetType().Name;
         }
 
         /// <summary>
-        /// 根据 Figma 材质需求复用、创建或回退 TMP 字体材质。
+        /// 基于选中文本的材质同步描边和投影，并保留字体图集和其它材质设置。
         /// </summary>
-        private static Material ResolveTextMaterial(TextMaterialPayload materialSpec, List<string> warnings)
+        private static Material ResolveTextMaterial(TMP_Text text, TextMaterialPayload materialSpec, List<string> warnings)
         {
-            if (materialSpec == null || !materialSpec.enabled)
+            TMP_FontAsset font = text.font;
+            Material currentMaterial = text.fontSharedMaterial;
+            Texture atlas = font != null ? font.atlasTexture : null;
+            if (atlas == null || currentMaterial == null || currentMaterial.mainTexture != atlas)
             {
-                Material commonMaterial = AssetDatabase.LoadAssetAtPath<Material>(CommonFontMatPath);
-                if (commonMaterial == null)
-                {
-                    warnings.Add($"未找到 CommonFont 材质：{CommonFontMatPath}");
-                }
-
-                return commonMaterial;
-            }
-
-            Material existing = FindApproximateTextMaterial(materialSpec);
-            if (existing != null)
-            {
-                return existing;
-            }
-
-            Material baseMaterial = AssetDatabase.LoadAssetAtPath<Material>(CommonFontMatPath);
-            if (baseMaterial == null)
-            {
-                warnings.Add($"无法创建 TMP 材质，缺少基础材质：{CommonFontMatPath}");
+                warnings.Add("当前 TMP 文本缺少与字体图集匹配的材质，已跳过描边和投影同步。");
                 return null;
             }
 
-            EnsureAssetDirectory(FigmaTextMaterialDir);
-            string signature = string.IsNullOrEmpty(materialSpec.signature)
-                ? BuildTextMaterialSignature(materialSpec)
-                : materialSpec.signature;
-            string materialName = string.IsNullOrEmpty(materialSpec.materialName)
-                ? $"CommonFont_figma_{signature}"
-                : materialSpec.materialName;
-            string materialPath = AssetDatabase.GenerateUniqueAssetPath(
-                $"{FigmaTextMaterialDir}/{SanitizeAssetName(materialName)}.mat");
-            var material = new Material(baseMaterial)
+            bool hasCurrentOutline = currentMaterial.IsKeywordEnabled("OUTLINE_ON")
+                || (currentMaterial.HasProperty("_OutlineWidth") && currentMaterial.GetFloat("_OutlineWidth") > 0f);
+            if ((materialSpec == null || !materialSpec.enabled) && !hasCurrentOutline
+                && !currentMaterial.IsKeywordEnabled("UNDERLAY_ON") && !currentMaterial.IsKeywordEnabled("UNDERLAY_INNER"))
             {
-                name = Path.GetFileNameWithoutExtension(materialPath)
-            };
-            ApplyMaterialProperties(material, materialSpec);
+                return currentMaterial;
+            }
+
+            // 文本可能与其它对象共用材质。先在副本上应用样式，避免修改原材质资产。
+            var material = new Material(currentMaterial) { name = currentMaterial.name };
+            try
+            {
+                ApplyMaterialProperties(material, materialSpec, resetFaceDilate: hasCurrentOutline);
+                if (currentMaterial.ComputeCRC() == material.ComputeCRC())
+                {
+                    return currentMaterial;
+                }
+
+                return SaveOrReuseTextMaterial(font, material, materialSpec);
+            }
+            finally
+            {
+                if (!EditorUtility.IsPersistent(material))
+                {
+                    UnityEngine.Object.DestroyImmediate(material);
+                }
+            }
+        }
+
+        /// <summary>在字体目录中复用内容一致的材质，或保存新的材质预设。</summary>
+        private static Material SaveOrReuseTextMaterial(TMP_FontAsset font, Material material, TextMaterialPayload spec)
+        {
+            string fontPath = AssetDatabase.GetAssetPath(font);
+            string directory = fontPath.StartsWith("Assets/", StringComparison.Ordinal)
+                ? Path.GetDirectoryName(fontPath).Replace('\\', '/')
+                : "Assets/FigmaTextMaterials";
+            string signature = BuildTextMaterialSignature(spec);
+            string name = SanitizeAssetName($"{font.name}_figma_{(signature.Length == 0 ? "plain" : signature)}");
+            EnsureAssetDirectory(directory);
+            foreach (string guid in AssetDatabase.FindAssets("t:Material", new[] { directory }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!Path.GetFileNameWithoutExtension(path).StartsWith(name, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var candidate = AssetDatabase.LoadAssetAtPath<Material>(path);
+                if (candidate == null || candidate.shader != material.shader || candidate.mainTexture != material.mainTexture)
+                {
+                    continue;
+                }
+
+                // 对齐名称后比较材质内容。
+                material.name = candidate.name;
+                if (candidate.ComputeCRC() == material.ComputeCRC())
+                {
+                    return candidate;
+                }
+            }
+
+            string materialPath = AssetDatabase.GenerateUniqueAssetPath($"{directory}/{name}.mat");
+            material.name = Path.GetFileNameWithoutExtension(materialPath);
             AssetDatabase.CreateAsset(material, materialPath);
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-            return AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            AssetDatabase.SaveAssetIfDirty(material);
+            return material;
         }
 
         /// <summary>
         /// 直接覆盖选中材质球的 TMP 描边和投影参数。
         /// </summary>
-        private static void ApplyToMaterial(
-            Material material,
-            TextMaterialPayload materialSpec,
-            TextStyleSyncResult result)
+        private static void ApplyToMaterial(Material material, TextMaterialPayload materialSpec)
         {
             if (material == null)
             {
@@ -256,90 +228,13 @@ namespace MagicWarrior.Editor.FigmaBridge
             Undo.RecordObject(material, "同步 Figma TMP 材质");
             ApplyMaterialProperties(material, materialSpec);
             EditorUtility.SetDirty(material);
-            AssetDatabase.SaveAssets();
-        }
-
-        /// <summary>
-        /// 扫描现有 CommonFont 材质，近似匹配描边和投影参数以避免材质重复生成。
-        /// </summary>
-        private static Material FindApproximateTextMaterial(TextMaterialPayload materialSpec)
-        {
-            string[] searchFolders = GetExistingMaterialSearchFolders();
-            if (searchFolders.Length == 0)
-            {
-                return null;
-            }
-
-            string[] guids = AssetDatabase.FindAssets("t:Material CommonFont", searchFolders);
-            foreach (string guid in guids)
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guid);
-                var material = AssetDatabase.LoadAssetAtPath<Material>(path);
-                if (material != null && IsMaterialApproximateMatch(material, materialSpec))
-                {
-                    return material;
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// 判断现有材质是否与 Figma 描边/投影需求近似一致。
-        /// </summary>
-        private static bool IsMaterialApproximateMatch(Material material, TextMaterialPayload spec)
-        {
-            if (!spec.hasOutline && material.IsKeywordEnabled("OUTLINE_ON"))
-            {
-                return false;
-            }
-
-            if (!spec.hasUnderlay && material.IsKeywordEnabled("UNDERLAY_ON"))
-            {
-                return false;
-            }
-
-            if (spec.hasOutline && !material.IsKeywordEnabled("OUTLINE_ON"))
-            {
-                return false;
-            }
-
-            if (spec.hasUnderlay && !material.IsKeywordEnabled("UNDERLAY_ON"))
-            {
-                return false;
-            }
-
-            if (spec.hasOutline
-                && (!MaterialFloatApprox(material, "_OutlineWidth", spec.outlineWidth)
-                    || !MaterialColorApprox(material, "_OutlineColor", ToColor(spec.outlineColor))))
-            {
-                return false;
-            }
-
-            // 描边落点由 _FaceDilate 决定：同宽但按旧规则（宽度/2）生成的材质会把外描边画细，不能复用
-            if (spec.hasOutline && HasStrokeAlign(spec)
-                && !MaterialFloatApprox(material, "_FaceDilate", ResolveFaceDilate(spec)))
-            {
-                return false;
-            }
-
-            if (spec.hasUnderlay
-                && (!MaterialFloatApprox(material, "_UnderlayOffsetX", spec.underlayOffsetX)
-                    || !MaterialFloatApprox(material, "_UnderlayOffsetY", spec.underlayOffsetY)
-                    || !MaterialFloatApprox(material, "_UnderlaySoftness", spec.underlaySoftness)
-                    || !MaterialFloatApprox(material, "_UnderlayDilate", spec.underlayDilate)
-                    || !MaterialColorApprox(material, "_UnderlayColor", ToColor(spec.underlayColor))))
-            {
-                return false;
-            }
-
-            return true;
+            AssetDatabase.SaveAssetIfDirty(material);
         }
 
         /// <summary>
         /// 将 Figma 近似参数写入 TMP 材质属性。
         /// </summary>
-        private static void ApplyMaterialProperties(Material material, TextMaterialPayload spec)
+        private static void ApplyMaterialProperties(Material material, TextMaterialPayload spec, bool resetFaceDilate = true)
         {
             if (material == null)
             {
@@ -349,7 +244,10 @@ namespace MagicWarrior.Editor.FigmaBridge
             bool hasOutline = spec != null && spec.hasOutline && spec.outlineWidth > 0.001f;
             bool hasUnderlay = spec != null && spec.hasUnderlay;
             SetMaterialFloat(material, "_OutlineWidth", hasOutline ? spec.outlineWidth : 0f);
-            SetMaterialFloat(material, "_FaceDilate", hasOutline ? ResolveFaceDilate(spec) : 0f);
+            if (hasOutline || resetFaceDilate)
+            {
+                SetMaterialFloat(material, "_FaceDilate", hasOutline ? ResolveFaceDilate(spec) : 0f);
+            }
             SetMaterialColor(material, "_OutlineColor", hasOutline ? ToColor(spec.outlineColor) : Color.black);
             SetMaterialFloat(material, "_UnderlayOffsetX", hasUnderlay ? spec.underlayOffsetX : 0f);
             SetMaterialFloat(material, "_UnderlayOffsetY", hasUnderlay ? spec.underlayOffsetY : 0f);
@@ -357,30 +255,14 @@ namespace MagicWarrior.Editor.FigmaBridge
             SetMaterialFloat(material, "_UnderlayDilate", hasUnderlay ? spec.underlayDilate : 0f);
             SetMaterialColor(material, "_UnderlayColor", hasUnderlay ? ToColor(spec.underlayColor) : Color.black);
             SetKeyword(material, "OUTLINE_ON", hasOutline);
+            SetKeyword(material, "UNDERLAY_INNER", false);
             SetKeyword(material, "UNDERLAY_ON", hasUnderlay);
+            // TMP 绑定材质时会重算 SDF 比例，保存和比较前先更新这些参数。
+            ShaderUtilities.UpdateShaderRatios(material);
         }
 
         /// <summary>
-        /// 获取已存在的 TMP 材质搜索目录，避免 AssetDatabase 扫描不存在路径。
-        /// </summary>
-        private static string[] GetExistingMaterialSearchFolders()
-        {
-            string[] candidateFolders =
-            {
-                FigmaTextMaterialDir,
-                // 保留旧目录，兼容尚未迁移材质的工程。
-                "Assets/MagicWarrior/_Resources/Font/Package",
-                "Assets/_Resources/Sharders/Font"
-            };
-            return candidateFolders
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Where(AssetDatabase.IsValidFolder)
-                .ToArray();
-        }
-
-        /// <summary>
-        /// 按 Spec 参数构建兜底签名，防止旧请求未写 signature。
+        /// 按校正后的材质参数生成签名。
         /// </summary>
         private static string BuildTextMaterialSignature(TextMaterialPayload spec)
         {
@@ -439,12 +321,28 @@ namespace MagicWarrior.Editor.FigmaBridge
             }
         }
 
+        /// <summary>没有字形的静态字体若只代理一个回退字体，使用实际字形的采样参数。</summary>
+        private static TMP_FontAsset ResolveOutlineFont(TMP_FontAsset font)
+        {
+            if (font != null && font.atlasPopulationMode == AtlasPopulationMode.Static
+                && font.characterTable.Count == 0 && font.fallbackFontAssetTable is { Count: 1 })
+            {
+                TMP_FontAsset fallback = font.fallbackFontAssetTable[0];
+                if (fallback != null && fallback.characterTable.Count > 0)
+                {
+                    return fallback;
+                }
+            }
+
+            return font;
+        }
+
         /// <summary>
-        /// 按 Unity 中真实 CommonFont 的 SDF 参数校正描边：OutlineWidth = 描边px × pointSize / (2 × padding × 字号)。
+        /// 按目标字体的 SDF 参数校正描边：OutlineWidth = 描边px × pointSize / (2 × padding × 字号)。
         /// Figma 插件只能按默认 58/10 估算；仅校正带 strokeAlign 的请求，旧请求保持原值。
         /// 字号取 Figma 字号：描边按 Figma 设计比例换算，与插件生成的材质名一致，材质也可能被不同字号的文本共用。
         /// </summary>
-        private static void CalibrateOutlineForFont(TextMaterialPayload spec, float fontSize)
+        private static void CalibrateOutlineForFont(TextMaterialPayload spec, float fontSize, TMP_FontAsset font)
         {
             if (spec == null || !spec.enabled || !spec.hasOutline || !HasStrokeAlign(spec)
                 || spec.sourceStrokeWeight <= 0f || fontSize <= 0f)
@@ -452,12 +350,12 @@ namespace MagicWarrior.Editor.FigmaBridge
                 return;
             }
 
-            var font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(CommonFontPath);
+            font = ResolveOutlineFont(font);
             float pointSize = font != null ? (float)font.faceInfo.pointSize : 0f;
             float padding = font != null ? font.atlasPadding : 0f;
             if (pointSize <= 0f || padding <= 0f)
             {
-                BridgeLogger.Warn($"[FigmaTextStyleSync] 未读到 CommonFont SDF 参数，沿用插件估算的描边宽度 {spec.outlineWidth:0.##}：{CommonFontPath}",
+                BridgeLogger.Warn($"[FigmaTextStyleSync] 未读到目标字体 SDF 参数，沿用插件估算的描边宽度 {spec.outlineWidth:0.##}",
                     operationName: "unity.text-style-sync");
                 return;
             }
@@ -481,15 +379,10 @@ namespace MagicWarrior.Editor.FigmaBridge
                 return;
             }
 
-            // 宽度变化时同步改写签名与材质名里的宽度片段，避免材质名与实际参数不一致
-            string oldToken = $"_w_{Mathf.RoundToInt(spec.outlineWidth * 100f):000}";
-            string newToken = $"_w_{Mathf.RoundToInt(width * 100f):000}";
             float oldWidth = spec.outlineWidth;
             spec.outlineWidth = width;
             spec.faceDilate = spec.strokeAlign.ToUpperInvariant() == "OUTSIDE" ? width
                 : spec.strokeAlign.ToUpperInvariant() == "INSIDE" ? -width : 0f;
-            spec.signature = spec.signature?.Replace(oldToken, newToken);
-            spec.materialName = spec.materialName?.Replace(oldToken, newToken);
             BridgeLogger.Info($"[FigmaTextStyleSync] 按字体 SDF 参数校正描边宽度 {oldWidth:0.##} -> {width:0.##}"
                 + $"（pointSize={pointSize}, padding={padding}, fontSize={fontSize}, align={spec.strokeAlign}）",
                 operationName: "unity.text-style-sync");
@@ -529,44 +422,13 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// </summary>
         private static string SanitizeAssetName(string rawName)
         {
-            string name = string.IsNullOrEmpty(rawName) ? "CommonFont_figma_text_style" : rawName;
+            string name = rawName;
             foreach (char invalidChar in Path.GetInvalidFileNameChars())
             {
                 name = name.Replace(invalidChar, '_');
             }
 
             return name.Trim();
-        }
-
-        /// <summary>
-        /// 判断材质浮点属性是否近似匹配。
-        /// </summary>
-        private static bool MaterialFloatApprox(Material material, string property, float expected)
-        {
-            if (!material.HasProperty(property))
-            {
-                return Mathf.Abs(expected) <= MaterialFloatTolerance;
-            }
-
-            return Mathf.Abs(material.GetFloat(property) - expected) <= MaterialFloatTolerance;
-        }
-
-        /// <summary>
-        /// 判断材质颜色属性是否近似匹配。
-        /// </summary>
-        private static bool MaterialColorApprox(Material material, string property, Color expected)
-        {
-            if (!material.HasProperty(property))
-            {
-                return expected.maxColorComponent <= MaterialColorTolerance
-                    && expected.a <= MaterialColorTolerance;
-            }
-
-            Color actual = material.GetColor(property);
-            return Mathf.Abs(actual.r - expected.r) <= MaterialColorTolerance
-                && Mathf.Abs(actual.g - expected.g) <= MaterialColorTolerance
-                && Mathf.Abs(actual.b - expected.b) <= MaterialColorTolerance
-                && Mathf.Abs(actual.a - expected.a) <= MaterialColorTolerance;
         }
 
         /// <summary>
@@ -687,8 +549,6 @@ namespace MagicWarrior.Editor.FigmaBridge
     internal sealed class TextMaterialPayload
     {
         public bool enabled;
-        public string signature;
-        public string materialName;
         public ColorPayload outlineColor;
         public float outlineWidth;
         public ColorPayload underlayColor;

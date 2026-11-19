@@ -1,4 +1,4 @@
-// Figma Relay build #354
+// Figma Relay build #355
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #354
+// Figma Relay build #355
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (354 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 354)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "354" });
+// DIAG: 插件启动标记 (355 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 355)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "355" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "354",
+        build: "355",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -18096,11 +18096,15 @@ async function handleFigmaInspectNodes(message) {
 }
 let mergingImageLayers = false;
 
+function hasMergeableImageContent(node) {
+  if (!node.visible || node.opacity === 0) return false;
+  return hasImageFill(node) || ("children" in node && node.children.some(hasMergeableImageContent));
+}
+
 function collectMergeImageLayers(page, selection) {
   const selectedIds = new Set(selection.map(node => node.id));
   const childOrder = new Map();
   const layers = selection.map(node => {
-    if (!hasImageFill(node)) throw new Error("「" + node.name + "」需要有可见的图片填充。");
     const stackPath = [];
     for (let child = node; child.id !== page.id; child = child.parent) {
       if (!child.parent) throw new Error("选区已变化，请重新选择图片图层。");
@@ -18115,6 +18119,7 @@ function collectMergeImageLayers(page, selection) {
       }
       stackPath.unshift(childOrder.get(parent.id).get(child.id));
     }
+    if (!hasMergeableImageContent(node)) throw new Error("「" + node.name + "」需要有可见的图片填充。");
     const bounds = node.absoluteRenderBounds;
     if (!bounds || ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
       || bounds.width <= 0 || bounds.height <= 0) {
@@ -18181,7 +18186,7 @@ async function handleMergeImageLayers(message) {
     data: { pageId: page.id, nodeIds: selection.map(node => node.id), selectedCount: selection.length }
   });
   const reply = result => figma.ui.postMessage({ type: "MERGE_IMAGE_LAYERS_RESULT", requestId: message.requestId, result });
-  operation.step("validate-selection", "校验选中的图片图层", { selectedCount: selection.length, busy: mergingImageLayers });
+  operation.step("validate-selection", "校验选中的图层", { selectedCount: selection.length, busy: mergingImageLayers });
   if (mergingImageLayers) {
     const error = new Error("正在合并图层，请等待当前操作完成。");
     operation.fail(error, "本次合并未开始");
@@ -18193,7 +18198,7 @@ async function handleMergeImageLayers(message) {
   let output;
   let result;
   try {
-    if (selection.length < 2) throw new Error("请先选择至少两张图片。");
+    if (selection.length < 2) throw new Error("请先选择至少两个图片图层或含图片的组。");
     const layers = collectMergeImageLayers(page, selection);
     const x = Math.floor(Math.min(...layers.map(layer => layer.bounds.x)));
     const y = Math.floor(Math.min(...layers.map(layer => layer.bounds.y)));

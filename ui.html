@@ -2224,9 +2224,9 @@
     <div class="sync-sub-page" id="merge-image-layers-tab">
       <div class="section">
         <h2>合并图层</h2>
-        <div class="status-box" id="merge-image-layers-status" role="status">在画布中选择两张或更多图片，在选区右侧生成一张透明背景的合并图。</div>
+        <div class="status-box" id="merge-image-layers-status" role="status">选择至少两个图片图层或含图片的组，在选区右侧生成一张透明背景的合并图。</div>
         <div class="row">
-          <button id="mergeImageLayersBtn" type="button">合并选中的图片</button>
+          <button id="mergeImageLayersBtn" type="button">合并选中的图层</button>
         </div>
       </div>
     </div>
@@ -3844,7 +3844,7 @@
       if (mergeImageLayersRequestId) return;
       mergeImageLayersRequestId = uiLogger.idFactory();
       mergeImageLayersBtn.disabled = true;
-      mergeImageLayersStatus.textContent = "正在合并选中的图片…";
+      mergeImageLayersStatus.textContent = "正在合并选中的图层…";
       parent.postMessage({
         pluginMessage: { type: "MERGE_IMAGE_LAYERS", requestId: mergeImageLayersRequestId }
       }, "*");
@@ -3859,7 +3859,7 @@
         mergeImageLayersStatus.textContent = result.error || "合并图层失败，请重试。";
         return;
       }
-      mergeImageLayersStatus.textContent = "已合并 " + result.count + " 张图片，生成 "
+      mergeImageLayersStatus.textContent = "已合并 " + result.count + " 个图层，生成 "
         + result.width + " × " + result.height + " px 的新图层。"
         + (result.scale < 1 ? "图片已按 Figma 的像素上限等比缩小。" : "");
     }

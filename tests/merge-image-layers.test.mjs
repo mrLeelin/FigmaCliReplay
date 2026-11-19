@@ -23,8 +23,8 @@ function fixture(exportPng) {
     createFrame() {
       const frame = createNode(page, "stage", { children: [], exportAsync: options => exportPng(frame, options) });
       frame.appendChild = clone => {
-        clone.remove();
-        clone.removed = false;
+        const siblings = clone.parent.children;
+        siblings.splice(siblings.indexOf(clone), 1);
         clone.parent = frame;
         frame.children.push(clone);
       };
@@ -106,6 +106,55 @@ test("rejects an invalid selection before creating any temporary nodes", async (
   assert.match(app.result().error, /solid.*图片填充/);
   assert.equal(app.objects.length, 2);
   assert.deepEqual(app.logs().map(log => log.status), ["started", "progress", "failed"]);
+});
+
+test("merges a group with nested images as a single layer in canvas order", async () => {
+  const app = fixture(stage => {
+    const [back, group, front] = stage.children;
+    assert.deepEqual([back.id, group.id, front.id], ["back-clone", "group-clone", "front-clone"]);
+    assert.deepEqual(group.children[0].children.map(node => node.id), ["image-clone"]);
+    assert.deepEqual(JSON.parse(JSON.stringify(group.relativeTransform)), [[1, 0, 10], [0, 1, 5]]);
+    return pngHeader(stage.width, stage.height);
+  });
+  const back = app.createImage(app.page, "back", 0, 0);
+  const group = app.createNode(app.page, "Group 2", {
+    children: [],
+    absoluteRenderBounds: { x: 10, y: 5, width: 40, height: 30 },
+    absoluteTransform: [[1, 0, 10], [0, 1, 5]],
+    clone() {
+      const copy = app.createNode(app.page, "group-clone", { children: [] });
+      const nested = app.createNode(copy, "nested-clone", { children: [] });
+      app.createImage(nested, "image-clone", 10, 5);
+      return copy;
+    }
+  });
+  const nested = app.createNode(group, "nested", { children: [] });
+  const image = app.createImage(nested, "image", 10, 5);
+  const front = app.createImage(app.page, "front", 20, 0);
+  app.page.selection = [front, back, group];
+  await app.run();
+
+  assert.deepEqual(app.result(), { ok: true, count: 3, nodeId: "output", width: 60, height: 35, scale: 1 });
+  assert.deepEqual(app.page.children.slice(0, -1), [back, group, front]);
+  assert.deepEqual(group.children, [nested]);
+  assert.deepEqual(nested.children, [image]);
+});
+
+test("rejects a group whose images are hidden or fully transparent", async () => {
+  const app = fixture(() => assert.fail("invalid selection reached export"));
+  const image = app.createImage(app.page, "image", 0, 0);
+  const group = app.createNode(app.page, "Group 2", { children: [] });
+  const hidden = app.createNode(group, "hidden", { visible: false, children: [] });
+  app.createImage(hidden, "hidden-image", 10, 5);
+  const transparent = app.createImage(group, "transparent-image", 20, 5);
+  transparent.opacity = 0;
+  const hiddenFill = app.createImage(group, "hidden-fill", 30, 5);
+  hiddenFill.fills[0].visible = false;
+  app.page.selection = [image, group];
+  await app.run();
+
+  assert.match(app.result().error, /Group 2.*图片填充/);
+  assert.equal(app.objects.length, 6);
 });
 
 test("cleans up staged clones and preserves the selection when rendering fails", async () => {
