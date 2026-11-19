@@ -97,6 +97,67 @@ test("first installation keeps fixed paths, migrates only permitted settings and
   const changed = { ...config, manifestUrl: "https://other.example.test/latest.json" }; writeJsonAtomic(path.join(source, "release-config.json"), changed);
   await assert.rejects(installRelease({ source, installRoot: installed, setup: fixtureSetup }), /different update source/);
 });
+test("Windows dependency setup does not require a usable python command on PATH", { skip: process.platform !== "win32", timeout: 60000 }, async (t) => {
+  const root = temporary(t);
+  const basePython = spawnSync("python", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8", windowsHide: true });
+  assert.equal(basePython.status, 0, basePython.stderr);
+  const previousVenv = path.join(root, "previous", ".venv");
+  const createPrevious = spawnSync(basePython.stdout.trim(), ["-m", "venv", "--without-pip", previousVenv], { encoding: "utf8", windowsHide: true });
+  assert.equal(createPrevious.status, 0, createPrevious.stderr);
+  const installedPython = path.join(previousVenv, "Scripts", "python.exe");
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin);
+  for (const name of ["python.exe", "py.exe"]) fs.copyFileSync(process.execPath, path.join(bin, name));
+  const shim = path.join(bin, "python-commands.cjs");
+  fs.writeFileSync(shim, 'if (require("node:path").basename(process.execPath).toLowerCase() === "python.exe") process.exit(9009);\n');
+  const modules = path.join(root, "modules");
+  fs.mkdirSync(modules);
+  fs.writeFileSync(path.join(modules, "PIL.py"), "");
+  fs.writeFileSync(path.join(modules, "psd_tools.py"), "class PSDImage: pass\n");
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"));
+  const env = {
+    ...environment,
+    Path: [bin, process.env.PATH].join(path.delimiter),
+    NODE_OPTIONS: `--require "${shim.split(path.sep).join("/")}"`,
+    PYTHONPATH: modules,
+    PIP_NO_INDEX: "1",
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  };
+  const installer = new URL("../scripts/install_release.mjs", import.meta.url).href;
+  const setup = (name, configured) => {
+    const target = path.join(root, name);
+    fixturePackage(target, "1.1.0");
+    writeJsonAtomic(path.join(target, "package-lock.json"), { lockfileVersion: 3, packages: { "": { version: "1.1.0" } } });
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval",
+      `import { prepareDependencies } from ${JSON.stringify(installer)}; await prepareDependencies(process.argv[1]);`, target], {
+      cwd: root, env: { ...env, FIGMA_RELAY_PYTHON: configured }, encoding: "utf8", windowsHide: true, timeout: 25000
+    });
+    return { target, ...result };
+  };
+
+  const installed = setup("installed", installedPython);
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.match(installed.stderr, /"source":"FIGMA_RELAY_PYTHON".*"result":"selected"/);
+  assert.match(installed.stdout, /fixture cli/);
+  assert.ok(fs.existsSync(path.join(installed.target, ".venv", "Scripts", "python.exe")));
+
+  const unavailable = setup("unavailable", "");
+  assert.equal(unavailable.status, 1, unavailable.stderr);
+  assert.match(unavailable.stderr, /"source":"python".*"result":"unavailable"/);
+  assert.match(unavailable.stderr, /Python 3\.10\+ is required/);
+  assert.match(unavailable.stderr, /"status":"failed"/);
+  assert.equal(fs.existsSync(path.join(unavailable.target, ".venv")), false);
+
+  fs.unlinkSync(path.join(bin, "py.exe"));
+  const py = spawnSync("py", ["-3", "-c", "import sys, venv, ensurepip; sys.exit(sys.version_info < (3, 10))"], { windowsHide: true });
+  await t.test("falls back to the Windows Python launcher after a stale configured path", { skip: py.status !== 0 }, () => {
+    const launcher = setup("launcher", path.join(root, "missing.exe"));
+    assert.equal(launcher.status, 0, launcher.stderr);
+    assert.match(launcher.stderr, /"source":"FIGMA_RELAY_PYTHON".*"errorCode":"ENOENT"/);
+    assert.match(launcher.stderr, /"source":"py -3".*"result":"selected"/);
+    assert.match(launcher.stdout, /fixture cli/);
+  });
+});
 test("update lock refuses a live owner and recovers an abandoned owner", (t) => {
   const root = temporary(t), file = path.join(root, "lock"); const release = acquireLock(file); assert.throws(() => acquireLock(file), /running/); release();
   fs.writeFileSync(file, JSON.stringify({ pid: 2147483647, identity: "dead" })); const recovered = acquireLock(file); recovered(); assert.equal(fs.existsSync(file), false);

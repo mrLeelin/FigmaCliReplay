@@ -1,0 +1,2 @@
+修复 Windows 更新时 Python 启动失败（错误码 9009），优先使用现有 Relay 自带的 Python。
+支持通过 py -3 和 PATH 查找 Python，依赖准备失败时保留当前版本，并给出可操作的提示。

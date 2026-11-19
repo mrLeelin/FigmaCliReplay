@@ -175,7 +175,8 @@ export async function applyUpdate(planPath, options = {}) {
     writeJsonAtomic(paths.journal, journal);
     copyRelease(source, newRoot);
     // Setup invokes the real CLI, which may create logs even for --help.
-    connectDataDirectories(root, newRoot); await (options.setup ?? prepareDependencies)(newRoot);
+    connectDataDirectories(root, newRoot);
+    await (options.setup ?? prepareDependencies)(newRoot, { operationId: plan.planId });
     const staged = stagePlugin(root, newRoot, journal.stagedPlugin);
     stageUpdater(root, newRoot, journal.stagedUpdater);
     journal.phase = "prepared";

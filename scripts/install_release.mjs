@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -39,16 +39,68 @@ export function runCommand(command, args, options = {}) {
     child.once("error", reject); child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`Dependency setup failed (${path.basename(command)}, exit ${code}).`)));
   });
 }
-export async function prepareDependencies(root) {
-  if (process.platform === "win32") {
-    await runCommand(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm.cmd ci --omit=dev --no-audit --no-fund"], { cwd: root });
-  } else await runCommand("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: root });
-  await runCommand("python", ["-c", "import sys; assert sys.version_info >= (3, 10), 'Python 3.10+ is required'"]);
-  await runCommand("python", ["-m", "venv", path.join(root, ".venv")]);
-  const python = path.join(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-  await runCommand(python, ["-m", "pip", "install", "-r", path.join(root, "server", "requirements.txt")]);
-  await runCommand(python, ["-c", "import PIL, psd_tools; from psd_tools import PSDImage"]);
-  await runCommand(process.execPath, [path.join(root, "dist", "cli.js"), "--help"], { cwd: root });
+class DependencySetupLogger {
+  constructor(operationId) {
+    this.operationId = operationId;
+    this.started = Date.now();
+  }
+  write(status, step, details = {}) {
+    process.stderr.write(JSON.stringify({
+      time: new Date().toISOString(), level: status === "failed" ? "error" : "info",
+      module: "relay-installer", operationName: "relay.dependencies",
+      operationId: this.operationId, status, step, durationMs: Date.now() - this.started, ...details
+    }) + "\n");
+  }
+}
+function resolveSetupPython(log) {
+  // A running fixed installation already provides an absolute path to its private Python.
+  const configured = process.env.FIGMA_RELAY_PYTHON?.trim();
+  const candidates = [
+    ...(configured && path.isAbsolute(configured) ? [{ source: "FIGMA_RELAY_PYTHON", command: configured, args: [] }] : []),
+    ...(process.platform === "win32" ? [{ source: "py -3", command: "py", args: ["-3"] }] : []),
+    { source: "python", command: "python", args: [] },
+    ...(process.platform !== "win32" ? [{ source: "python3", command: "python3", args: [] }] : [])
+  ];
+  const probe = "import sys, venv, ensurepip; assert sys.version_info >= (3, 10); print(sys.executable)";
+  for (const { source, command, args } of candidates) {
+    const result = spawnSync(command, [...args, "-I", "-X", "utf8", "-c", probe], {
+      encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: 10000
+    });
+    const executable = result.stdout?.trim();
+    if (result.status === 0 && executable && path.isAbsolute(executable)) {
+      log.write("progress", "python.probe", { source, result: "selected" });
+      return executable;
+    }
+    log.write("progress", "python.probe", {
+      source, result: "unavailable", exitCode: result.status, errorCode: result.error?.code
+    });
+  }
+  throw new Error("Python 3.10+ is required for Relay dependency setup. Install Python with the venv and pip components, then restart Relay and retry the update.");
+}
+export async function prepareDependencies(root, { operationId = crypto.randomUUID() } = {}) {
+  const log = new DependencySetupLogger(operationId);
+  const windows = process.platform === "win32";
+  log.write("started", "dependencies.start");
+  try {
+    const basePython = resolveSetupPython(log);
+    log.write("progress", "npm.install");
+    if (windows) {
+      await runCommand(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm.cmd ci --omit=dev --no-audit --no-fund"], { cwd: root });
+    } else await runCommand("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: root });
+    const venv = path.join(root, ".venv");
+    const python = path.join(venv, windows ? "Scripts/python.exe" : "bin/python");
+    log.write("progress", "python.venv");
+    await runCommand(basePython, ["-I", "-m", "venv", venv]);
+    log.write("progress", "python.pip");
+    await runCommand(python, ["-m", "pip", "install", "-r", path.join(root, "server", "requirements.txt")]);
+    log.write("progress", "dependencies.verify");
+    await runCommand(python, ["-c", "import PIL, psd_tools; from psd_tools import PSDImage"]);
+    await runCommand(process.execPath, [path.join(root, "dist", "cli.js"), "--help"], { cwd: root });
+    log.write("succeeded", "dependencies.complete");
+  } catch (error) {
+    log.write("failed", "dependencies.complete", { error: error.message.slice(0, 300) });
+    throw error;
+  }
 }
 export function connectDataDirectories(root, releaseRoot) {
   for (const name of [".local", ".logs", ".tmp"]) {
