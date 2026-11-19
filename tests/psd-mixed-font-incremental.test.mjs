@@ -150,6 +150,19 @@ test('a real secondary font or style change still blocks ordinary text replaceme
   }
 });
 
+test('an original font loaded under its canonical family keeps the PSD source identity', async () => {
+  const { api, root, node, stored } = await fixture();
+  node.data.delete('psdFontRunState');
+  stored.text.fontFamily = 'PoetsenOne-Regular';
+  stored.text.fontFallback = [{ family: stored.text.fontFamily, style: 'Regular' }];
+
+  node.fontName = { family: 'Poetsen One', style: 'Regular' };
+  assert.equal(api.buildPsdLiveSourceState(node, root, stored).text.fontFamily, stored.text.fontFamily);
+
+  node.fontName = { family: 'Poetsen One', style: 'Bold' };
+  assert.equal(api.buildPsdLiveSourceState(node, root, stored).text.fontFamily, 'Poetsen One');
+});
+
 test('new font run metadata captures actual complete ranges and survives metadata snapshots', async () => {
   const { api, node } = await fixture();
   const saved = JSON.parse(node.data.get('psdFontRunState') || 'null');

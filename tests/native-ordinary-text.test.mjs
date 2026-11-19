@@ -78,6 +78,7 @@ function fixture({ fontFailure = false } = {}) {
     "createTextLayer", "createImageLayer", "createLayerNode", "importPsdJob",
     "appendPsdIncrementalRuntimeConflicts", "applyPsdTextPlan",
     "isMultilinePsdText", "applyPsdFontRuns", "normalizeFontCandidates", "isTextClipRisk",
+    "loadPsdSourceFontAlias",
     "readPsdTextFontRunState", "normalizePsdTextFontRunState",
   ];
   vm.createContext(sandbox);
@@ -237,6 +238,85 @@ test("ordinary text can use an explicitly supplied fallback with its actual styl
   assert.equal(node.fontName.family, "Explicit Backup");
   assert.equal(node.fontName.style, "Medium");
   assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
+});
+
+test("ordinary PSD text loads Poetsen One when the font catalog does not list it", async () => {
+  const { api, root, context } = fixture();
+  const attempted = [];
+  const source = { family: "PoetsenOne-Regular", style: "Regular" };
+  const original = { family: "Poetsen One", style: "Regular" };
+  const fallback = { family: "Lilita One", style: "Regular" };
+  api.getAvailableFonts = async () => [{ fontName: fallback }];
+  api.figma.loadFontAsync = async font => {
+    attempted.push([font.family, font.style]);
+    if (font.family === source.family) throw new Error("font unavailable");
+  };
+  vm.runInContext(functionSource("loadBestFont"), api);
+  const node = await api.createLayerNode(root, layer({
+    chars: "Steal all cach for X2 Rewards ",
+    fontSize: 36,
+    fontFallback: [source, fallback],
+    sourceState: { text: { fontFamily: source.family } },
+  }), context);
+  assert.deepEqual(attempted, [[source.family, source.style], [original.family, original.style]]);
+  assert.equal(node.fontName.family, original.family);
+  assert.equal(node.fontName.style, original.style);
+  assert.equal(node.fontSize, 36);
+  assert.deepEqual(context.warnings, []);
+});
+
+test("ordinary PSD text recognizes a unique PostScript font from the catalog", async () => {
+  const { api, root, context } = fixture();
+  const attempted = [];
+  const source = { family: "ExampleSans-Bold", style: "Regular" };
+  const original = { family: "Example Sans", style: "Bold" };
+  const fallback = { family: "Lilita One", style: "Regular" };
+  api.getAvailableFonts = async () => [
+    { fontName: fallback },
+    { fontName: { family: original.family, style: "Regular" } },
+    { fontName: original },
+    { fontName: original },
+  ];
+  api.figma.loadFontAsync = async font => {
+    attempted.push([font.family, font.style]);
+    if (font.family === source.family) throw new Error("font unavailable");
+  };
+  vm.runInContext(functionSource("loadBestFont"), api);
+  const node = await api.createLayerNode(root, layer({
+    fontFallback: [source, fallback],
+    sourceState: { text: { fontFamily: source.family } },
+  }), context);
+  assert.deepEqual(attempted, [[source.family, source.style], [original.family, original.style]]);
+  assert.equal(node.fontName.family, original.family);
+  assert.equal(node.fontName.style, original.style);
+  assert.deepEqual(context.warnings, []);
+});
+
+test("an ambiguous or unavailable PostScript match uses the declared fallback and reports the replacement", async () => {
+  for (const ambiguous of [true, false]) {
+    const { api, root, context } = fixture();
+    const attempted = [];
+    const source = { family: "ExampleSans-Regular", style: "Regular" };
+    const original = { family: "Example Sans", style: "Regular" };
+    const fallback = { family: "Lilita One", style: "Regular" };
+    const fonts = [original, fallback];
+    if (ambiguous) fonts.push({ family: "ExampleSans", style: "Regular" });
+    api.getAvailableFonts = async () => fonts.map(fontName => ({ fontName }));
+    api.figma.loadFontAsync = async font => {
+      attempted.push(font.family);
+      if (font.family !== fallback.family) throw new Error("font unavailable");
+    };
+    vm.runInContext(functionSource("loadBestFont"), api);
+    const node = await api.createLayerNode(root, layer({
+      fontFallback: [source, fallback],
+      sourceState: { text: { fontFamily: source.family } },
+    }), context);
+    assert.deepEqual(attempted, ambiguous
+      ? [source.family, fallback.family]
+      : [source.family, original.family, fallback.family]);
+    assert.equal(node.fontName.family, fallback.family);
+    assert.match(context.warnings.join("\n"), /ExampleSans-Regular[^\n]*Lilita One/);
+  }
 });
 
 test("ordinary image and missing characters are rejected before any Figma creation", async () => {

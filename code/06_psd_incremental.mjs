@@ -45,6 +45,21 @@ export function resolvePsdLiveContentHash(options) {
   return "figma-image:" + String(value.currentImageHash || "missing");
 }
 
+function psdFontNameKey(value) {
+  return String(value || "").toLowerCase().replace(/[\s-]+/g, "");
+}
+
+export function matchesPsdFontName(requested, actual) {
+  var family = psdFontNameKey(requested.family);
+  var style = psdFontNameKey(requested.style);
+  var actualFamily = psdFontNameKey(actual.family);
+  var actualStyle = psdFontNameKey(actual.style);
+  if (!family || !style || !actualFamily || !actualStyle) return false;
+  // PSD often supplies the full PostScript name as the family and defaults the style to Regular.
+  return (family === actualFamily && style === actualStyle)
+    || (style === "regular" && family === actualFamily + actualStyle);
+}
+
 export function isPsdFontFamilyAllowed(textState, liveFamily) {
   var expected = textState || {};
   var actual = String(liveFamily || "").trim().toLowerCase();

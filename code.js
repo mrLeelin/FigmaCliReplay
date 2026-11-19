@@ -1,4 +1,4 @@
-// Figma Relay build #347
+// Figma Relay build #349
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #347
+// Figma Relay build #349
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (347 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 347)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "347" });
+// DIAG: 插件启动标记 (349 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 349)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "349" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "347",
+        build: "349",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -10785,7 +10785,12 @@ function resolvePsdLiveFontFamily(node, storedText) {
     return String(storedText.fontFamily || "");
   }
   const fontName = node.fontName;
-  if (fontName && typeof fontName === "object") return String(fontName.family || "");
+  if (fontName && typeof fontName === "object") {
+    const sourceFamily = storedText.fontFamily;
+    const sourceFont = normalizeFontCandidates(storedText.fontFallback).find((font) => font.family === sourceFamily);
+    if (sourceFont && matchesPsdFontName(sourceFont, fontName)) return sourceFamily;
+    return String(fontName.family || "");
+  }
   // 旧 mixed 节点没有逐段基线，沿用可观测到的主字体语义；新节点逐段严格核对。
   if (actual) {
     const primaryFamily = readSharedPluginData(node, "fontFamily");
@@ -12294,6 +12299,7 @@ async function createTextLayer(root, layer, context) {
     fillHex: String(layer.fillColor && layer.fillColor.hex || ""),
     strokeEnabled: !!(layer.stroke && layer.stroke.enabled === true),
     strokeSize: layer.stroke && layer.stroke.enabled === true ? numericOr(layer.stroke.size, 0) : 0,
+    sourceFontFamily: String(sourceText.fontFamily || ""),
     fontFamily: fontName.family,
     fontStyle: fontName.style
   });
@@ -12428,19 +12434,40 @@ function createImagePaintFromHash(imageHash, scaleMode, imageTransform, opacity)
   return paint;
 }
 
-// 缓存本机可用字体列表和替换结果，避免重复调用 listAvailableFontsAsync。
-let _availableFontsCache = null;
-const _fontSubstituteCache = new Map();
-
-// 获取本机可用字体列表（单次调用后缓存）。
-async function getAvailableFonts() {
-  if (_availableFontsCache) return _availableFontsCache;
-  try {
-    _availableFontsCache = await figma.listAvailableFontsAsync();
-  } catch (e) {
-    _availableFontsCache = [];
+// 每次导入缓存 Figma 字体目录，下次导入允许发现新可用的字体。
+async function getAvailableFonts(context) {
+  if (!context.availableFonts) {
+    context.availableFonts = figma.listAvailableFontsAsync().catch((error) => {
+      context.warnings.push(`Figma 字体目录读取失败：${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    });
   }
-  return _availableFontsCache;
+  return context.availableFonts;
+}
+
+async function loadPsdSourceFontAlias(sourceFont, layer, context) {
+  // 即使目录未列出它，Figma 也可按已核验的字体族和样式加载 Poetsen One。
+  let match = sourceFont.family.toLowerCase() === "poetsenone-regular" && sourceFont.style.toLowerCase() === "regular"
+    ? { family: "Poetsen One", style: "Regular" }
+    : null;
+  if (!match) {
+    const matches = new Map();
+    for (const { fontName } of await getAvailableFonts(context)) {
+      if (!matchesPsdFontName(sourceFont, fontName)) continue;
+      if (sourceFont.family === fontName.family && sourceFont.style === fontName.style) continue;
+      matches.set(JSON.stringify([fontName.family, fontName.style]), fontName);
+    }
+    if (matches.size !== 1) return null;
+    match = matches.values().next().value;
+  }
+
+  try {
+    await figma.loadFontAsync(match);
+    return match;
+  } catch (error) {
+    context.warnings.push(`${layer.idx}:${layer.name}: PSD 原字体 ${sourceFont.family} 对应的 Figma 字体 ${match.family} ${match.style} 加载失败。`);
+    return null;
+  }
 }
 
 // 在可用字体列表中模糊匹配最接近的目标字体。
@@ -12476,41 +12503,60 @@ function findBestFontMatch(targetFamily, targetStyle, availableFonts) {
   return null;
 }
 
-// 加载文字字体：PSD 候选字体 → 本机模糊匹配 → Inter 保底。
+// 加载 PSD 原字体时，先尝试声明的名称，再与 Figma 目录中的同一字体匹配。
 async function loadBestFont(layer, context) {
   const candidates = normalizeFontCandidates(layer.fontFallback);
+  const sourceFamily = layer.sourceState?.text?.fontFamily;
   if (isOrdinaryTextLayer(layer)) {
+    let sourceLoadFailed = false;
     for (const fontName of candidates) {
       try {
         await figma.loadFontAsync(fontName);
+        if (sourceLoadFailed) {
+          context.warnings.push(`${layer.idx}:${layer.name}: PSD 原字体 ${sourceFamily} 加载失败，已使用备选字体 ${fontName.family} ${fontName.style}。`);
+        }
         return fontName;
       } catch (error) {
-        context.warnings.push(`${layer.idx}:${layer.name}: 普通文字指定字体 ${fontName.family} ${fontName.style} 加载失败。`);
+        // 原字体可能以 Figma 的字体族和样式显示。
       }
+      if (fontName.family === sourceFamily) {
+        const match = await loadPsdSourceFontAlias(fontName, layer, context);
+        if (match) return match;
+        sourceLoadFailed = true;
+      }
+      context.warnings.push(`${layer.idx}:${layer.name}: 普通文字指定字体 ${fontName.family} ${fontName.style} 加载失败。`);
     }
     throw new Error("ordinary-text-font-unavailable: 普通文字必须使用清单中明确指定的可用字体。");
   }
-  const availableFonts = await getAvailableFonts();
+  const substitutes = context.fontSubstitutes || (context.fontSubstitutes = new Map());
 
   for (const fontName of candidates) {
-    var cacheKey = fontName.family + "|" + fontName.style;
-    if (_fontSubstituteCache.has(cacheKey)) {
-      var cached = _fontSubstituteCache.get(cacheKey);
+    const isSourceFont = fontName.family === sourceFamily;
+    const cacheKey = JSON.stringify([fontName.family, fontName.style, isSourceFont]);
+    if (substitutes.has(cacheKey)) {
+      var cached = substitutes.get(cacheKey);
       if (cached) return cached;
       continue; // 之前已判定不可用，跳过
     }
 
     try {
       await figma.loadFontAsync(fontName);
-      _fontSubstituteCache.set(cacheKey, fontName);
+      substitutes.set(cacheKey, fontName);
       return fontName;
     } catch (error) {
-      // PSD 字体不可用，尝试本机模糊匹配
-      var match = findBestFontMatch(fontName.family, fontName.style, availableFonts);
+      if (isSourceFont) {
+        const sourceMatch = await loadPsdSourceFontAlias(fontName, layer, context);
+        if (sourceMatch) {
+          substitutes.set(cacheKey, sourceMatch);
+          return sourceMatch;
+        }
+      }
+      // 旧清单保留模糊匹配与 Inter 保底行为。
+      const match = findBestFontMatch(fontName.family, fontName.style, await getAvailableFonts(context));
       if (match) {
         try {
           await figma.loadFontAsync(match);
-          _fontSubstituteCache.set(cacheKey, match);
+          substitutes.set(cacheKey, match);
           context.warnings.push(
             layer.idx + ":" + layer.name + ": 字体 " + fontName.family + " " + fontName.style +
             " 不可用，已自动替换为 " + match.family + " " + match.style
@@ -12518,7 +12564,7 @@ async function loadBestFont(layer, context) {
           return match;
         } catch (e2) {}
       }
-      _fontSubstituteCache.set(cacheKey, null);
+      substitutes.set(cacheKey, null);
       context.warnings.push(
         layer.idx + ":" + layer.name + ": 字体 " + fontName.family + " " + fontName.style + " 加载失败。"
       );
@@ -15237,6 +15283,21 @@ function resolvePsdLiveContentHash(options) {
     return String(value.incomingContentHash || "");
   }
   return "figma-image:" + String(value.currentImageHash || "missing");
+}
+
+function psdFontNameKey(value) {
+  return String(value || "").toLowerCase().replace(/[\s-]+/g, "");
+}
+
+function matchesPsdFontName(requested, actual) {
+  var family = psdFontNameKey(requested.family);
+  var style = psdFontNameKey(requested.style);
+  var actualFamily = psdFontNameKey(actual.family);
+  var actualStyle = psdFontNameKey(actual.style);
+  if (!family || !style || !actualFamily || !actualStyle) return false;
+  // PSD often supplies the full PostScript name as the family and defaults the style to Regular.
+  return (family === actualFamily && style === actualStyle)
+    || (style === "regular" && family === actualFamily + actualStyle);
 }
 
 function isPsdFontFamilyAllowed(textState, liveFamily) {
