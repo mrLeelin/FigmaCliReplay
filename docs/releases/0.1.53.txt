@@ -1,0 +1,3 @@
+PSD 导入优先保留原字体，支持将 PoetsenOne-Regular 加载为 Poetsen One Regular。
+原字体不可用时，导入结果会记录原字体及使用的备选字体。
+增量预览能识别同一个字体的 PSD 名称与 Figma 名称，避免误报文字样式变更。
