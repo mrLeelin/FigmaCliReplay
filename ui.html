@@ -1332,10 +1332,49 @@
     .update-option { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--text); }
     #relay-update-section .update-option input { flex: 0 0 14px; width: 14px; height: 14px; min-height: 14px; margin: 1px 0 0; padding: 0; accent-color: var(--accent); }
     .update-option span { flex: 1; min-width: 0; line-height: 1.5; }
+    #relayUpdateBridgeOption[hidden] { display: none; }
     #relayUpdateNotes { margin: 0 0 12px; padding: 12px; border-left: 2px solid var(--accent); background: rgba(110,168,255,0.05); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
     #relayUpdateProgress { display: block; width: 100%; height: 6px; margin: 14px 0 4px; accent-color: var(--accent); }
     #relayUpdateStatus { overflow-wrap: anywhere; }
     #relay-update-section .hint { line-height: 1.6; }
+
+    #headerUnityChip { cursor: pointer; text-align: left; }
+    #headerUnityChip:focus-visible, .unity-gateway summary:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 3px;
+    }
+    .main #unity-section { container-type: inline-size; }
+    .unity-gateway-heading, .unity-gateway-actions, .unity-gateway-tools {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    }
+    .unity-gateway-heading { justify-content: space-between; margin-bottom: 16px; }
+    .main #unity-section h2 { margin: 0; font-size: 17px; }
+    .unity-gateway-project label { display: block; margin-bottom: 6px; color: var(--text-2); font-weight: 600; }
+    .main #unityProjectSelect { width: 100%; display: block; }
+    .unity-gateway-path { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .unity-gateway-path[hidden] { display: none; }
+    .unity-gateway-state {
+      --unity-state-color: var(--accent);
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px;
+      margin-top: 16px; padding: 14px; border: 1px solid var(--line);
+      border-left: 3px solid var(--unity-state-color); border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+    .unity-gateway-state[data-tone="online"] { --unity-state-color: var(--ok); }
+    .unity-gateway-state[data-tone="attention"] { --unity-state-color: var(--warn); }
+    .unity-gateway-state strong { display: block; font-size: 15px; line-height: 1.35; color: var(--text); }
+    .unity-gateway-state p { margin: 5px 0 0; color: var(--text-2); }
+    .unity-gateway-actions { justify-content: flex-end; }
+    .unity-gateway-actions [hidden], #unityManageInstallBtn[hidden] { display: none; }
+    .unity-gateway-feedback { margin-top: 9px; color: var(--text-2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .unity-gateway-feedback:empty { display: none; }
+    .unity-gateway details { margin-top: 13px; border-top: 1px solid var(--line); padding-top: 11px; }
+    .unity-gateway summary { cursor: pointer; color: var(--text-2); width: fit-content; }
+    .unity-gateway-tools { margin-top: 10px; }
+    #unityGatewayTechnical .status-box { margin-top: 9px; }
+    @container (max-width: 480px) {
+      .unity-gateway-state { grid-template-columns: 1fr; }
+      .unity-gateway-actions { justify-content: flex-start; }
+    }
 
     /* Workspace */
     .workspace {
@@ -1987,7 +2026,7 @@
         </div>
         <div class="brand-versions" role="group" aria-label="组件版本">
           <span class="release-version" id="relayVersionBadge" title="本机 Relay 运行版本">Relay 未连接</span>
-          <span class="release-version" title="当前 Figma 插件界面版本">GUI <span id="guiReleaseVersion"><!-- BEGIN_RELEASE_VERSION -->v0.1.54<!-- END_RELEASE_VERSION --></span></span>
+          <span class="release-version" title="当前 Figma 插件界面版本">GUI <span id="guiReleaseVersion"><!-- BEGIN_RELEASE_VERSION -->v0.1.56<!-- END_RELEASE_VERSION --></span></span>
           <span class="release-version bridge-version idle" id="bridgeVersionBadge" title="Unity Bridge 版本">Bridge 未连接</span>
         </div>
         <div class="brand-version-warning" id="guiVersionWarning" role="status" hidden>GUI 与 Relay 版本不一致</div>
@@ -2025,7 +2064,7 @@
         <div class="status-label">连接状态</div>
         <div class="header-status" aria-label="连接状态">
           <span class="status-chip offline" id="headerRelayChip" title="本地 Relay"><span class="dot"></span>Relay 未连接</span>
-          <span class="status-chip pending" id="headerUnityChip" title="Unity 网关"><span class="dot"></span>Unity 连接中</span>
+          <button class="status-chip pending" id="headerUnityChip" type="button" title="打开 Unity 连接设置"><span class="dot"></span>Unity 连接中</button>
         </div>
       </div>
     </aside>
@@ -2043,6 +2082,46 @@
 
   <!-- ========== 设置区域 ========== -->
   <div class="tab-page" id="settings-tab">
+    <section class="section unity global-section unity-gateway" id="unity-section" aria-labelledby="unityGatewayTitle">
+      <div class="unity-gateway-heading">
+        <h2 id="unityGatewayTitle">Unity 连接</h2>
+        <span class="badge pending" id="unity-badge">连接中</span>
+      </div>
+      <div class="unity-gateway-project">
+        <label for="unityProjectSelect">当前 Unity 工程</label>
+        <select id="unityProjectSelect" aria-describedby="unityGatewayProjectPath" disabled></select>
+        <span class="unity-gateway-path" id="unityGatewayProjectPath" hidden></span>
+      </div>
+      <div class="unity-gateway-state" id="unityGatewayState" data-tone="pending">
+        <div role="status" aria-atomic="true">
+          <strong id="unityGatewayHeadline">正在检查连接</strong>
+          <p id="unityGatewayHint">正在读取上次使用的 Unity 工程。</p>
+        </div>
+        <div class="unity-gateway-actions">
+          <button id="unityGatewayNextBtn" type="button" hidden></button>
+          <button id="unityConnectBtn" type="button" hidden>重试连接</button>
+          <button id="installUnityBridgeBtn" type="button" hidden>安装 Unity 插件</button>
+          <button id="unityDisconnectBtn" class="secondary" type="button" hidden>断开</button>
+        </div>
+      </div>
+      <div class="unity-gateway-feedback" id="unityProjectStatus" role="status"></div>
+      <details id="unityGatewayManage">
+        <summary>管理工程</summary>
+        <form class="row" id="unityProjectAddForm">
+          <input id="unityProjectPathInput" placeholder="粘贴 Unity 工程文件夹路径" aria-label="Unity 工程文件夹路径" />
+          <button id="addUnityProjectBtn" type="submit">添加工程</button>
+        </form>
+        <div class="unity-gateway-tools">
+          <button id="refreshUnityProjectsBtn" class="secondary" type="button">刷新工程列表</button>
+          <button id="unityManageInstallBtn" class="secondary" type="button">重新安装 Unity 插件</button>
+          <button id="removeUnityProjectBtn" class="danger" type="button">从列表移除</button>
+        </div>
+      </details>
+      <details id="unityGatewayTechnical">
+        <summary>连接详情</summary>
+        <div class="status-box" id="unity-status">正在检查 Unity 连接…</div>
+      </details>
+    </section>
     <div class="section global-section" id="ai-section">
       <div class="flex">
         <h2>本地 Relay</h2>
@@ -2052,8 +2131,10 @@
         <input id="relayUrl" value="http://localhost:32130" />
         <button id="connectBtn">连接</button>
         <button id="openServerBtn" class="secondary">插件目录</button>
+        <button id="copyRelayDiagnosticsBtn" class="secondary" type="button">复制连接信息</button>
       </div>
       <div class="status-box" id="ai-status">等待连接本地 Relay...</div>
+      <textarea id="relayDiagnosticsFallback" rows="5" readonly hidden aria-label="连接诊断信息"></textarea>
     </div>
 
     <div class="section global-section" id="ai-skill-settings-section">
@@ -2100,32 +2181,6 @@
       <div class="hint">保存后会在本机记住 Key，重新打开自动读取；留空保留现有 Key。测试不会上传图片或创建拆图任务。</div>
     </div>
 
-    <div class="section unity global-section" id="unity-section">
-      <div class="flex">
-        <h2>Unity 网关</h2>
-        <span class="badge pending" id="unity-badge">连接中</span>
-      </div>
-      <div class="field">
-        <label for="unityProjectSelect">目标 Unity 工程</label>
-        <select id="unityProjectSelect"></select>
-      </div>
-      <div class="row">
-        <input id="unityProjectPathInput" placeholder="输入 Unity 工程根目录" />
-        <button id="addUnityProjectBtn" type="button">添加工程</button>
-      </div>
-      <div class="row">
-        <button id="removeUnityProjectBtn" class="danger" type="button">移除</button>
-        <button id="installUnityBridgeBtn" type="button">安装/更新 Bridge</button>
-        <button id="refreshUnityProjectsBtn" class="secondary" type="button">刷新工程</button>
-      </div>
-      <div class="status-box" id="unityProjectStatus">正在读取上次的 Unity 工程...</div>
-      <div class="row">
-        <input id="unityUrl" value="" readonly placeholder="读取上次工程的 Unity Bridge 连接" title="通过本地 Relay 恢复所选 Unity 工程的连接" />
-        <button id="unityConnectBtn" disabled>自动连接</button>
-        <button id="unityDisconnectBtn" class="danger" disabled>断开</button>
-      </div>
-      <div class="status-box" id="unity-status">正在恢复上次的 Unity 连接...</div>
-    </div>
   </div>
   <!-- SETTINGS_TAB_END -->
 
@@ -2138,12 +2193,12 @@
       <div class="update-versions">
         <div class="update-version"><span>当前插件</span><strong id="relayUpdateCurrentVersion">—</strong></div>
         <div class="update-version"><span>本机 Relay</span><strong id="relayUpdateRelayVersion">未连接</strong></div>
-        <div class="update-version"><span>最新版本</span><strong id="relayUpdateLatestVersion">未检查</strong></div>
+        <div class="update-version"><span>最新发布版本</span><strong id="relayUpdateLatestVersion">未检查</strong></div>
       </div>
       <div id="relayUpdateNotes" aria-label="更新内容" hidden></div>
       <div class="update-options">
         <label class="update-option"><input id="relayUpdateAutoCheck" type="checkbox" checked disabled /><span>启动时自动检查更新</span></label>
-        <label class="update-option"><input id="relayUpdateBridgeCheck" type="checkbox" disabled /><span id="relayUpdateBridgeLabel">同时更新当前 Unity 工程的 Bridge（请先选择工程）</span></label>
+        <label class="update-option" id="relayUpdateBridgeOption" hidden><input id="relayUpdateBridgeCheck" type="checkbox" disabled /><span id="relayUpdateBridgeLabel">同时更新 Unity 插件（请先选择工程）</span></label>
       </div>
       <div class="row">
         <button id="relayUpdateCheckBtn" class="secondary" type="button" disabled>检查更新</button>
@@ -2467,7 +2522,6 @@
     const aiStatusEl = document.getElementById("ai-status");
     const aiBadge = document.getElementById("ai-badge");
 
-    const unityUrlInput = document.getElementById("unityUrl");
     const unityConnectBtn = document.getElementById("unityConnectBtn");
     const unityDisconnectBtn = document.getElementById("unityDisconnectBtn");
     const unityStatusEl = document.getElementById("unity-status");
@@ -2757,7 +2811,6 @@
     }
 
     // ─── Unity 网关状态 ───
-    let unityUrl = unityUrlInput.value.trim();
     let unityConnected = false;
     let unityConnectionState = "restoring";
     let unityConnectionAttempt = 0;
@@ -2766,6 +2819,8 @@
     let unityAutoReconnectEnabled = true;
     let unityGatewayProjectPath = "";
     let unityBridgeVersionMismatch = null;
+    let unityInstallingBridge = false;
+    let unityBridgeCompileUntil = 0;
     let unityProjects = [];
     let selectedUnityProject = null;
     let exportingImages = false;
@@ -3314,6 +3369,7 @@
       else refreshAiSkillControls();
       if (!online) resetRelayUpdateSettings("本地 Relay 未连接。连接后可核对更新状态；也可运行安装目录中的「更新修复.bat」。");
       else refreshRelayUpdateControls();
+      refreshUnityGatewayPanel();
     }
     function setUnityBadge(online) {
       var pending = !online && unityConnectionIsPending();
@@ -3345,6 +3401,7 @@
       unityConnectionState = reconnecting && unityAutoReconnectEnabled ? "restoring" : "disconnected";
       unityGatewayProjectPath = "";
       unityBridgeVersionMismatch = null;
+      unityBridgeCompileUntil = 0;
       setBridgeVersionBadge("", "disconnected");
       setUnityBadge(false);
       stopSelectedFolderRefresh();
@@ -3353,11 +3410,69 @@
       refreshUnityControls();
     }
 
-    function refreshUnityBridgeVersionState() {
-      var hasVersionMismatch = !!unityBridgeVersionMismatch;
-      installUnityBridgeBtn.textContent = hasVersionMismatch ? "同步 Bridge" : "安装/更新 Bridge";
-      installUnityBridgeBtn.classList.toggle("danger", hasVersionMismatch);
-      installUnityBridgeBtn.disabled = !selectedUnityProject || !selectedUnityProject.valid;
+    function describeUnityGateway(project, relayReady, state, automatic, mismatch, installing, compiling, pluginVersion, relayVersion) {
+      if (!relayReady) return { title: "本地 Relay 未连接", hint: "启动 Figma Relay 后，这里会自动恢复。", tone: "attention", action: "relay" };
+      if (installing) return { title: "正在安装 Unity 插件", hint: "正在把插件写入所选工程。", tone: "pending" };
+      if (state === "restoring") return { title: "正在读取 Unity 工程", hint: "正在查找上次使用的工程。", tone: "pending" };
+      if (!project) return { title: "还没有 Unity 工程", hint: "添加要同步的工程文件夹，里面应包含 Assets 和 ProjectSettings。", tone: "attention", action: "add" };
+      if (!project.valid) return { title: "找不到这个工程", hint: "工程可能已移动。请选择其他工程，或重新添加正确的路径。", tone: "attention", action: "add" };
+      if (state === "connected") return { title: "已连接 Unity", hint: "可以从「同步 Unity」传输图片和 Prefab。", tone: "online" };
+      var expected = relayVersion || (mismatch && mismatch.pluginVersion);
+      if ((mismatch && mismatch.figmaPluginVersionMismatch) || (expected && expected !== "未报告" && expected !== pluginVersion)) {
+        return { title: "Figma 插件需要更新", hint: "请关闭并重新打开 Figma 插件，再检查连接。", tone: "attention", action: "updates" };
+      }
+      if (state === "reconnecting" && compiling) return { title: "等待 Unity 编译", hint: "打开所选工程。Unity 编译完成后会自动连接。", tone: "pending" };
+      if (mismatch) {
+        var versionHint = mismatch.bridgeVersion === "未报告" ? "更新后，Unity 会重新编译并自动连接。"
+          : "当前 " + mismatch.bridgeVersion + "，需要 " + mismatch.pluginVersion + "。更新后会自动连接。";
+        return { title: "Unity 插件需要更新", hint: versionHint, tone: "attention", action: "update" };
+      }
+      if (project.bridgeInstalled === false || project.settingsConfigured === false) {
+        return { title: "需要安装 Unity 插件", hint: "安装到所选工程，再用 Unity 打开该工程。", tone: "attention", action: "install" };
+      }
+      if (state === "connecting" || state === "reconnecting") {
+        return { title: "正在等待 Unity 响应", hint: "请保持所选工程在 Unity 编辑器中打开。", tone: "pending" };
+      }
+      if (!automatic) return { title: "已断开 Unity", hint: "可以随时重新连接所选工程。", tone: "attention", action: "connect" };
+      return { title: "等待打开 Unity 工程", hint: "在 Unity 编辑器中打开所选工程，等待编译结束，再重试连接。", tone: "attention", action: "retry" };
+    }
+
+    function refreshUnityGatewayPanel() {
+      var project = selectedUnityProject;
+      var state = describeUnityGateway(project, relaySocketRegistered && relayConnected, unityConnectionState,
+        unityAutoReconnectEnabled, unityBridgeVersionMismatch, unityInstallingBridge, Date.now() < unityBridgeCompileUntil,
+        pluginReleaseVersion, reportedRelayVersion);
+      var action = state.action;
+      var connect = action === "connect" || action === "retry";
+      var install = action === "install" || action === "update";
+      var next = document.getElementById("unityGatewayNextBtn");
+      var labels = { relay: "查看 Relay 设置", add: "添加 Unity 工程", updates: "查看版本与更新" };
+      var projectPath = document.getElementById("unityGatewayProjectPath");
+      var pathText = project ? project.path : "";
+      if (projectPath.textContent !== pathText) projectPath.textContent = pathText;
+      projectPath.hidden = !project;
+      document.getElementById("unityGatewayState").dataset.tone = state.tone;
+      var headline = document.getElementById("unityGatewayHeadline");
+      var hint = document.getElementById("unityGatewayHint");
+      if (headline.textContent !== state.title) headline.textContent = state.title;
+      if (hint.textContent !== state.hint) hint.textContent = state.hint;
+      next.hidden = !labels[action];
+      next.textContent = labels[action] || "";
+      next.dataset.action = action || "";
+      unityConnectBtn.hidden = !connect;
+      unityConnectBtn.disabled = !connect;
+      unityConnectBtn.textContent = action === "connect" ? "连接 Unity" : "重试连接";
+      installUnityBridgeBtn.hidden = !install;
+      installUnityBridgeBtn.disabled = !install;
+      installUnityBridgeBtn.textContent = action === "update" ? "更新 Unity 插件" : "安装 Unity 插件";
+      unityDisconnectBtn.hidden = !unityConnected && !unityConnectionIsPending();
+      unityDisconnectBtn.textContent = unityConnected ? "断开连接" : "取消等待";
+      unityProjectSelect.disabled = !relayConnected || !unityProjects.length || unityInstallingBridge;
+      removeUnityProjectBtn.disabled = !relayConnected || !project || unityInstallingBridge;
+      refreshUnityProjectsBtn.disabled = !relayConnected || unityInstallingBridge;
+      var manageInstall = document.getElementById("unityManageInstallBtn");
+      manageInstall.hidden = install || action === "updates";
+      manageInstall.disabled = !relayConnected || !project || !project.valid || unityInstallingBridge || unityConnectionIsPending();
     }
 
     function evaluateBridgeVersion(pluginVersion, bridgeVersion) {
@@ -3387,11 +3502,12 @@
       bridgeVersionBadge.className = "release-version bridge-version " + badgeState.state;
     }
 
-    function createBridgeVersionMismatchError(bridgeVersion) {
-      var comparison = evaluateBridgeVersion(pluginReleaseVersion, bridgeVersion);
+    function createBridgeVersionMismatchError(bridgeVersion, expectedVersion, relayAcceptedBridge) {
+      var comparison = evaluateBridgeVersion(expectedVersion || pluginReleaseVersion, bridgeVersion);
       var actual = comparison.bridgeVersion === "未报告" ? "当前 Bridge 未报告版本" : "当前为 " + comparison.bridgeVersion;
-      var error = new Error("无法连接 Unity：GUI 需要 Bridge " + comparison.pluginVersion + "，" + actual + "。");
+      var error = new Error("无法连接 Unity：" + (expectedVersion ? "本地 Relay" : "GUI") + " 需要 Bridge " + comparison.pluginVersion + "，" + actual + "。");
       error.bridgeVersionMismatch = true;
+      error.figmaPluginVersionMismatch = !!relayAcceptedBridge;
       error.pluginVersion = comparison.pluginVersion;
       error.bridgeVersion = comparison.bridgeVersion;
       error.projectId = selectedUnityProject ? selectedUnityProject.id : "";
@@ -3578,10 +3694,13 @@
         emptyOption.textContent = "未登记 Unity 工程";
         unityProjectSelect.appendChild(emptyOption);
       } else {
+        var nameCounts = new Map();
+        unityProjects.forEach(function (project) { nameCounts.set(project.name, (nameCounts.get(project.name) || 0) + 1); });
         unityProjects.forEach(function (project) {
           var option = document.createElement("option");
           option.value = project.id;
-          option.textContent = project.name + (project.valid ? "" : "（路径失效）");
+          option.textContent = project.name + (nameCounts.get(project.name) > 1 ? " · " + project.path : "")
+            + (project.valid ? "" : "（路径失效）");
           unityProjectSelect.appendChild(option);
         });
       }
@@ -3592,20 +3711,13 @@
       if (unityBridgeVersionMismatch && (!selectedUnityProject || unityBridgeVersionMismatch.projectId !== selectedUnityProject.id)) {
         unityBridgeVersionMismatch = null;
       }
-      removeUnityProjectBtn.disabled = !selectedUnityProject;
-      refreshUnityBridgeVersionState();
-      if (!selectedUnityProject) {
-        unityProjectStatus.textContent = "尚未登记 Unity 工程。";
-      } else {
-        unityProjectStatus.textContent = selectedUnityProject.name + "\n" + selectedUnityProject.path
-          + "\nFigmaBridge：" + (selectedUnityProject.bridgeInstalled ? "已安装" : "未安装")
-          + "；工程设置：" + (selectedUnityProject.settingsConfigured ? "已配置" : "未配置");
-      }
+      unityProjectStatus.textContent = "";
+      refreshUnityGatewayPanel();
       refreshAiPromptControls();
     }
 
     async function refreshUnityProjects() {
-      if (!relaySocketRegistered) return;
+      if (!relaySocketRegistered || unityInstallingBridge) return;
       var context = captureRelayRequestContext();
       var sequence = ++unityProjectRefreshSequence;
       if (unityAutoConnectPending) {
@@ -3668,6 +3780,13 @@
         if (!result.ok) throw new Error(result.error || "添加 Unity 工程失败");
         unityProjectPathInput.value = "";
         renderUnityProjects(result);
+        if (result.project && (!selectedUnityProject || selectedUnityProject.id !== result.project.id)) {
+          unityProjectSelect.value = result.project.id;
+          await selectUnityProject();
+        } else if (!unityConnected && !unityConnectionIsPending()) {
+          await connectUnity();
+        }
+        document.getElementById("unityGatewayManage").open = false;
         operation.succeed("Unity 工程已添加");
       } catch (error) {
         operation.fail(error, "添加 Unity 工程失败");
@@ -3680,6 +3799,11 @@
     async function selectUnityProject() {
       var projectId = unityProjectSelect.value;
       if (!projectId) return;
+      var project = unityProjects.find(function (item) { return item.id === projectId; });
+      if (!project || !project.valid) {
+        unityProjectSelect.value = selectedUnityProject ? selectedUnityProject.id : "";
+        throw new Error("找不到这个工程。请选择其他工程，或重新添加正确的路径。");
+      }
       unityProjectRefreshSequence += 1;
       if (unityConnected || unityConnectionIsPending()) disconnectUnity();
       var context = captureRelayRequestContext();
@@ -3696,21 +3820,45 @@
       if (!selectedUnityProject) return;
       var result = await sendRelaySocketRequest("unity.projects.remove", { id: selectedUnityProject.id }, "", 8000);
       if (!result.ok) throw new Error(result.error || "移除 Unity 工程失败");
+      disconnectUnity();
       renderUnityProjects(result);
+      if (selectedUnityProject) await connectUnity();
     }
 
     async function installSelectedUnityBridge() {
-      if (!selectedUnityProject) return;
-      unityProjectStatus.textContent = "正在安装/更新 FigmaBridge：\n" + selectedUnityProject.path;
-      var result = await sendRelaySocketRequest("unity.bridge.install", { id: selectedUnityProject.id }, "", 30000);
-      if (!result.ok) throw new Error(result.error || "安装 FigmaBridge 失败");
-      renderUnityProjects(result);
-      if (unityBridgeVersionMismatch) {
-        unityProjectStatus.textContent += "\nBridge 已同步到 " + pluginReleaseVersion + "，等待 Unity 编译后重新连接。";
-      } else {
-        unityProjectStatus.textContent += "\nBridge 文件已写入，等待 Unity 编译。";
+      if (!selectedUnityProject || unityInstallingBridge) return;
+      var context = captureRelayRequestContext();
+      var projectId = selectedUnityProject.id;
+      unityInstallingBridge = true;
+      unityProjectRefreshSequence += 1;
+      unityProjectStatus.textContent = "";
+      refreshUnityGatewayPanel();
+      refreshRelayUpdateControls();
+      try {
+        var result = await sendRelaySocketRequest("unity.bridge.install", { id: projectId }, "", 30000);
+        if (!result.ok) throw new Error(result.error || "安装 Unity 插件失败");
+        if (!relayRequestIsCurrent(context) || !selectedUnityProject || selectedUnityProject.id !== projectId) return;
+        renderUnityProjects(result);
+        if (!selectedUnityProject || selectedUnityProject.id !== projectId) return;
+        unityConnectionAttempt += 1;
+        unityAutoConnectPending = false;
+        unityAutoReconnectEnabled = true;
+        unityConnected = false;
+        unityConnectionState = "reconnecting";
+        unityGatewayProjectPath = "";
+        unityBridgeCompileUntil = Date.now() + 60_000;
+        setBridgeVersionBadge("", "disconnected");
+        setUnityBadge(false);
+        setUnityStatus("Unity 插件文件已写入，等待 Unity 编译后重新连接。");
+        startSelectedFolderRefresh();
+      } finally {
+        unityInstallingBridge = false;
+        refreshUnityControls();
+        refreshRelayUpdateControls();
+        if (!relayRequestIsCurrent(context) && relaySocketRegistered) refreshUnityProjects();
       }
     }
+
     async function requestUnityCommand(action, body, timeoutMs) {
       if (!selectedUnityProject || !selectedUnityProject.id) throw new Error("请先选择 Unity 工程");
       var projectId = selectedUnityProject.id;
@@ -5497,6 +5645,7 @@
     const relayUpdateCheckBtn = document.getElementById("relayUpdateCheckBtn");
     const relayUpdateInstallBtn = document.getElementById("relayUpdateInstallBtn");
     const relayUpdateAutoCheck = document.getElementById("relayUpdateAutoCheck");
+    const relayUpdateBridgeOption = document.getElementById("relayUpdateBridgeOption");
     const relayUpdateBridgeCheck = document.getElementById("relayUpdateBridgeCheck");
     const relayUpdateBridgeLabel = document.getElementById("relayUpdateBridgeLabel");
     const relayUpdateBadge = document.getElementById("relayUpdateBadge");
@@ -5511,9 +5660,11 @@
     let relayUpdateBusy = false;
     let relayUpdateSequence = 0;
     let relayUpdatePollTimer = null;
+    let relayUpdatePollFailures = 0;
     let relayUpdateConnectionStarted = false;
     let relayUpdateInstallUncertain = false;
     let relayUpdateExplicitProjectId = "";
+    let relayUpdateCheckboxProjectId = "";
     const relayUpdateActivePhases = ["checking", "downloading", "preparing", "waiting", "installing"];
     const relayUpdatePhaseLabels = {
       idle: "未检查", checking: "检查中", available: "有更新", "up-to-date": "已是最新",
@@ -5532,6 +5683,7 @@
 
     function relayUpdateBridgeIsPending() {
       return !!relayUpdateState && !!relayUpdateState.bridge
+        && relayUpdateState.phase !== "failed" && relayUpdateState.phase !== "rolled-back"
         && ["pending", "installing", "waiting-for-unity", "pending-reconnect"].indexOf(relayUpdateState.bridge.phase) >= 0;
     }
 
@@ -5543,19 +5695,24 @@
 
     function refreshRelayUpdateControls() {
       var active = relayUpdateIsActive();
-      var locked = !relayConnected || relayUpdateBusy || active;
+      var bridgePending = relayUpdateBridgeIsPending();
+      var locked = !relayConnected || relayUpdateBusy || active || bridgePending;
       var project = relayUpdateBridgeProject();
+      var canUpdateRelay = !!(relayUpdateState && relayUpdateState.canInstall === true && relayUpdateState.configured
+        && !relayUpdateNeedsReopen());
       relayUpdateCheckBtn.disabled = !relayConnected || relayUpdateBusy;
-      relayUpdateCheckBtn.textContent = relayUpdateInstallUncertain ? "核对更新状态" : active || relayUpdateBridgeIsPending() ? "刷新进度" : "检查更新";
-      relayUpdateInstallBtn.disabled = locked || relayUpdateInstallUncertain || !relayUpdateState
-        || relayUpdateState.canInstall !== true || !relayUpdateState.configured || relayUpdateNeedsReopen();
+      relayUpdateCheckBtn.textContent = relayUpdateInstallUncertain ? "核对更新状态" : active || bridgePending ? "刷新进度" : "检查更新";
+      relayUpdateInstallBtn.disabled = locked || relayUpdateInstallUncertain || unityInstallingBridge || !canUpdateRelay;
       relayUpdateInstallBtn.textContent = relayUpdateState && relayUpdateState.phase === "failed" ? "重试更新" : "立即更新";
       relayUpdateAutoCheck.disabled = locked || !relayUpdateState;
-      relayUpdateBridgeCheck.disabled = locked || !project || !relayUpdateState || relayUpdateState.canInstall !== true;
-      if (!project) relayUpdateBridgeCheck.checked = false;
+      relayUpdateBridgeOption.hidden = !canUpdateRelay;
+      relayUpdateBridgeCheck.disabled = locked || !project || !canUpdateRelay;
+      var checkboxProjectId = project && canUpdateRelay ? project.id : "";
+      if (!checkboxProjectId || checkboxProjectId !== relayUpdateCheckboxProjectId) relayUpdateBridgeCheck.checked = false;
+      relayUpdateCheckboxProjectId = checkboxProjectId;
       relayUpdateBridgeLabel.textContent = project
-        ? "同时更新当前 Unity 工程的 Bridge（" + project.name + "）"
-        : "同时更新当前 Unity 工程的 Bridge（请先选择工程）";
+        ? "同时更新 Unity 插件（" + project.name + "）"
+        : "同时更新 Unity 插件（请先选择工程）";
     }
 
     function clearRelayUpdatePoll() {
@@ -5568,6 +5725,7 @@
       relayVersionBadge.textContent = "Relay " + (version || fallback);
       relayUpdateRelayVersion.textContent = version ? "v" + version : fallback;
       guiVersionWarning.hidden = !version || version === pluginReleaseVersion;
+      refreshUnityGatewayPanel();
     }
 
     function resetRelayUpdateSettings(message) {
@@ -5577,6 +5735,7 @@
       relayUpdateState = null;
       relayUpdateConnectionStarted = false;
       relayUpdateExplicitProjectId = "";
+      relayUpdatePollFailures = 0;
       clearRelayUpdatePoll();
       relayUpdateBadge.textContent = "未连接";
       relayUpdateBadge.className = "badge offline";
@@ -5622,22 +5781,30 @@
       }
       relayUpdateLatestVersion.textContent = result.latest ? "v" + result.latest.version : result.configured ? "未检查" : "未配置";
       var reopen = relayUpdateNeedsReopen();
+      // Older Relay builds report both an equal and an older feed as up-to-date.
+      var olderRelease = result.phase === "up-to-date" && result.latest
+        && (typeof result.releaseIsOlder === "boolean" ? result.releaseIsOlder : result.latest.version !== result.currentVersion);
       var label = reopen ? "请重新打开插件" : !result.configured ? "未配置更新源"
+        : olderRelease ? "本机版本较新"
         : result.phase === "restart-required" ? "已更新" : relayUpdatePhaseLabels[result.phase];
       relayUpdateBadge.textContent = label;
       relayUpdateBadge.className = "badge " + (result.phase === "failed" || result.phase === "rolled-back" ? "offline"
         : result.configured && ["up-to-date", "restart-required"].indexOf(result.phase) >= 0 && !reopen ? "online" : "pending");
       relayUpdateNoticeBtn.hidden = !(result.latest && result.phase === "available");
-      relayUpdateNotes.hidden = !result.latest || result.latest.notes.length === 0;
+      relayUpdateNotes.hidden = olderRelease || !result.latest || result.latest.notes.length === 0;
       relayUpdateNotes.textContent = result.latest ? result.latest.notes.map(function (note) { return "· " + note; }).join("\n") : "";
       relayUpdateProgress.hidden = !relayUpdateIsActive();
       if (typeof result.progress === "number" && Number.isFinite(result.progress)) relayUpdateProgress.value = Math.max(0, Math.min(100, result.progress));
       else relayUpdateProgress.removeAttribute("value");
-      var message = !result.configured ? "发布者尚未配置更新源，请联系发布者获取新版本。" : result.message;
-      if (!result.installed) message += "\n当前为源码或旧式解压目录；请先通过「首次安装.bat」安装到固定目录。";
+      var message = !result.configured ? "发布者尚未配置更新源，请联系发布者获取新版本。"
+        : olderRelease ? "本机 v" + result.currentVersion + " 高于目前已发布的 v" + result.latest.version + "。" : result.message;
+      if (!result.installed && result.configured) message += "\n当前从源码或解压目录运行。要使用一键更新，请先运行 Windows 分发包的启动器。";
       if (reopen) message += "\n请关闭并重新打开 Figma 插件，载入新版本代码。";
-      if (result.error) message += "\n" + result.error;
-      if (result.bridge && result.bridge.message) message += "\nUnity Bridge：" + result.bridge.message;
+      if (result.error && result.error !== result.message) message += "\n" + result.error;
+      if (result.bridge && result.bridge.message && (relayUpdateBridgeIsPending()
+        || ["pending", "installing", "waiting-for-unity", "pending-reconnect"].indexOf(result.bridge.phase) < 0)) {
+        message += "\nUnity 插件：" + result.bridge.message;
+      }
       relayUpdateStatus.textContent = message;
       refreshRelayUpdateControls();
     }
@@ -5650,8 +5817,9 @@
 
     function scheduleRelayUpdatePoll() {
       clearRelayUpdatePoll();
-      if (!relayConnected || !relayUpdateIsActive() && !relayUpdateBridgeIsPending()) return;
-      var delay = relayUpdateState.bridge && relayUpdateState.bridge.phase === "pending-reconnect" && !relayUpdateIsActive() ? 5000 : 1000;
+      if (!relayConnected || !relayUpdateIsActive() && !relayUpdateBridgeIsPending() && !relayUpdateInstallUncertain) return;
+      var delay = relayUpdateBridgeIsPending() && relayUpdateState.bridge.phase === "pending-reconnect" && !relayUpdateIsActive() ? 5000 : 1000;
+      if (relayUpdatePollFailures) delay = Math.min(15000, delay * Math.pow(2, Math.min(relayUpdatePollFailures, 4)));
       relayUpdatePollTimer = setTimeout(function () {
         relayUpdatePollTimer = null;
         if (relayUpdateBusy) scheduleRelayUpdatePoll();
@@ -5666,14 +5834,26 @@
       var sequence = ++relayUpdateSequence;
       relayUpdateBusy = true;
       refreshRelayUpdateControls();
+      if (action === "relay.update.check") {
+        relayUpdateBadge.textContent = "检查中";
+        relayUpdateBadge.className = "badge pending";
+        relayUpdateStatus.textContent = "正在检查已发布版本…";
+        relayUpdateNoticeBtn.hidden = true;
+      }
       try {
         var result = await sendRelaySocketRequest(action, payload || {}, "", action === "relay.update.check" ? 30000 : 10000);
         if (!relayUpdateRequestIsCurrent(context, sequence)) return false;
         renderRelayUpdateStatus(result);
+        relayUpdatePollFailures = 0;
         relayUpdateInstallUncertain = false;
         return true;
       } catch (error) {
         if (relayUpdateRequestIsCurrent(context, sequence)) {
+          if (action === "relay.update.status" && (relayUpdateIsActive() || relayUpdateBridgeIsPending() || relayUpdateInstallUncertain)) {
+            relayUpdatePollFailures += 1;
+            relayUpdateStatus.textContent = "暂时读不到更新进度，正在重试。上次状态：" + (relayUpdateState ? relayUpdateState.message : "等待核对安装请求");
+            return false;
+          }
           if (!reportedRelayVersion) {
             const operation = uiLogger.startOperation("ui.relay-version");
             operation.step("unavailable", "Relay 尚未返回可用的版本");
@@ -5741,7 +5921,7 @@
       relayUpdateStatus.textContent = "正在提交更新请求。下载和安装进度将由本机更新器报告…";
       refreshRelayUpdateControls();
       try {
-        var result = await sendRelaySocketRequest("relay.update.install", payload, "", 10000);
+        var result = await sendRelaySocketRequest("relay.update.install", payload, "", 30000);
         if (!relayUpdateRequestIsCurrent(context, sequence)) return;
         renderRelayUpdateStatus(result);
         relayUpdateInstallUncertain = false;
@@ -7194,7 +7374,7 @@
         if (psdImportBusy && psdImportTaskId) setPsdImportProgressMessage("Relay 连接已断开，等待重连后继续查询进度…");
         resetUnityForRelayDisconnect(false);
         setAiBadge(false);
-        setAiStatus("本地 Relay 连接已断开，正在自动重连…");
+        setAiStatus("正在重连本地 Relay。若持续未连接，请运行安装目录中的 start_relay.bat 查看启动结果。");
         if (activeAiCleanupRun) activeAiCleanupRun.subscriptionId = null;
         if (relaySocketHeartbeat) {
           clearInterval(relaySocketHeartbeat);
@@ -7370,6 +7550,31 @@
       connectRelaySocket();
     }
 
+    async function copyRelayDiagnostics() {
+      var socketState = relaySocket ? relaySocket.readyState : 3;
+      var report = [
+        "Figma Relay 插件：v" + pluginReleaseVersion,
+        "连接地址：" + new URL(relayUrl).host,
+        "WebSocket：" + (["连接中", "已建立", "关闭中", "未连接"][socketState] || "未知"),
+        "Figma 会话：" + (relaySocketRegistered ? "已注册" : "未注册"),
+        "Relay 版本：" + (reportedRelayVersion || "未知"),
+        "Unity Bridge：" + (unityConnected ? "已连接" : "未连接")
+      ].join("\n");
+      var fallback = document.getElementById("relayDiagnosticsFallback");
+      fallback.hidden = true;
+      try {
+        if (await copyTextWithFallback(report)) {
+          setAiStatus("已复制连接信息。");
+          return;
+        }
+      } catch (_) { /* Some Figma hosts deny clipboard access. */ }
+      fallback.value = report;
+      fallback.hidden = false;
+      fallback.focus();
+      fallback.select();
+      setAiStatus("请按 Ctrl+C 复制已选中的连接信息。");
+    }
+
     // ─── Unity 网关连接 ───
     function normalizeBaseUrl(value) {
       return String(value || "").trim().replace(/\/+$/, "");
@@ -7386,6 +7591,9 @@
     async function readSelectedUnityGatewayConfig() {
       if (!selectedUnityProject || !selectedUnityProject.id) return "";
       var payload = await sendRelaySocketRequest("unity.gateway.get", { id: selectedUnityProject.id }, "", 5000);
+      if (!payload.found && payload.versionMismatch) {
+        throw createBridgeVersionMismatchError(payload.versionMismatch.actual, payload.versionMismatch.expected);
+      }
       // 纯出站模式（Unity 主动连中继）没有发现记录，网关地址以会话为准。
       if (payload && payload.transport === "inbound") return normalizeBaseUrl(payload.gatewayUrl);
       return payload && payload.found && payload.gatewayUrl ? normalizeBaseUrl(payload.gatewayUrl) : "";
@@ -7410,7 +7618,7 @@
       var bridgeVersion = evaluateBridgeVersion(pluginReleaseVersion, data.version);
       if (!bridgeVersion.matches) {
         setBridgeVersionBadge(data.version, "mismatch");
-        throw createBridgeVersionMismatchError(data.version);
+        throw createBridgeVersionMismatchError(data.version, undefined, true);
       }
       return { url: normalizedUrl, data: data };
     }
@@ -7421,12 +7629,11 @@
 
     function applyUnityConnection(probe) {
       const data = probe.data || {};
-      unityUrl = probe.url;
-      unityUrlInput.value = unityUrl;
       unityConnected = true;
       unityConnectionState = "connected";
       unityGatewayProjectPath = data.projectPath || "";
       unityBridgeVersionMismatch = null;
+      unityBridgeCompileUntil = 0;
       setBridgeVersionBadge(data.version, "connected");
       setUnityBadge(true);
       setSelectedFolder(data.selectedFolder || "", false, data.imageTargetDisplay || "");
@@ -7440,6 +7647,15 @@
 
     async function connectUnity() {
       if (unityConnectionState === "connecting") return;
+      if (!selectedUnityProject || selectedUnityProject.valid === false
+        || selectedUnityProject.bridgeInstalled === false || selectedUnityProject.settingsConfigured === false) {
+        unityAutoConnectPending = false;
+        unityConnectionState = "disconnected";
+        setUnityBadge(false);
+        setUnityStatus("请选择可用的工程，并确认已安装 Unity 插件。");
+        refreshUnityControls();
+        return;
+      }
       var context = captureRelayRequestContext();
       var attempt = ++unityConnectionAttempt;
       var connectingProjectId = selectedUnityProject && selectedUnityProject.id;
@@ -7448,6 +7664,7 @@
       unityConnectionState = "connecting";
       unityConnected = false;
       unityBridgeVersionMismatch = null;
+      unityBridgeCompileUntil = 0;
       setBridgeVersionBadge("", "disconnected");
       setUnityBadge(false);
       setUnityStatus("正在连接 Unity" + (selectedUnityProject ? "：" + selectedUnityProject.name : "") + "...");
@@ -7499,6 +7716,7 @@
       unityConnectionState = "disconnected";
       unityGatewayProjectPath = "";
       unityBridgeVersionMismatch = null;
+      unityBridgeCompileUntil = 0;
       setBridgeVersionBadge("", "disconnected");
       setUnityBadge(false);
       setSelectedFolder("未连接", true);
@@ -7514,16 +7732,13 @@
       var directImportProjectReady = !!(selectedUnityProject && selectedUnityProject.valid
         && selectedUnityProject.bridgeInstalled && selectedUnityProject.settingsConfigured
         && !unityBridgeVersionMismatch);
-      unityConnectBtn.disabled = unityConnected || unityConnectionIsPending();
-      unityDisconnectBtn.disabled = !unityConnected && !unityConnectionIsPending();
-      unityUrlInput.disabled = unityConnected || unityConnectionIsPending();
       exportImagesBtn.disabled = exportingImages || !unityConnected;
       if (previewHierarchyBtn) previewHierarchyBtn.disabled = true;
       if (exportHierarchyBtn) exportHierarchyBtn.disabled = exportingHierarchy || figmaPrefabImportBusy || !unityConnected
         || !directImportProjectReady || !selectedUnityFolder || selectedUnityFolder === "Assets"
         || !selectedUnityObjectIsFolder || !selectedUnityFolderIsEmpty;
       syncTextStyleBtn.disabled = syncingTextStyle || !unityConnected;
-      refreshUnityBridgeVersionState();
+      refreshUnityGatewayPanel();
       refreshPrefabImportControls();
       refreshTemplateCardStatuses();
       refreshUnityPrefabExportControls();
@@ -8325,6 +8540,10 @@
     async function refreshSelectedFolderQuietly() {
       var reconnecting = unityConnectionState === "reconnecting";
       if ((!unityConnected && !reconnecting) || folderRefreshInFlight) return;
+      if (reconnecting && unityBridgeCompileUntil && Date.now() >= unityBridgeCompileUntil) {
+        unityBridgeCompileUntil = 0;
+        refreshUnityControls();
+      }
       var context = captureRelayRequestContext();
       var attempt = unityConnectionAttempt;
       var projectId = selectedUnityProject && selectedUnityProject.id;
@@ -8342,8 +8561,10 @@
         if (!unityConnectionRequestIsCurrent(context, attempt, projectId)) return;
         var message = error.message || String(error);
         if (reconnecting) {
+          if (error.bridgeVersionMismatch && Date.now() < unityBridgeCompileUntil) return;
           if (error.bridgeVersionMismatch || error.unityProjectMismatch) {
             unityConnectionState = "disconnected";
+            unityBridgeCompileUntil = 0;
             unityBridgeVersionMismatch = error.bridgeVersionMismatch ? error : null;
             stopSelectedFolderRefresh();
             setUnityBadge(false);
@@ -9731,13 +9952,35 @@
       if (event.key === "Enter") refreshLogViewer();
     });
     connectBtn.addEventListener("click", reconnect);
+    document.getElementById("copyRelayDiagnosticsBtn").addEventListener("click", copyRelayDiagnostics);
     openServerBtn.addEventListener("click", openServerOrFolder);
+    document.getElementById("headerUnityChip").addEventListener("click", function () {
+      switchTab("settings-tab");
+      document.getElementById("unity-section").scrollIntoView({ block: "start" });
+    });
+    document.getElementById("unityGatewayNextBtn").addEventListener("click", function (event) {
+      var action = event.currentTarget.dataset.action;
+      if (action === "add") {
+        document.getElementById("unityGatewayManage").open = true;
+        unityProjectPathInput.focus();
+      } else if (action === "relay") {
+        document.getElementById("ai-section").scrollIntoView({ block: "start" });
+        connectBtn.focus();
+      } else if (action === "updates") {
+        switchTab("updates-tab");
+      }
+    });
     unityConnectBtn.addEventListener("click", connectUnity);
     unityDisconnectBtn.addEventListener("click", disconnectUnity);
     unityProjectSelect.addEventListener("change", function () { selectUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
-    addUnityProjectBtn.addEventListener("click", function () { addUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
+    document.getElementById("unityProjectAddForm").addEventListener("submit", function (event) {
+      event.preventDefault();
+      addUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); });
+    });
     removeUnityProjectBtn.addEventListener("click", function () { removeUnityProject().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
-    installUnityBridgeBtn.addEventListener("click", function () { installSelectedUnityBridge().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
+    [installUnityBridgeBtn, document.getElementById("unityManageInstallBtn")].forEach(function (button) {
+      button.addEventListener("click", function () { installSelectedUnityBridge().catch(function (error) { unityProjectStatus.textContent = error.message || String(error); }); });
+    });
     refreshUnityProjectsBtn.addEventListener("click", refreshUnityProjects);
     exportImagesBtn.addEventListener("click", exportImagesToUnity);
     if (createHierarchyBackupCheck) createHierarchyBackupCheck.addEventListener("change", refreshUnityControls);

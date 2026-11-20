@@ -9,7 +9,7 @@ import { LogLevels, LogSources, LogStatuses, type LogQuery } from "./logging/log
 import { UnityProjectRegistry } from "./unityProjectRegistry.js";
 import { installUnityBridge } from "./unityBridgeInstaller.js";
 import { callUnityBridge } from "./unityBridgeClient.js";
-import { unityProjectKey, unitySessionStatus } from "./unitySessionRegistry.js";
+import { unityProjectKey, unitySessionStatus, unityVersionRejection } from "./unitySessionRegistry.js";
 import { isRecord } from "./utils.js";
 import { resolveDroppedPrefabs } from "./prefabDropResolver.js";
 import { DxxConfig } from "./dxxConfig.js";
@@ -160,6 +160,7 @@ export function createRelayControlHandler(
             const session = existing.valid
               ? unitySessionStatus().find((item) => unityProjectKey(item.projectPath) === key)
               : undefined;
+            const versionMismatch = existing.valid && !session ? unityVersionRejection(existing.path) : undefined;
             result = session
               ? {
                   found: true,
@@ -169,7 +170,7 @@ export function createRelayControlHandler(
                   clientVersion: session.clientVersion,
                   updatedAtUtc: session.lastHeartbeatAt
                 }
-              : { found: false };
+              : { found: false, ...(versionMismatch ? { versionMismatch } : {}) };
           }
           else if (action === "unity.projects.remove") {
             unityProjects.remove(id);

@@ -12,6 +12,7 @@ interface ReleasePayload { schemaVersion: number; version: string; publishedAt: 
 export interface UpdateStatus {
   ok: true; currentVersion: string; installed: boolean; configured: boolean; autoCheck: boolean;
   manifestUrl?: string; phase: UpdatePhase; message: string; canInstall: boolean; progress?: number; error?: string;
+  releaseIsOlder?: boolean;
   latest?: Pick<ReleasePayload, "version" | "publishedAt" | "notes">;
   bridge?: { projectId: string; phase: string; message: string };
 }
@@ -24,6 +25,7 @@ export interface UpdateServiceOptions {
 }
 
 const activePhases = new Set<UpdatePhase>(["downloading", "preparing", "waiting", "installing"]);
+const pendingBridgePhases = new Set(["pending", "installing", "waiting-for-unity", "pending-reconnect"]);
 const phases = new Set<UpdatePhase>(["idle", "checking", "available", "up-to-date", ...activePhases, "restart-required", "rolled-back", "failed"]);
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -50,7 +52,10 @@ export async function fetchUpdateManifest(url: string): Promise<unknown> {
   const signal = AbortSignal.timeout(15_000);
   let response: Response | undefined;
   for (let redirects = 0; redirects <= 5; redirects++) {
-    response = await fetch(target, { signal, redirect: "manual" });
+    try { response = await fetch(target, { signal, redirect: "manual" }); }
+    catch (error) {
+      throw new Error(signal.aborted ? "连接更新源超时，请稍后重试。" : "无法连接更新源，请检查网络后重试。", { cause: error });
+    }
     if (![301, 302, 303, 307, 308].includes(response.status)) break;
     const location = response.headers.get("location");
     await response.body?.cancel();
@@ -58,6 +63,7 @@ export async function fetchUpdateManifest(url: string): Promise<unknown> {
     target = validateDownloadUrl(new URL(location, target).href);
   }
   if (!response) throw new Error("更新源没有响应。");
+  if (response.status === 404) throw new Error("更新源找不到发布清单（HTTP 404），请联系发布者。");
   if (!response.ok || !response.body) throw new Error(`更新检查失败：HTTP ${response.status}`);
   const chunks: Uint8Array[] = [];
   let bytes = 0;
@@ -125,12 +131,15 @@ export class UpdateService {
         }
       }
     }
-    if (isRecord(stored?.bridge) && stored.bridge.phase === "pending-reconnect" && this.options.refreshBridge) {
+    const updating = activePhases.has(stored?.phase as UpdatePhase);
+    const bridge = isRecord(stored?.bridge) ? stored.bridge as unknown as NonNullable<UpdateStatus["bridge"]> : undefined;
+    const bridgePending = Boolean(bridge && pendingBridgePhases.has(bridge.phase));
+    const waitingForBridge = stored?.phase === "restart-required" && bridgePending;
+    if (waitingForBridge && bridge?.phase === "pending-reconnect" && this.options.refreshBridge) {
       void this.options.refreshBridge().catch(() => { /* The Bridge worker records its own recoverable result. */ });
     }
-    // The detached updater owns durable progress; a previous check must not hide it.
-    const state = stored && activePhases.has(stored.phase as UpdatePhase) ? stored
-      : this.localState ? { ...stored, ...this.localState } : stored;
+    // A check result must not inherit progress or errors from a different plan.
+    const state = updating || waitingForBridge ? stored : this.localState ?? stored;
     const phase = typeof state?.phase === "string" && phases.has(state.phase as UpdatePhase) ? state.phase as UpdatePhase : "idle";
     const latest = this.localState?.phase === "failed" && !this.envelope ? undefined
       : this.latest ?? (isRecord(stored?.latest) ? stored.latest as unknown as ReleasePayload : undefined);
@@ -139,11 +148,13 @@ export class UpdateService {
       ok: true, currentVersion: this.version, installed: config.installed, configured,
       autoCheck: settings?.autoCheck !== false, ...(config.manifestUrl ? { manifestUrl: config.manifestUrl } : {}), phase,
       message: typeof state?.message === "string" ? state.message : !configured ? "发布者尚未配置更新源。" : !config.installed ? "请先通过首次安装迁移到固定安装目录，再使用一键更新。" : "可检查最新版本。",
-      canInstall: config.installed && configured && Boolean(latest && compareVersions(latest.version, this.version) > 0) && !activePhases.has(phase) && phase !== "checking",
+      canInstall: config.installed && configured && Boolean(this.envelope && this.latest && compareVersions(this.latest.version, this.version) > 0)
+        && !updating && !waitingForBridge && phase !== "checking",
+      ...(phase === "up-to-date" ? { releaseIsOlder: state?.releaseIsOlder === true } : {}),
       ...(latest ? { latest: { version: latest.version, notes: latest.notes, publishedAt: latest.publishedAt } } : {}),
       ...(typeof state?.progress === "number" ? { progress: state.progress } : {}),
       ...(typeof state?.error === "string" ? { error: state.error } : {}),
-      ...(isRecord(stored?.bridge) ? { bridge: stored.bridge as unknown as UpdateStatus["bridge"] } : {}),
+      ...(bridge && (!bridgePending || updating || waitingForBridge) ? { bridge } : {}),
     };
   }
 
@@ -155,7 +166,8 @@ export class UpdateService {
 
   check(): Promise<UpdateStatus> {
     if (this.checkPromise) return this.checkPromise;
-    if (activePhases.has(this.status().phase)) return Promise.resolve(this.status());
+    const current = this.status();
+    if (activePhases.has(current.phase) || (current.bridge && pendingBridgePhases.has(current.bridge.phase))) return Promise.resolve(current);
     this.checkPromise = this.performCheck().finally(() => { this.checkPromise = undefined; });
     return this.checkPromise;
   }
@@ -169,8 +181,11 @@ export class UpdateService {
       const latest = parseSignedManifest(envelope, config.publicKey) as ReleasePayload;
       this.envelope = envelope;
       this.latest = latest;
-      const available = compareVersions(latest.version, this.version) > 0;
-      this.localState = { phase: available ? "available" : "up-to-date", message: available ? `发现新版本 v${latest.version}。` : "当前已是最新版本。" };
+      const comparison = compareVersions(latest.version, this.version);
+      if (comparison > 0) this.localState = { phase: "available", message: `发现新版本 v${latest.version}。` };
+      else if (comparison < 0) this.localState = { phase: "up-to-date", releaseIsOlder: true,
+        message: `本机 v${this.version} 高于目前已发布的 v${latest.version}。` };
+      else this.localState = { phase: "up-to-date", message: "当前已是最新版本。" };
     } catch (error) {
       this.envelope = undefined;
       this.latest = undefined;
@@ -180,7 +195,8 @@ export class UpdateService {
   }
 
   async install(bridge?: { projectId: string; projectPath: string }): Promise<UpdateStatus> {
-    if (this.launching || activePhases.has(this.status().phase)) return this.status();
+    const current = this.status();
+    if (this.launching || activePhases.has(current.phase) || (current.bridge && pendingBridgePhases.has(current.bridge.phase))) return current;
     this.launching = true;
     try {
       const config = this.configuration();

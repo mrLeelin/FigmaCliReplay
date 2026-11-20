@@ -199,6 +199,25 @@ Get-ChildItem -LiteralPath $PluginRoot -Filter "*.bat" -File | ForEach-Object {
 }
 
 Copy-Item -LiteralPath (Join-Path $PluginRoot 'docs\distribution.md') -Destination (Join-Path $releaseRoot 'README.md')
+Copy-Item -LiteralPath (Join-Path $ScriptDir 'open_relay_release.bat') -Destination (Join-Path $releaseRoot 'Open Figma Relay.bat')
+
+Write-Step "Bundling Windows x64 runtimes and production dependencies"
+$nodeVersion = (& node --version).Trim()
+Invoke-Checked -FilePath 'python' -Arguments @((Join-Path $ScriptDir 'bundle_windows_runtime.py'), $relayRoot, $nodeVersion)
+Push-Location $relayRoot
+try {
+    Invoke-Checked -FilePath 'npm.cmd' -Arguments @('ci', '--omit=dev', '--no-audit', '--no-fund', '--bin-links=false')
+} finally {
+    Pop-Location
+}
+
+# Pino ships its test fixtures in the npm tarball, including a nested fixture node_modules.
+$pinoTests = Join-Path $relayRoot 'node_modules\pino\test'
+if (Test-Path -LiteralPath $pinoTests -PathType Container) {
+    $resolvedTests = (Resolve-Path -LiteralPath $pinoTests).Path
+    Assert-PathInside -Path $resolvedTests -Root $relayRoot
+    Remove-Item -LiteralPath $resolvedTests -Recurse -Force
+}
 
 Write-Step "Preparing signed update identity and release feed"
 $manifestTool = Join-Path $ScriptDir 'create_release_manifest.mjs'
@@ -216,7 +235,12 @@ foreach ($requiredUpdateFile in @('release-config.json', 'scripts\install_releas
         throw "Required update release item is missing: $requiredUpdateFile"
     }
 }
-Compress-Archive -Path (Join-Path $releaseRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
+Push-Location $releaseRoot
+try {
+    Invoke-Checked -FilePath 'python' -Arguments @('-m', 'zipfile', '-c', $zipPath, 'Open Figma Relay.bat', 'README.md', 'figma-relay')
+} finally {
+    Pop-Location
+}
 Write-Step "Signing archive metadata"
 $finalizeArguments = @($manifestTool, 'finalize', '--root', $relayRoot, '--archive', $zipPath, '--output-dir', $outputRoot)
 if ($UpdateBaseUrl) { $finalizeArguments += @('--base-url', $UpdateBaseUrl) }

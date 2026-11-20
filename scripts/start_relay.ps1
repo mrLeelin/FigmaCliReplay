@@ -6,8 +6,16 @@ $launchLog.Write('started', 'Validate independent Relay launch')
 try {
 $launchLog.Write('progress', 'Check runtime, entrypoint and port')
 $PluginRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$bundledPython = Join-Path $PluginRoot 'runtime\python\python.exe'
+$bundledNode = Join-Path $PluginRoot 'runtime\node'
 $venvPython = Join-Path $PluginRoot '.venv\Scripts\python.exe'
-if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
+if (Test-Path -LiteralPath $bundledPython -PathType Leaf) {
+    $env:FIGMA_RELAY_PYTHON = $bundledPython
+    $env:PYTHONNOUSERSITE = '1'
+    $env:PYTHONDONTWRITEBYTECODE = '1'
+    Remove-Item Env:PYTHONHOME,Env:PYTHONPATH,Env:PYTHONUSERBASE -ErrorAction SilentlyContinue
+    $env:Path = "$bundledNode;$(Split-Path -Parent $bundledPython);$env:Path"
+} elseif (Test-Path -LiteralPath $venvPython -PathType Leaf) {
     $env:FIGMA_RELAY_PYTHON = $venvPython
     $env:Path = "$(Split-Path -Parent $venvPython);$env:Path"
 }

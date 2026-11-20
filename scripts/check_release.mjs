@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { bundledRuntime } from "./update_common.mjs";
 
 // Called by package_release.ps1 inside its logged validation stage, before ZIP creation.
 const root = process.argv[2];
@@ -21,4 +22,8 @@ for (const file of ["manifest.json", "code.js", "scripts/setup_relay.ps1", "scri
   "scripts/installed_launcher.mjs", "scripts/installed_bootstrap.mjs", "scripts/extract_update.ps1", "scripts/inspect_update_process.ps1",
   "unity/Assets/Editor/FigmaBridge.meta", "server/requirements.txt", "LICENSE"]) {
   if (!fs.existsSync(path.join(root, file))) throw new Error(`Release item missing: ${file}`);
+}
+if (!bundledRuntime(root)) throw new Error("The Windows release has no bundled runtime.");
+for (const file of ["runtime/node/LICENSE", "runtime/python/LICENSE.txt", "node_modules/ws/package.json", "scripts/quick_start_release.ps1", "scripts/start_installed.ps1"]) {
+  if (!fs.existsSync(path.join(root, file))) throw new Error(`Bundled release item missing: ${file}`);
 }

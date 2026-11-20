@@ -1,0 +1,3 @@
+Windows x64 安装包自带 Node.js、Python 和运行依赖。解压后双击 Open Figma Relay.bat 即可启动，首次在 Figma 桌面版导入 manifest。
+新版 Unity 连接面板显示工程完整路径、连接状态和下一步操作。可以在设置中单独安装或更新当前工程的 Unity 插件。
+版本与更新分别显示本机版本和最新发布版本。短暂断线时保留更新进度并重试，待 Unity 插件更新结束后恢复常规检查。

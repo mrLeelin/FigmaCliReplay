@@ -45,6 +45,40 @@ test('verified newer release is offered; settings persist without installing', a
   assert.throws(() => service.settings('true'), /布尔/);
 });
 
+test('a local build above the published version is reported without a downgrade offer', async (t) => {
+  const { service } = fixture(t, { currentVersion: '1.0.2' });
+  const result = await service.check();
+  assert.equal(result.releaseIsOlder, true);
+  assert.equal(result.latest.version, '1.0.1');
+  assert.equal(result.canInstall, false);
+  assert.match(result.message, /本机.*1\.0\.2.*已发布.*1\.0\.1/);
+});
+
+test('a fresh check clears failed-plan details and never offers an unverified stored release', async (t) => {
+  const { service, dataRoot, payload } = fixture(t);
+  writeUpdateJson(path.join(dataRoot, 'updates/status.json'), {
+    phase: 'rolled-back', error: 'old rollback error', progress: 83, latest: payload,
+    bridge: { projectId: 'old', phase: 'pending', message: 'will never run' },
+  });
+  assert.equal(service.status().canInstall, false);
+  assert.equal(service.status().bridge, undefined);
+  const fresh = await service.check();
+  assert.equal(fresh.canInstall, true);
+  assert.equal(fresh.error, undefined);
+  assert.equal(fresh.progress, undefined);
+});
+
+test('checking or installing during a pending Unity update preserves the current plan', async (t) => {
+  let checks = 0;
+  const { dataRoot, service } = fixture(t, { fetchManifest: async () => { checks++; } });
+  writeUpdateJson(path.join(dataRoot, 'updates/status.json'), { phase: 'restart-required',
+    bridge: { projectId: 'current', phase: 'pending-reconnect', message: 'awaiting Unity' },
+  });
+  assert.equal((await service.check()).phase, 'restart-required');
+  assert.equal((await service.install()).bridge.phase, 'pending-reconnect');
+  assert.equal(checks, 0);
+});
+
 test('one network check runs for concurrent clients and a tampered feed clears stale offers', async (t) => {
   let release, calls = 0;
   const { options, envelope } = fixture(t);

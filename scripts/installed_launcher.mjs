@@ -4,7 +4,7 @@ import net from "node:net";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { readInstall, runtimeEnvironment, versionRoot, waitForHealth, relayControl } from "./update_common.mjs";
+import { readInstall, runtimeEnvironment, runtimeNode, versionRoot, waitForHealth, relayControl } from "./update_common.mjs";
 
 const defaultRoot = () => path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const startedChildren = new Map();
@@ -26,7 +26,8 @@ export async function terminateStartedRuntime(root, runtime) {
     if (result.status !== 0) throw new Error("Could not verify the interrupted new Relay process; it was not terminated.");
     const identity = JSON.parse(result.stdout.replace(/^\uFEFF/, ""));
     const args = identity.arguments;
-    if (identity.pid !== runtime.pid || path.resolve(identity.executablePath).toLowerCase() !== path.resolve(process.execPath).toLowerCase()
+    const release = path.dirname(path.dirname(runtime.entry));
+    if (identity.pid !== runtime.pid || path.resolve(identity.executablePath).toLowerCase() !== path.resolve(runtimeNode(release)).toLowerCase()
       || !Array.isArray(args) || args.length !== 4 || path.resolve(args[1]) !== path.resolve(runtime.entry) || args[2] !== "--port" || args[3] !== String(runtime.port)
       || !Number.isFinite(Date.parse(runtime.startedAt)) || Math.abs(Date.parse(identity.startedAt) - Date.parse(runtime.startedAt)) > 5000) throw new Error("Interrupted Relay process identity changed; it was not terminated.");
     process.kill(runtime.pid);
@@ -38,7 +39,7 @@ export async function terminateStartedRuntime(root, runtime) {
 export async function runInstalledCli(args, root = defaultRoot()) {
   const record = readInstall(root), release = versionRoot(root, record.currentVersion);
   const code = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(release, "dist", "cli.js"), ...args], { cwd: release, env: runtimeEnvironment(root, release), stdio: "inherit", windowsHide: true });
+    const child = spawn(runtimeNode(release), [path.join(release, "dist", "cli.js"), ...args], { cwd: release, env: runtimeEnvironment(root, release), stdio: "inherit", windowsHide: true });
     child.once("error", reject); child.once("exit", (value) => resolve(value ?? 1));
   });
   process.exitCode = code;
@@ -59,7 +60,7 @@ export async function launchRuntime(root, version, port = 32130, options = {}) {
   const output = fs.openSync(path.join(logRoot, "relay.stdout.log"), "a"), errors = fs.openSync(path.join(logRoot, "relay.stderr.log"), "a");
   let child;
   try {
-    child = spawn(process.execPath, [entry, "--port", String(port)], { cwd: releaseRoot, env: environment, detached: true, windowsHide: true, stdio: ["ignore", output, errors] });
+    child = spawn(runtimeNode(releaseRoot), [entry, "--port", String(port)], { cwd: releaseRoot, env: environment, detached: true, windowsHide: true, stdio: ["ignore", output, errors] });
     await new Promise((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); }); child.unref();
     startedChildren.set(child.pid, child);
   } finally { fs.closeSync(output); fs.closeSync(errors); }

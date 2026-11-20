@@ -7,7 +7,8 @@ const html = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
 const block = html.split("// RELAY_UPDATE_SETTINGS_BEGIN")[1].split("// RELAY_UPDATE_SETTINGS_END")[0];
 const headerIds = ["relayVersionBadge", "guiVersionWarning", "relayUpdateNoticeBtn"];
 const ids = [...headerIds, "relayUpdateCheckBtn", "relayUpdateInstallBtn", "relayUpdateAutoCheck",
-  "relayUpdateBridgeCheck", "relayUpdateBridgeLabel", "relayUpdateBadge", "relayUpdateCurrentVersion",
+  "relayUpdateBridgeCheck", "relayUpdateBridgeLabel", "relayUpdateBridgeOption",
+  "relayUpdateBadge", "relayUpdateCurrentVersion",
   "relayUpdateRelayVersion", "relayUpdateLatestVersion", "relayUpdateNotes", "relayUpdateProgress", "relayUpdateStatus"];
 const status = (extra = {}) => ({
   ok: true, currentVersion: "0.1.49", installed: true, configured: true, autoCheck: true,
@@ -30,7 +31,8 @@ function harness(responder = async () => status()) {
   let generation = 0;
   const context = vm.createContext({
     document: { getElementById: id => nodes[id] }, pluginReleaseVersion: "0.1.49", relayConnected: true,
-    selectedUnityProject: null, unityProjectSelect: { value: "" },
+    selectedUnityProject: null, unityProjectSelect: { value: "" }, unityInstallingBridge: false,
+    refreshUnityGatewayPanel() {},
     captureRelayRequestContext: () => ({ generation }),
     relayRequestIsCurrent: c => c.generation === generation,
     sendRelaySocketRequest: async (...args) => { calls.push(args); return responder(...args); },
@@ -135,6 +137,32 @@ test("connected status shows real latest version and release notes as text", asy
   assert.equal(h.nodes.relayUpdateInstallBtn.disabled, false);
 });
 
+test("a legacy update response with an older published version has an explicit label", async () => {
+  const h = harness(async () => status({ currentVersion: "0.1.55", installed: false, phase: "up-to-date", message: "当前已是最新版本。",
+    latest: { version: "0.1.53", notes: ["旧版说明"] } }));
+  await h.context.checkRelayUpdate();
+  assert.equal(h.nodes.relayUpdateBadge.textContent, "本机版本较新");
+  assert.match(h.nodes.relayUpdateStatus.textContent, /0\.1\.55.*0\.1\.53/);
+  assert.doesNotMatch(h.nodes.relayUpdateStatus.textContent, /已是最新版本/);
+  assert.equal(h.nodes.relayUpdateNotes.hidden, true);
+});
+
+test("a temporary progress timeout keeps the download state and retries status only", async () => {
+  let reads = 0;
+  const h = harness(async () => {
+    if (++reads === 2) throw new Error("status timeout");
+    return status({ phase: "downloading", progress: reads === 1 ? 20 : 80 });
+  });
+  await h.context.refreshRelayUpdateStatus();
+  await h.tick();
+  assert.equal(h.nodes.relayUpdateProgress.hidden, false);
+  assert.equal(h.nodes.relayUpdateProgress.value, 20);
+  assert.equal(h.timers.size, 1);
+  await h.tick();
+  assert.equal(h.nodes.relayUpdateProgress.value, 80);
+  assert.deepEqual(h.calls.map(call => call[0]), ["relay.update.status", "relay.update.status", "relay.update.status"]);
+});
+
 test("missing publisher feed is explicit and never appears current", async () => {
   const h = harness(async () => status({ configured: false, phase: "up-to-date", message: "" }));
   await h.context.startRelayUpdateConnection();
@@ -186,6 +214,17 @@ test("Bridge update is opt-in and bound to explicit current valid project", asyn
   await plain.context.refreshRelayUpdateStatus();
   await plain.context.installRelayUpdate();
   assert.equal(JSON.stringify(plain.calls[1][1]), '{"updateBridge":false}');
+});
+
+test("standalone Unity updates live in settings and the combined option requires a Relay upgrade", async () => {
+  const h = harness(async () => status({ phase: "up-to-date", currentVersion: "0.1.49", installed: false }));
+  await h.context.refreshRelayUpdateStatus();
+  h.selectProject({ id: "project-a", valid: true, name: "Unity", path: "E:/Unity/Chosen" });
+  assert.equal(h.nodes.relayUpdateBridgeOption.hidden, true);
+  const settings = html.slice(html.indexOf('id="settings-tab"'), html.indexOf("<!-- SETTINGS_TAB_END -->"));
+  const updates = html.slice(html.indexOf('id="updates-tab"'), html.indexOf('class="tab-page active" id="sync-unity-tab"'));
+  assert.match(settings, /id="unityManageInstallBtn"/);
+  assert.doesNotMatch(updates, /relayUpdateUnityBtn|relayUpdateUnityTarget|重新安装 Unity 插件/);
 });
 
 test("changing selected project invalidates Bridge checkbox before update submission", async () => {

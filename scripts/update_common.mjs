@@ -135,15 +135,44 @@ export function readInstall(root) {
   return record;
 }
 export function versionRoot(root, version) { return pathInside(path.join(root, "versions", assertVersion(version), "figma-relay"), root); }
+export function bundledRuntime(releaseRoot) {
+  const runtime = path.join(releaseRoot, "runtime");
+  const marker = path.join(runtime, "windows-x64.json");
+  if (!fs.existsSync(marker)) return undefined;
+  const info = JSON.parse(fs.readFileSync(marker, "utf8"));
+  if (info.schemaVersion !== 1 || info.platform !== "win32" || info.arch !== "x64") {
+    throw new Error("Unsupported bundled Relay runtime.");
+  }
+  const node = path.join(runtime, "node", "node.exe");
+  const python = path.join(runtime, "python", "python.exe");
+  for (const file of [node, python]) {
+    if (!fs.existsSync(file) || !fs.lstatSync(file).isFile()) throw new Error(`Bundled runtime file is missing: ${file}`);
+  }
+  return { node, python, info };
+}
+export function runtimeNode(releaseRoot) {
+  return bundledRuntime(releaseRoot)?.node ?? process.execPath;
+}
 export function runtimeEnvironment(root, releaseRoot) {
   const dataRoot = path.join(root, "data"), localDir = path.join(dataRoot, ".local"); fs.mkdirSync(localDir, { recursive: true });
   const tokenFile = path.join(localDir, "admin-token.txt");
   if (!fs.existsSync(tokenFile)) fs.writeFileSync(tokenFile, crypto.randomBytes(32).toString("hex"), { flag: "wx", mode: 0o600 });
   const token = fs.readFileSync(tokenFile, "utf8").trim();
   if (!token) throw new Error("The installation authentication token is empty.");
-  const python = path.join(releaseRoot, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-  return { ...process.env, FIGMA_RELAY_DATA_ROOT: dataRoot, FIGMA_RELAY_INSTALL_ROOT: root, FIGMA_RELAY_TOKEN: token,
+  const bundled = bundledRuntime(releaseRoot);
+  const python = bundled?.python ?? path.join(releaseRoot, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  const environment = { ...process.env, FIGMA_RELAY_DATA_ROOT: dataRoot, FIGMA_RELAY_INSTALL_ROOT: root, FIGMA_RELAY_TOKEN: token,
     FIGMA_RELAY_BRIDGE_TOKEN: token, FIGMA_RELAY_INSTANCE_ID: crypto.randomUUID(), ...(fs.existsSync(python) ? { FIGMA_RELAY_PYTHON: python } : {}) };
+  if (bundled) {
+    for (const name of Object.keys(environment)) {
+      if (/^(PATH|PYTHONHOME|PYTHONPATH|PYTHONUSERBASE)$/i.test(name)) delete environment[name];
+    }
+    environment.PATH = [path.dirname(bundled.node), path.dirname(bundled.python),
+      process.env.PATH || process.env.Path || ""].join(path.delimiter);
+    environment.PYTHONNOUSERSITE = "1";
+    environment.PYTHONDONTWRITEBYTECODE = "1";
+  }
+  return environment;
 }
 export async function relayControl(root, releaseRoot, version, runtime, action, payload = {}, timeoutMs = 8000) {
   const WebSocket = createRequire(path.join(releaseRoot, "package.json"))("ws");

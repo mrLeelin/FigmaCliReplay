@@ -6,13 +6,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { acquireLock, assertVersion, compareVersions, pathInside, readInstall, readReleaseConfig, versionRoot, writeJsonAtomic } from "./update_common.mjs";
+import { acquireLock, assertVersion, bundledRuntime, compareVersions, pathInside, readInstall, readReleaseConfig, versionRoot, writeJsonAtomic } from "./update_common.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const excluded = new Set([".local", ".logs", ".tmp", ".venv", ".git", "node_modules", "__pycache__"]);
 export function copyRelease(source, target) {
+  const bundledModules = bundledRuntime(source) && path.join(source, "node_modules");
   const copy = (from, to) => {
-    if (excluded.has(path.basename(from)) || /^\.env(?:\.|$)/.test(path.basename(from))) return;
+    if ((excluded.has(path.basename(from)) && from !== bundledModules) || /^\.env(?:\.|$)/.test(path.basename(from))) return;
     const info = fs.lstatSync(from);
     if (info.isSymbolicLink()) throw new Error("A release package must not contain symbolic links.");
     if (info.isDirectory()) { fs.mkdirSync(to, { recursive: true }); for (const name of fs.readdirSync(from)) copy(path.join(from, name), path.join(to, name)); }
@@ -82,6 +83,15 @@ export async function prepareDependencies(root, { operationId = crypto.randomUUI
   const windows = process.platform === "win32";
   log.write("started", "dependencies.start");
   try {
+    const bundled = bundledRuntime(root);
+    if (bundled) {
+      log.write("progress", "dependencies.verify-bundle", { node: bundled.info.node, python: bundled.info.python });
+      await runCommand(bundled.python, ["-I", "-B", "-c", "import PIL, psd_tools, aggdraw, scipy, pythoncom, win32com.client"], { cwd: root });
+      // CLI logging goes to stderr. Keep stdout reserved for the install result JSON.
+      await runCommand(bundled.node, [path.join(root, "dist", "cli.js"), "--help"], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+      log.write("succeeded", "dependencies.complete");
+      return;
+    }
     const basePython = resolveSetupPython(log);
     log.write("progress", "npm.install");
     if (windows) {
@@ -128,6 +138,11 @@ export function validateRelease(root, expectedVersion) {
   for (const relative of ["manifest.json", "code.js", "ui.html", "dist/index.js", "dist/cli.js", "scripts/update_common.mjs", "scripts/apply_update.mjs", "scripts/installed_launcher.mjs", "scripts/installed_bootstrap.mjs", "scripts/install_release.mjs", "scripts/extract_update.ps1", "scripts/inspect_update_process.ps1", "server/requirements.txt"]) {
     if (!fs.statSync(path.join(root, relative)).isFile()) throw new Error(`Incomplete release: ${relative}`);
   }
+  if (bundledRuntime(root)) {
+    for (const file of ["scripts/start_installed.ps1", "node_modules/ws/package.json"]) {
+      if (!fs.existsSync(path.join(root, file))) throw new Error(`Incomplete bundled release: ${file}`);
+    }
+  }
   return version;
 }
 export function writeStableEntrypoints(root, releaseRoot) {
@@ -137,9 +152,6 @@ export function writeStableEntrypoints(root, releaseRoot) {
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "figma-relay-installed", private: true, type: "module", bin: { "figma-relay": "dist/cli.js" } }, null, 2));
   writeBootstrap(root, releaseRoot);
   fs.writeFileSync(path.join(root, "dist", "cli.js"), '#!/usr/bin/env node\nimport { runInstalledCli } from "../bootstrap.mjs";\nawait runInstalledCli(process.argv.slice(2));\n');
-  fs.writeFileSync(path.join(root, "start_relay.bat"), '@echo off\r\nnode "%~dp0bootstrap.mjs" start %*\r\nif errorlevel 1 pause\r\n');
-  fs.copyFileSync(path.join(root, "start_relay.bat"), path.join(root, "启动Relay.bat"));
-  fs.writeFileSync(path.join(root, "更新修复.bat"), '@echo off\r\nnode "%~dp0bootstrap.mjs" repair %*\r\npause\r\n');
 }
 export function writeBootstrap(root, releaseRoot) {
   const temporary = path.join(root, `.bootstrap-${crypto.randomUUID()}.tmp`);
@@ -147,6 +159,18 @@ export function writeBootstrap(root, releaseRoot) {
     fs.copyFileSync(path.join(releaseRoot, "scripts", "installed_bootstrap.mjs"), temporary, fs.constants.COPYFILE_EXCL);
     fs.renameSync(temporary, path.join(root, "bootstrap.mjs"));
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+  if (bundledRuntime(releaseRoot)) {
+    fs.copyFileSync(path.join(releaseRoot, "scripts", "start_installed.ps1"), path.join(root, "start_installed.ps1"));
+    const command = '@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_installed.ps1"';
+    fs.writeFileSync(path.join(root, "start_relay.bat"), `${command} %*\r\nif errorlevel 1 pause\r\n`);
+    fs.writeFileSync(path.join(root, "更新修复.bat"), `${command} -Repair %*\r\npause\r\n`);
+    fs.writeFileSync(path.join(root, "figma-relay.ps1"), '& "$PSScriptRoot\\start_installed.ps1" -CliArgs $args\r\nexit $LASTEXITCODE\r\n');
+    fs.writeFileSync(path.join(root, "figma-relay.cmd"), '@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0figma-relay.ps1" %*\r\nexit /b %errorlevel%\r\n');
+  } else {
+    fs.writeFileSync(path.join(root, "start_relay.bat"), '@echo off\r\nnode "%~dp0bootstrap.mjs" start %*\r\nif errorlevel 1 pause\r\n');
+    fs.writeFileSync(path.join(root, "更新修复.bat"), '@echo off\r\nnode "%~dp0bootstrap.mjs" repair %*\r\npause\r\n');
+  }
+  fs.copyFileSync(path.join(root, "start_relay.bat"), path.join(root, "启动Relay.bat"));
 }
 export const updaterFiles = ["update_common.mjs", "apply_update.mjs", "installed_launcher.mjs", "install_release.mjs", "extract_update.ps1", "inspect_update_process.ps1"];
 export function stageUpdater(root, releaseRoot, staged) {
@@ -211,8 +235,12 @@ export async function installRelease(options = {}) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    const { values } = parseArgs({ options: { source: { type: "string" }, "install-root": { type: "string" }, help: { type: "boolean" } } });
-    if (values.help) process.stdout.write("Usage: node scripts/install_release.mjs [--source <extracted figma-relay>] [--install-root <fixed directory>]\n");
-    else process.stdout.write(JSON.stringify(await installRelease({ source: values.source, installRoot: values["install-root"] }), null, 2) + "\n");
+    const { values } = parseArgs({ options: { source: { type: "string" }, "install-root": { type: "string" }, help: { type: "boolean" }, start: { type: "boolean" }, port: { type: "string" } } });
+    if (values.help) process.stdout.write("Usage: node scripts/install_release.mjs [--source <extracted figma-relay>] [--install-root <fixed directory>] [--start [--port <port>]]\n");
+    else {
+      const installed = await installRelease({ source: values.source, installRoot: values["install-root"] });
+      const runtime = values.start ? await (await import("./installed_launcher.mjs")).startInstalled(installed.installRoot, Number(values.port ?? 32130)) : undefined;
+      process.stdout.write(JSON.stringify({ ...installed, ...(runtime ? { runtime } : {}) }, null, 2) + "\n");
+    }
   } catch (error) { process.stderr.write(`Installation failed: ${error.message}\n`); process.exitCode = 1; }
 }

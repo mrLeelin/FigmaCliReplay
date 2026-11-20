@@ -57,6 +57,8 @@ function expectedContents(projectRoot: string): Record<string, string> {
   const cliRoot = INSTALL_ROOT && path.resolve(projectRoot) === PLUGIN_ROOT ? INSTALL_ROOT : projectRoot;
   const cliPath = path.join(cliRoot, "dist", "cli.js");
   if (!fs.statSync(cliPath).isFile()) throw new Error("Build the project CLI before installing the skill: npm run build.");
+  const bundledCli = path.join(cliRoot, "figma-relay.cmd");
+  const fallback = fs.existsSync(bundledCli) ? `& ${psLiteral(bundledCli)} --help` : `node ${psLiteral(cliPath)} --help`;
   const sourceRoot = path.join(projectRoot, "ai", "skills", "figma-relay");
   return {
     "SKILL.md": fs.readFileSync(path.join(sourceRoot, "SKILL.md"), "utf8"),
@@ -65,7 +67,7 @@ function expectedContents(projectRoot: string): Record<string, string> {
       "# Installed Relay CLI", "",
       `Relay repository root: ${cliRoot}`, "",
       "Preferred command: `figma-relay`. If the command is absent from PATH, use this absolute fallback with the same arguments:", "",
-      "```powershell", `node ${psLiteral(cliPath)} --help`, "```", "",
+      "```powershell", fallback, "```", "",
       `Workflow documentation: ${path.join(projectRoot, "docs", "cli.md")}`,
       `Specialized skills: ${path.join(projectRoot, "ai", "skills")}`, "",
       "The CLI executable is a local client; it does not start or stop the Relay service.", "",

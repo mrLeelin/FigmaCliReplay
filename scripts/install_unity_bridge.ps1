@@ -26,7 +26,9 @@ try {
     }
     if ($BridgeToken) { $env:FIGMA_RELAY_BRIDGE_TOKEN = $BridgeToken }
     $installLog.Write('progress', 'Load packaged installer; preserve existing .meta files and ProjectSettings')
-    & node (Join-Path $PSScriptRoot 'install_unity_bridge.mjs') $ProjectPath
+    $node = Join-Path (Split-Path -Parent $PSScriptRoot) 'runtime\node\node.exe'
+    if (-not (Test-Path -LiteralPath $node -PathType Leaf)) { $node = 'node' }
+    & $node (Join-Path $PSScriptRoot 'install_unity_bridge.mjs') $ProjectPath
     if ($LASTEXITCODE -ne 0) { throw 'Bridge installation failed. See the structured error above.' }
     $installLog.Write('succeeded', 'Unity Bridge installed or updated')
 } catch {

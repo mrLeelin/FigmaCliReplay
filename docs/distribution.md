@@ -1,28 +1,26 @@
 # Figma Relay 使用说明（Windows）
 
-这个 ZIP 包含 Figma 开发插件、本机 Relay 和 Unity Editor Bridge。首次安装完成后，程序保存在固定目录，以后在插件内检查和安装更新。每台电脑都需要运行自己的 Relay。
+这个 Windows x64 ZIP 包含 Figma 开发插件、本机 Relay、Node.js、Python、运行依赖和 Unity Editor Bridge。接收者只需要 Figma 桌面版。安装与启动无需管理员权限、修改 PATH 或联网下载依赖。
 
 ## 首次安装
 
-1. 安装 Node.js 18+ 和 Python 3.10+，并加入 PATH。安装完成后重新打开终端或资源管理器。首次安装与更新需要联网下载依赖。
-2. 完整解压 ZIP，打开其中的 `figma-relay` 文件夹，双击 `首次安装.bat`。不要直接在压缩包内运行。
-3. 等待安装成功。默认固定目录是 `%LOCALAPPDATA%\FigmaRelay`；安装器会打印实际目录、启动入口和插件路径。Node 依赖与 Python `.venv` 按版本保存，个人设置集中保存在固定目录的 `data` 中。
-4. 双击固定目录中的 `start_relay.bat`。打开 Figma 桌面版，在 Plugins → Development → Import plugin from manifest 选择固定目录下的 `plugin\manifest.json`。这个路径只需导入一次；更新后关闭再重新打开插件即可。
-5. 需要连接 Unity 时，在插件设置中选择自己的 Unity 工程，点击“安装/更新 Bridge”，等待 Unity 编译、重连完成。
+1. 完整解压 ZIP，双击根目录的 `Open Figma Relay.bat`。它会安装到 `%LOCALAPPDATA%\FigmaRelay`，启动 Relay 并验证连接，设置当前 Windows 用户登录时自动启动，再在资源管理器里选中 manifest 文件。
+2. 打开 Figma 桌面版，在 Plugins → Development → Import plugin from manifest 选择该 `plugin\manifest.json`。导入一次后，从 Figma 的开发插件菜单打开即可。更新后关闭并重新打开插件。
+3. 需要同步 Unity 时，点击侧栏的 Unity 状态，进入「Unity 连接」。选择或添加工程，按面板提示安装 Unity 插件，然后在 Unity 编辑器中打开该工程并等待编译。显示「已连接 Unity」后即可同步。
 
-如果需要自定义安装位置，可在解压包的 `figma-relay` 目录执行：
+如需自定义安装位置或关闭登录自启，在解压目录运行以下命令。
 
 ```powershell
-node scripts/install_release.mjs --source . --install-root "D:\Tools\FigmaRelay"
+& '.\Open Figma Relay.bat' -InstallRoot 'D:\Tools\FigmaRelay' -SkipAutostart
 ```
 
-安装器不自动启动或停止已有 Relay。第一次从旧版切换时，先结束旧目录启动的 Relay，再运行固定目录中的启动入口。端口被其它进程占用时不会结束无关进程。
+再次双击会检查并复用已经运行的同一安装。端口被其它程序或另一套 Relay 占用时，启动器会显示端口占用错误。可以从固定目录运行 `start_relay.bat` 或 `更新修复.bat`。如需取消登录自启，可在当前用户的 `shell:startup` 中删除 `Figma Relay` 快捷方式。
 
-旧版用户需要先手动安装一次带更新功能的版本。旧目录中的 `.local` 配置会迁移到固定目录的 `data\.local`，已有目标设置会保留，发布签名私钥不会迁移。已有 AI Skill 可在新插件的“设置 → AI Skill”中检查并更新，使入口指向固定安装目录；本地改过的 Skill 文件会保留。
+已有固定目录安装的用户通过原插件的“版本与更新”升级。旧版更新器完成首次切换时仍可能调用该旧版依赖的系统 Node.js、Python 和依赖源。已有 AI Skill 可在新插件的“设置 → AI Skill”中检查并更新，使入口指向固定安装目录。本地路径、账号和令牌保存在 `data` 中。
 
 ## PSD 导入
 
-Photoshop 是可选依赖：已安装且 COM 可用时优先使用；未安装时自动使用 psd-tools。首次安装会在程序自己的 Python 环境中安装合成依赖。psd-tools 对部分复杂阴影等效果支持有限，导入日志会列出兼容警告。
+Photoshop 是可选依赖。已安装且 COM 可用时优先使用 Photoshop，其余情况自动使用包内的 psd-tools。psd-tools 对部分复杂阴影等效果支持有限，导入日志会列出兼容警告。
 
 由导入启动的 Photoshop 会在导入结束后自动退出，导入前已运行的实例保持打开；如果导入期间另外打开了文档，也会保留并提示原因。PSD 文件最大支持 1 GiB。
 
@@ -30,11 +28,11 @@ Photoshop 是可选依赖：已安装且 COM 可用时优先使用；未安装�
 
 打开左侧的“版本与更新”页签，点击“检查更新”，查看版本和更新内容，再点击“立即更新”。默认启动时自动检查，可关闭此选项；安装更新始终由用户点击。
 
-更新会下载并校验发布者签名和 ZIP 哈希，在新目录准备依赖，等待当前任务结束后切换 Relay。过程中显示下载和安装状态。切换失败会恢复之前的程序版本；个人 Key、工程列表和设置不随程序版本覆盖。
+更新会下载 ZIP，校验发布者签名和 ZIP 哈希，验证新版本的包内依赖，等待当前任务结束后切换 Relay。签名和 ZIP 下载走现有更新源。切换失败会恢复之前的程序版本，个人 Key、工程列表和设置保存在独立目录。
 
 更新完成后，关闭并重新打开 Figma 插件以加载新代码；无需重新导入 manifest。更新器不会重启 Figma 或 Unity。勾选“同时更新当前工程的 Bridge”时，仅更新已选中的工程，保留工程已有 `.meta` GUID 和设置；安装文件成功、Unity 编译通过、Bridge 已重连会分别报告，不能把复制成功当作编译完成。
 
-未勾选时，只更新本机程序和随包 Bridge 模板。需要使用新版本 Unity 功能时，再对当前工程执行“安装/更新 Bridge”。
+未勾选时，只更新本机程序和随包 Bridge 模板。需要使用新版本 Unity 功能时，可在「Unity 连接」中更新当前工程的 Unity 插件。
 
 如果 Relay 无法启动或插件断开连接，在固定目录中运行 `更新修复.bat`，按输出检查或恢复中断的更新。重复点击不会并行安装多个版本。下载失败或校验失败时，原版本仍可继续使用。
 
@@ -42,8 +40,13 @@ Photoshop 是可选依赖：已安装且 COM 可用时优先使用；未安装�
 
 ## 日常使用和个人配置
 
-- 从固定目录的 `start_relay.bat` 启动 Relay，再打开 Figma 插件。日志保存在 `data\.logs`，本机设置和令牌保存在 `data\.local`。
-- CLI 可使用 `node "%LOCALAPPDATA%\FigmaRelay\dist\cli.js" --help`；自定义目录时替换为实际路径。这个固定入口会转发到当前版本。
+- 登录后可以直接打开 Figma 插件。日志保存在固定目录的 `data\.logs`，本机设置和令牌保存在 `data\.local`。
+- PowerShell 中可以调用固定 CLI 入口。
+
+  ```powershell
+  & "$env:LOCALAPPDATA\FigmaRelay\figma-relay.cmd" --help
+  ```
+
 - AI 对话仍需要用户自己安装并登录相应 AI CLI。DXX 图片拆层使用自己的 Key；Unity 真值采集需要另行安装 Unity CLI。账号和密钥不随包提供。
 - “设置 → AI Skill”可以为当前电脑的 Codex、Claude Code 写入或更新 Skill，不修改全局 AI 配置。技能列表未出现时重新打开会话。
 
@@ -55,7 +58,7 @@ Photoshop 是可选依赖：已安装且 COM 可用时优先使用；未安装�
 npm run package:release -- -NoLaunch -ReleaseNotesFile "release-notes.txt"
 ```
 
-`release-notes.txt` 为 UTF-8 文本，每行一条更新说明，也可以使用 JSON 字符串数组。打包命令会提升 patch 版本、同步各端版本、构建，并生成：
+发布机需要 Windows x64、Node.js、npm 和 64 位 CPython 3.11+。打包时需要联网下载官方 Node.js 发行版及生产依赖。`release-notes.txt` 为 UTF-8 文本，每行一条更新说明，也可以使用 JSON 字符串数组。打包命令会提升 patch 版本、同步各端版本、构建，并生成：
 
 ```text
 output/
@@ -84,4 +87,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_github_relea
 
 如果移除了仓库默认的 GitHub 配置且没有配置其它更新地址，仍可生成供本地安装验证的 ZIP、哈希和 `available:false` 的 `.release.json`，但不会生成 `latest.json`，界面会明确显示更新源未配置。这样的包不应作为正式自动更新发行版发送给用户。
 
-当前仍是 Windows 开发插件分发方式，用户需要 Node.js、Python 和首次联网安装依赖。Figma Community 上架是独立流程；Community 插件代码由 Figma 分发，不能用本机更新器替代平台发布。
+这是 Figma 桌面版的开发插件分发方式。Figma Community 上架是独立流程，Community 插件代码由 Figma 分发。

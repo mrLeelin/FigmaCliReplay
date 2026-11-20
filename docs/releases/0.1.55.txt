@@ -1,0 +1,3 @@
+Windows x64 分发包内置 Node.js、Python 和生产依赖，解压后双击即可安装并启动 Relay。
+安装时验证本机连接并选中 Figma manifest，支持 Windows 登录自启。
+插件设置可复制 Relay、Figma 和 Unity 的连接状态。

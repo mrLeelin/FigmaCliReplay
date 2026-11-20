@@ -60,7 +60,7 @@ $temporaryNotes = ''
 try {
     if (-not $ReleaseNotesFile) {
         $temporaryNotes = Join-Path $OutputDirectory ('.release-notes-' + [guid]::NewGuid().ToString('N') + '.md')
-        $notes = @("Figma Relay v$Version", '', 'Windows ZIP: install Node.js 18+ and Python 3.10+, extract the archive, then run the first-install batch file.', '', 'Updates are available in plugin Settings > Version and updates.', '')
+        $notes = @("Figma Relay v$Version", '', 'Windows x64: extract the archive and double-click Open Figma Relay.bat. The archive includes Node.js and Python. Import the manifest in Figma Desktop on first use.', '', 'Check for updates in the plugin Version and updates tab.', '')
         foreach ($note in @($verified.notes)) { $notes += ('- ' + [string]$note) }
         [System.IO.File]::WriteAllText($temporaryNotes, ($notes -join [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
         $ReleaseNotesFile = $temporaryNotes

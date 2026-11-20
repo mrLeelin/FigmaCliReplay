@@ -79,12 +79,14 @@ export function githubReleaseUrls(repository, version) {
 
 /** Inspect only the assembled release tree; machine state and private material must never enter a ZIP. */
 export function auditReleaseTree(root) {
+  root = path.resolve(root);
+  const bundledModules = fs.existsSync(path.join(root, "runtime", "windows-x64.json")) ? path.join(root, "node_modules") : undefined;
   let files = 0;
   const visit = (directory) => {
     for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, item.name);
       const relative = path.relative(root, file);
-      if (/^(?:\.local|\.logs|\.venv|\.tmp|node_modules|__pycache__|\.git)$/i.test(item.name)
+      if ((/^(?:\.local|\.logs|\.venv|\.tmp|node_modules|__pycache__|\.git)$/i.test(item.name) && file !== bundledModules)
         || /^\.env(?:\.|$)/i.test(item.name) || /\.(?:pyc|pyo)$/i.test(item.name)) {
         throw new Error(`Machine-local or generated material found in release: ${relative}`);
       }
@@ -98,7 +100,7 @@ export function auditReleaseTree(root) {
       } else throw new Error(`Unsupported release item: ${relative}`);
     }
   };
-  visit(path.resolve(root));
+  visit(root);
   return { files };
 }
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 const ui = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
 
@@ -14,8 +15,8 @@ test("connection settings live behind a dedicated settings tab", () => {
   assert.notEqual(settingsButtonIndex, -1, "main navigation should expose the settings tab");
   assert.notEqual(settingsPageIndex, -1, "settings tab page should exist");
   assert.match(ui, /data-tab="settings-tab"[^>]*>设置<\/button>/);
-  assert.ok(settingsPageIndex < mcpSectionIndex, "MCP Companion should be inside settings");
-  assert.ok(mcpSectionIndex < unitySectionIndex, "Unity gateway should follow MCP Companion");
+  assert.ok(settingsPageIndex < unitySectionIndex, "Unity connection should start the settings page");
+  assert.ok(unitySectionIndex < mcpSectionIndex, "Relay settings should follow Unity connection");
   assert.ok(unitySectionIndex < settingsPageEndIndex, "Unity gateway should remain inside settings");
   assert.match(ui, /\.tabs\s*\{[\s\S]*?display:\s*flex/);
   assert.match(ui, /\.tab-button\s*\{[\s\S]*?flex:\s*1/);
@@ -35,8 +36,8 @@ test("top bar shows Relay, GUI and Bridge versions in order, with an independent
 });
 
 test("Unity gateway address is auto-discovered instead of manually edited", () => {
-  assert.match(ui, /<input id="unityUrl"[^>]*\sreadonly(?:\s|\/?>)/);
-  assert.match(ui, /<button id="unityConnectBtn"[^>]*>自动连接<\/button>/);
+  assert.doesNotMatch(ui, /<input id="unityUrl"/);
+  assert.match(ui, /<button id="unityConnectBtn"[^>]*>重试连接<\/button>/);
   assert.doesNotMatch(ui, /unityPortMin|unityPortMax|buildUnityProbeUrls/);
   assert.match(ui, /actualProjectPath !== expectedProjectPath/);
 });
@@ -73,12 +74,23 @@ test("Unity connection uses only the selected project discovery and WebSocket", 
 test("Bridge version mismatch is surfaced in settings with an explicit sync action", () => {
   assert.match(ui, /if \(unityBridgeVersionMismatch\) missing\.push\("Unity Bridge 版本不一致"\)/);
   assert.match(ui, /unityBadge\.textContent = "版本错误"/);
-  assert.match(ui, /installUnityBridgeBtn\.textContent = hasVersionMismatch \? "同步 Bridge" : "安装\/更新 Bridge"/);
-  assert.match(ui, /installUnityBridgeBtn\.classList\.toggle\("danger", hasVersionMismatch\)/);
-  assert.match(ui, /Bridge 已同步到 " \+ pluginReleaseVersion \+ "，等待 Unity 编译后重新连接。/);
+  assert.match(ui, /installUnityBridgeBtn\.textContent = action === "update" \? "更新 Unity 插件" : "安装 Unity 插件"/);
+  assert.match(ui, /Unity 插件文件已写入，等待 Unity 编译后重新连接。/);
 
   const installStart = ui.indexOf("async function installSelectedUnityBridge()");
   const installEnd = ui.indexOf("async function requestUnityCommand(", installStart);
   const installSource = ui.slice(installStart, installEnd);
   assert.doesNotMatch(installSource, /unityBridgeVersionMismatch\s*=\s*null/);
+});
+
+test("the Unity card points at the side that needs to be updated", () => {
+  const start = ui.indexOf("function describeUnityGateway(");
+  const end = ui.indexOf("function refreshUnityGatewayPanel(", start);
+  const describe = vm.runInNewContext(ui.slice(start, end) + "\ndescribeUnityGateway");
+  const project = { valid: true, bridgeInstalled: true, settingsConfigured: true };
+  const mismatch = { pluginVersion: "0.1.55", bridgeVersion: "0.1.54" };
+  assert.equal(describe(project, true, "disconnected", true, mismatch, false, false, "0.1.55", "").action, "update");
+  assert.equal(describe(project, true, "disconnected", true, mismatch, false, false, "0.1.54", "").action, "updates");
+  assert.equal(describe(project, true, "disconnected", true, { ...mismatch, figmaPluginVersionMismatch: true }, false, false, "0.1.55", "").action, "updates");
+  assert.equal(describe(project, true, "reconnecting", true, mismatch, false, true, "0.1.55", "").title, "等待 Unity 编译");
 });

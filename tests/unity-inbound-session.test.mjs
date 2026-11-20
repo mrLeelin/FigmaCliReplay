@@ -97,9 +97,24 @@ test("an unauthenticated Unity Bridge cannot register a session", { timeout: 100
 
 test("a stale Unity version is rejected and never becomes a session", { timeout: 10000 }, async (t) => {
   const { port, clients } = await startGateway(t);
+  const mainProject = { id: "stale", path: projectPath, valid: true };
+  const otherProject = { id: "other", path: "E:/Project/Test/Other", valid: true };
+  const control = createRelayControlHandler({}, { controller: {} }, {}, {
+    list: () => ({ projects: [mainProject, otherProject] }),
+  });
+  const rejected = connectUnity(port, clients, { bridgeToken: "wrong-token", clientVersion: "0.0.1" });
+  await assert.rejects(rejected.ready, /authentication failed/);
+  assert.deepEqual(await control("unity.gateway.get", { id: "stale" }), { found: false });
   const stale = connectUnity(port, clients, { clientVersion: "0.0.1" });
   await assert.rejects(stale.ready, /version mismatch/);
   await assert.rejects(callUnityBridge(projectPath, "unity.health", {}, {}, noDiscovery), /Unity is not connected/);
+  assert.deepEqual(await control("unity.gateway.get", { id: "stale" }), {
+    found: false, versionMismatch: { expected: SERVER_VERSION, actual: "0.0.1" },
+  });
+  assert.deepEqual(await control("unity.gateway.get", { id: "other" }), { found: false });
+  const updated = connectUnity(port, clients);
+  await updated.ready;
+  assert.equal((await control("unity.gateway.get", { id: "stale" })).found, true);
 });
 
 test("progress polls with bridge.get and unknown/failed states keep their exact wording", { timeout: 15000 }, async (t) => {

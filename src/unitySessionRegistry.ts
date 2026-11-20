@@ -42,6 +42,13 @@ interface UnitySession {
 }
 
 const sessions = new Map<string, UnitySession>();
+const versionRejections = new Map<string, { expected: string; actual: string; expiresAt: number }>();
+
+export function unityVersionRejection(projectPath: string) {
+  const rejection = versionRejections.get(unityProjectKey(projectPath));
+  if (!rejection || rejection.expiresAt <= Date.now()) return undefined;
+  return { expected: rejection.expected, actual: rejection.actual };
+}
 
 /** 会话在调用瞬间消失时的哨兵错误，供调用方决定是否回退到拨入路径。 */
 export const NO_UNITY_SESSION = "NO_UNITY_SESSION";
@@ -72,11 +79,17 @@ export function registerUnitySession(socket: WebSocket, message: Record<string, 
   if (protocolVersion !== RELAY_PROTOCOL_VERSION) {
     return failUnityRegister(socket, `Unity Bridge protocol mismatch: expected ${RELAY_PROTOCOL_VERSION}, got ${protocolVersion}.`);
   }
+  const key = unityProjectKey(projectPath);
   if (clientVersion !== SERVER_VERSION) {
+    versionRejections.set(key, {
+      expected: SERVER_VERSION,
+      actual: /^v?\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[\w.-]{1,32})?$/.test(clientVersion) ? clientVersion : "",
+      expiresAt: Date.now() + 90_000,
+    });
     return failUnityRegister(socket, `Unity Bridge version mismatch: expected ${SERVER_VERSION}, got ${clientVersion || "<empty>"}.`);
   }
 
-  const key = unityProjectKey(projectPath);
+  versionRejections.delete(key);
   const previous = sessions.get(key);
   if (previous && previous.socket !== socket) {
     // 同一工程只保留一条会话：新连接取代旧连接，旧的挂起调用按"结果不明"结束。
@@ -226,6 +239,7 @@ export function unitySessionStatus(): UnitySessionStatus[] {
 }
 
 export function pruneUnitySessions(now = Date.now()): void {
+  for (const [key, rejection] of versionRejections) if (rejection.expiresAt <= now) versionRejections.delete(key);
   for (const session of [...sessions.values()]) {
     if (now - session.lastHeartbeatAt <= UnityHeartbeatTimeoutMs) continue;
     logWarn("Unity Bridge session timed out", {
@@ -239,6 +253,7 @@ export function pruneUnitySessions(now = Date.now()): void {
 }
 
 export function closeUnitySessions(): void {
+  versionRejections.clear();
   for (const session of [...sessions.values()]) {
     unregisterUnitySession(session.socket, "relay shutting down");
     try { session.socket.close(); } catch { /* 已断开 */ }
