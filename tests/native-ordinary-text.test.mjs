@@ -265,6 +265,54 @@ test("ordinary PSD text loads Poetsen One when the font catalog does not list it
   assert.deepEqual(context.warnings, []);
 });
 
+test("ordinary PSD text tries the catalog's PoetsenOne Regular after the spaced alias fails", async () => {
+  const { api, root, context } = fixture();
+  const attempted = [];
+  const source = { family: "PoetsenOne-Regular", style: "Regular" };
+  const spaced = { family: "Poetsen One", style: "Regular" };
+  const unspaced = { family: "PoetsenOne", style: "Regular" };
+  const fallback = { family: "Lilita One", style: "Regular" };
+  api.getAvailableFonts = async () => [spaced, unspaced, { family: unspaced.family, style: "Bold" }, fallback]
+    .map(fontName => ({ fontName }));
+  api.figma.loadFontAsync = async font => {
+    attempted.push([font.family, font.style]);
+    if (font.family !== unspaced.family && font.family !== fallback.family) throw new Error("font unavailable");
+  };
+  vm.runInContext(functionSource("loadBestFont"), api);
+  const node = await api.createLayerNode(root, layer({
+    chars: "targeted you 1d ago",
+    fontFallback: [source, fallback],
+    sourceState: { text: { fontFamily: source.family } },
+  }), context);
+
+  assert.deepEqual(attempted, [[source.family, source.style], [spaced.family, spaced.style], [unspaced.family, unspaced.style]]);
+  assert.equal(node.fontName.family, unspaced.family);
+  assert.equal(node.fontName.style, unspaced.style);
+  assert.deepEqual(context.warnings, []);
+});
+
+test("ordinary PSD text reports the replacement when neither Poetsen regular alias is available", async () => {
+  const { api, root, context } = fixture();
+  const attempted = [];
+  const source = { family: "PoetsenOne-Regular", style: "Regular" };
+  const fallback = { family: "Lilita One", style: "Regular" };
+  api.getAvailableFonts = async () => [{ fontName: { family: "PoetsenOne", style: "Bold" } }, { fontName: fallback }];
+  api.figma.loadFontAsync = async font => {
+    attempted.push([font.family, font.style]);
+    if (font.family !== fallback.family) throw new Error("font unavailable");
+  };
+  vm.runInContext(functionSource("loadBestFont"), api);
+  const node = await api.createLayerNode(root, layer({
+    name: "Combo",
+    fontFallback: [source, fallback],
+    sourceState: { text: { fontFamily: source.family } },
+  }), context);
+
+  assert.deepEqual(attempted, [[source.family, source.style], ["Poetsen One", "Regular"], [fallback.family, fallback.style]]);
+  assert.equal(node.fontName.family, fallback.family);
+  assert.match(context.warnings.join("\n"), /Combo.*PoetsenOne-Regular.*Lilita One Regular/);
+});
+
 test("ordinary PSD text recognizes a unique PostScript font from the catalog", async () => {
   const { api, root, context } = fixture();
   const attempted = [];

@@ -1,4 +1,4 @@
-// Figma Relay build #359
+// Figma Relay build #360
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #359
+// Figma Relay build #360
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (359 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 359)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "359" });
+// DIAG: 插件启动标记 (360 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 360)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "360" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "359",
+        build: "360",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -12452,19 +12452,27 @@ async function getAvailableFonts(context) {
 
 async function loadPsdSourceFontAlias(sourceFont, layer, context) {
   // 即使目录未列出它，Figma 也可按已核验的字体族和样式加载 Poetsen One。
-  let match = sourceFont.family.toLowerCase() === "poetsenone-regular" && sourceFont.style.toLowerCase() === "regular"
+  const preferredAlias = sourceFont.family.toLowerCase() === "poetsenone-regular" && sourceFont.style.toLowerCase() === "regular"
     ? { family: "Poetsen One", style: "Regular" }
     : null;
-  if (!match) {
-    const matches = new Map();
-    for (const { fontName } of await getAvailableFonts(context)) {
-      if (!matchesPsdFontName(sourceFont, fontName)) continue;
-      if (sourceFont.family === fontName.family && sourceFont.style === fontName.style) continue;
-      matches.set(JSON.stringify([fontName.family, fontName.style]), fontName);
+  if (preferredAlias) {
+    try {
+      await figma.loadFontAsync(preferredAlias);
+      return preferredAlias;
+    } catch {
+      // 当前编辑器可能以 PoetsenOne 等名称公开同一个字重，继续查询字体目录。
     }
-    if (matches.size !== 1) return null;
-    match = matches.values().next().value;
   }
+
+  const matches = new Map();
+  for (const { fontName } of await getAvailableFonts(context)) {
+    if (!matchesPsdFontName(sourceFont, fontName)) continue;
+    if (sourceFont.family === fontName.family && sourceFont.style === fontName.style) continue;
+    if (preferredAlias && preferredAlias.family === fontName.family && preferredAlias.style === fontName.style) continue;
+    matches.set(JSON.stringify([fontName.family, fontName.style]), fontName);
+  }
+  if (matches.size !== 1) return null;
+  const match = matches.values().next().value;
 
   try {
     await figma.loadFontAsync(match);

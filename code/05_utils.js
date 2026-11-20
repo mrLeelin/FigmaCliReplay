@@ -5679,19 +5679,27 @@ async function getAvailableFonts(context) {
 
 async function loadPsdSourceFontAlias(sourceFont, layer, context) {
   // 即使目录未列出它，Figma 也可按已核验的字体族和样式加载 Poetsen One。
-  let match = sourceFont.family.toLowerCase() === "poetsenone-regular" && sourceFont.style.toLowerCase() === "regular"
+  const preferredAlias = sourceFont.family.toLowerCase() === "poetsenone-regular" && sourceFont.style.toLowerCase() === "regular"
     ? { family: "Poetsen One", style: "Regular" }
     : null;
-  if (!match) {
-    const matches = new Map();
-    for (const { fontName } of await getAvailableFonts(context)) {
-      if (!matchesPsdFontName(sourceFont, fontName)) continue;
-      if (sourceFont.family === fontName.family && sourceFont.style === fontName.style) continue;
-      matches.set(JSON.stringify([fontName.family, fontName.style]), fontName);
+  if (preferredAlias) {
+    try {
+      await figma.loadFontAsync(preferredAlias);
+      return preferredAlias;
+    } catch {
+      // 当前编辑器可能以 PoetsenOne 等名称公开同一个字重，继续查询字体目录。
     }
-    if (matches.size !== 1) return null;
-    match = matches.values().next().value;
   }
+
+  const matches = new Map();
+  for (const { fontName } of await getAvailableFonts(context)) {
+    if (!matchesPsdFontName(sourceFont, fontName)) continue;
+    if (sourceFont.family === fontName.family && sourceFont.style === fontName.style) continue;
+    if (preferredAlias && preferredAlias.family === fontName.family && preferredAlias.style === fontName.style) continue;
+    matches.set(JSON.stringify([fontName.family, fontName.style]), fontName);
+  }
+  if (matches.size !== 1) return null;
+  const match = matches.values().next().value;
 
   try {
     await figma.loadFontAsync(match);

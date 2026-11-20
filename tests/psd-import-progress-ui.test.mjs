@@ -57,6 +57,7 @@ function harness(overrides = {}) {
   vm.runInContext([
     "updatePsdImportProgress", "hidePsdImportProgress", "setPsdImportProgressMessage",
     "setAiPromptPsdDropDragging", "startPsdImportQueue", "renderPsdImportTaskStatus",
+    "getPsdImportWarnings", "formatPsdImportWarnings",
     "isAiPromptPsdDropAvailable", "isFileDragEvent", "handleAiPromptPsdWindowDragEnter",
     "handleAiPromptPsdWindowDragOver", "handleAiPromptPsdWindowDragLeave",
     "handleAiPromptPsdWindowDrop", "resetAiPromptPsdDropDragging", "getDraggedFiles",
@@ -185,6 +186,26 @@ test("batch stays covered between files and closes after mixed success and failu
   assert.equal(count, 2);
   assert.match(s.status, /失败 1\/2/);
   assert.equal(s.psdImportProgressOverlay.hidden, true);
+});
+
+test("batch completion keeps the successful file's font replacement warning visible", async () => {
+  const { sandbox: s } = harness();
+  const warning = "14:Combo: PSD 原字体 PoetsenOne-Regular 加载失败，已使用备选字体 Lilita One Regular。";
+  s.startPsdImportFromDroppedFile = async file => {
+    if (file.name === "bad.psd") throw new Error("bad PSD");
+    return { status: "completed", summary: { warnings: [warning] } };
+  };
+  await s.startPsdImportQueue([{ name: "affected.psd" }, { name: "bad.psd" }]);
+  assert.match(s.status, /失败 1\/2/);
+  assert.ok(s.status.includes("affected.psd"));
+  assert.ok(s.status.includes(warning));
+});
+
+test("standalone completion shows the affected text layer and its replacement font", () => {
+  const { sandbox: s } = harness();
+  const warning = "14:Combo: PSD 原字体 PoetsenOne-Regular 加载失败，已使用备选字体 Lilita One Regular。";
+  s.renderPsdImportTaskStatus({ status: "completed", percent: 100, summary: { warnings: [warning] } });
+  assert.ok(s.status.includes(warning));
 });
 
 test("server stages drive progress and preview releases overlay for confirmation", () => {
