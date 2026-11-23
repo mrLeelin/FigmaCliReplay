@@ -65,3 +65,20 @@ test("all post-processing runs by default, in the skill's order, with the measur
   assert.match(source, /逐层读回名称、类型和文字内容/);
   assert.match(source, /所有回复和进度一律使用简体中文/);
 });
+
+test("image decompose prompt reuses prior paid results and uses the bundled reviewer", () => {
+  const reuse = source.indexOf("2. 复用检查");
+  const submit = source.indexOf("3. 预检并提交拆层");
+  const review = source.indexOf("5. 审核拆层结果");
+  assert.ok(reuse > 0 && reuse < submit && submit < review);
+  assert.match(source, /find_reusable_decomposition\.py --source <source\.png> --decompose-args '\{\{decomposeArgs\}\}'/);
+  assert.match(source, /`reuse-existing-result`[^\n]*跳过第 3、4 步，本次提交次数为 0/);
+  assert.match(source, /`layerwait-existing-task`[^\n]*不得重新提交/);
+  assert.match(source, /不得修改历史运行目录/);
+  assert.match(source, /hint\.txt/);
+  assert.match(source, /stages\.log/);
+  assert.match(source, /review_decomposition\.py --manifest/);
+  assert.match(source, /合计不超过 10 分钟/);
+  assert.match(source, /底图残留/);
+  assert.match(source, /renderPixelDiff/);
+});

@@ -205,6 +205,39 @@ class ResourceHierarchyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "rendered pixels"):
                 hierarchy.verify_hierarchy(plan, compiled, before, after, operations)
 
+    def _text_case(self, directory, pixels):
+        plan, before = case(directory)
+        for node in before["nodes"]:
+            if node["id"] == "caption-a":
+                node["type"] = "TEXT"
+        compiled = hierarchy.compile_hierarchy(plan, before)
+        after, operations = apply_operations(before, compiled["operations"])
+        image = Image.open(before["screenshot"]["path"]).convert("RGBA")
+        for xy, color in pixels:
+            image.putpixel(xy, color)
+        changed = Path(directory) / "text-aa.png"
+        image.save(changed)
+        after["screenshot"]["path"] = str(changed)
+        return plan, compiled, before, after, operations
+
+    def test_faint_text_edge_anti_aliasing_is_tolerated_and_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self._text_case(directory, [((12, 42), (20, 40, 75, 255)), ((29, 49), (4, 30, 66, 255))])
+            report = hierarchy.verify_hierarchy(*args)
+            self.assertFalse(report["renderPixelsIdentical"])
+            self.assertEqual(report["renderPixelDiff"]["differingPixels"], 2)
+            self.assertEqual(report["renderPixelDiff"]["outsideTextPixels"], 0)
+
+    def test_text_tolerance_never_covers_image_pixels_or_strong_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self._text_case(directory, [((12, 42), (20, 40, 75, 255)), ((150, 80), (13, 35, 70, 255))])
+            with self.assertRaisesRegex(ValueError, "outsideText=1"):
+                hierarchy.verify_hierarchy(*args)
+        with tempfile.TemporaryDirectory() as directory:
+            args = self._text_case(directory, [((12, 42), (200, 35, 70, 255))])
+            with self.assertRaisesRegex(ValueError, "rendered pixels"):
+                hierarchy.verify_hierarchy(*args)
+
     def test_resource_subtree_cannot_be_reparented_or_renamed_by_grouping(self):
         with tempfile.TemporaryDirectory() as directory:
             plan, before = case(directory)

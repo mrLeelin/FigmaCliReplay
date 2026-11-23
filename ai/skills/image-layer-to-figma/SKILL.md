@@ -41,9 +41,25 @@ Map DXX document dimensions, placement, opacity and z-order into the project imp
 
 ## Execution time
 
-Use one full-image decomposition first. While it runs, prepare the resource inventory and semantic tree from the source. Reuse existing task results when the source hash and request match; a hierarchy-only correction needs no new decomposition. Use the bundled compositor, import wrapper and hierarchy script instead of writing a new per-screen pipeline.
+Before any paid submission, check for a reusable run (offline, read-only):
 
-Review returned coverage before choosing repairs. Collect defects into one targeted repair pass, keeping complete repeated artwork reusable when pixel comparisons support it. A repeated row does not need its own paid task. Validate a regional crop locally with `dxx_image.py Decompose --file <crop.png> --check-only` before submitting it; retain the crop/scale transform. If a repair method fails, change strategy based on the failure rather than repeating it across all regions. Additional generation/editing is for a named missing resource or visible defect, not speculative polishing.
+```powershell
+python -X utf8 ai/skills/image-layer-to-figma/scripts/find_reusable_decomposition.py --source <run>/source.png --decompose-args '<dxx args>' --hint-file <run>/hint.txt
+```
+
+It matches `.tmp/image-decompose/*/source.png` by SHA256 and the DXX options recorded in `dxx/layer-request.json`, and reports each candidate's completed stages. `reuse-existing-result` means copy that run's `dxx` (and its latest offline stage: `source-resources`, `composed` or `prepared*`) into the new run and continue from the next stage with zero submissions; `layerwait-existing-task` means recover the known task ID; only `submit-new` permits a submission. Never modify the historical run. A continued or re-sent task is the same case: resume from the latest completed stage instead of repeating decomposition and repairs.
+
+Use one full-image decomposition first. While it runs, prepare the resource inventory and semantic tree from the source. A hierarchy-only correction needs no new decomposition. Use the bundled reviewer, compositor, import wrapper and hierarchy script instead of writing a new per-screen pipeline.
+
+Review returned coverage with one run of the bundled reviewer before choosing repairs:
+
+```powershell
+python -X utf8 ai/skills/image-layer-to-figma/scripts/review_decomposition.py --manifest <run>/dxx/manifest.json --source <run>/source.png --out-dir <run>/review
+```
+
+It writes `side-by-side.png` (source | composite | difference heat map with numbered regions), `contact-sheet.png` and `review.json`. Each difference region names the topmost visible layer there. A significant region whose `exposedLayer` is the base (`exposesBase`) next to a foreground resource usually means the base still carries that resource's old outline, exposed because the returned foreground is shorter or displaced; erase it in the base rather than only repairing the foreground. Re-run the reviewer once on the repaired manifest; it also accepts the local import manifest format (`layers[].x/y/w/h/path`). Native Text layers are skipped because they carry no raster.
+
+Collect defects into one targeted repair pass, keeping complete repeated artwork reusable when pixel comparisons support it. A repeated row does not need its own paid task. Validate a regional crop locally with `dxx_image.py Decompose --file <crop.png> --check-only` before submitting it; retain the crop/scale transform. If a repair method fails, change strategy based on the failure rather than repeating it across all regions. Additional generation/editing is for a named missing resource or visible defect, not speculative polishing.
 
 At ten minutes, report elapsed time by stage, remaining defects and the next concrete action. This is a progress checkpoint, not a completion deadline or permission gate. Preserve semantic coverage, transparent boundaries, nested hierarchy and final visual checks; report unresolved defects honestly. Record provider wait separately from local preparation, repair, import and verification so later runs can target the actual delay. When the task is complete, deliver without optional extra variants or packaging the user did not request.
 

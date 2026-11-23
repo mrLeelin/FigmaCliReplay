@@ -1,6 +1,6 @@
 请把下面这个 Figma 图片节点拆成可独立使用的透明资源和可编辑文字，并导入回 Figma。
 
-用户在 Figma Relay 插件「工具 → 拆图」中复制了这段提示词并发给你，即已授权本次执行：一次 DXX 拆层（收费）、合并碎片、普通文字转为可编辑 Text、导入 Figma、整理业务层级。直接执行，不要先给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。所有回复和进度一律使用简体中文。
+用户在 Figma Relay 插件「工具 → 拆图」中复制了这段提示词并发给你，即已授权本次执行：最多一次 DXX 拆层（收费；同一张图已有可用结果时复用，不再提交）、合并碎片、普通文字转为可编辑 Text、导入 Figma、整理业务层级。直接执行，不要先给计划、不要等待确认、不要要求重新选择，也不要启用 SubAgent。所有回复和进度一律使用简体中文。
 
 ## 环境
 
@@ -34,20 +34,29 @@
 
 ## 执行流程
 
-每完成一个阶段输出一行进度（阶段名、耗时），不要长时间无输出。执行命令时把命令工具超时设为 5 分钟。整体目标 20 分钟内完成；任何阶段超过 8 分钟时，输出当前进展并收敛：采用已有结果，不再做额外的比较或探索。
+每完成一个阶段输出一行进度（阶段名、耗时），并追加一行 `<阶段名> <开始时间> <结束时间>` 到 `<运行目录>/stages.log`，不要长时间无输出。执行命令时把命令工具超时设为 5 分钟。整体目标 20 分钟内完成；任何阶段超过 8 分钟时，输出当前进展并收敛：采用已有结果，不再做额外的比较或探索。
 
-1. 运行目录：`.tmp/image-decompose/<yyyyMMdd-HHmmss>/`。用 `FIGMA_EXPORT_NODE_SCREENSHOT`（payload `{"target":{"nodeId":"<目标 nodeId>"}}`）导出目标节点 PNG，它按节点 1 倍尺寸渲染；把图片保存为运行目录下的 `source.png`，记录像素尺寸和 SHA256。
-2. 预检（不收费）：`python -X utf8 <插件根>/ai/skills/dxx-image/scripts/dxx_image.py Decompose --file <source.png> {{decomposeArgs}} --check-only`。失败就停止并报告原因（例如总像素低于 262144 时建议用户换更大的图），不要擅自放大、缩放或改图。
-3. 提交拆层，**整个任务只允许提交这一次**：`python -X utf8 <插件根>/ai/skills/dxx-image/scripts/dxx_image.py Decompose --file <source.png> {{decomposeArgs}} --prompt <拆分说明> --out-dir <运行目录>/dxx --timeout-seconds 90`。`--prompt` 用 PowerShell 单引号字符串传入，文本中的 `'` 写成 `''`。taskId 会写入 `<运行目录>/dxx/layer-task-id.txt`，立即记录。
-4. 分段等待：上一条命令因等待超时退出（退出码 2）时，用 `Layerwait --task-id <taskId> --out-dir <运行目录>/dxx --timeout-seconds 90` 继续等，每轮输出一行状态。
+1. 运行目录：`.tmp/image-decompose/<yyyyMMdd-HHmmss>/`。用 `FIGMA_EXPORT_NODE_SCREENSHOT`（payload `{"target":{"nodeId":"<目标 nodeId>"}}`）导出目标节点 PNG，它按节点 1 倍尺寸渲染；把图片保存为运行目录下的 `source.png`，记录像素尺寸和 SHA256。把上面「拆分说明」代码块中的原文原样写入 `<运行目录>/hint.txt`（UTF-8）。
+2. 复用检查（不收费，必须先做）：`python -X utf8 <插件根>/ai/skills/image-layer-to-figma/scripts/find_reusable_decomposition.py --source <source.png> --decompose-args '{{decomposeArgs}}' --hint-file <运行目录>/hint.txt`。按输出的 `action` 处理：
+   - `reuse-existing-result`：同一张图（SHA256 相同）、相同 DXX 参数已有完整拆层结果。把 `best.runDir` 下的 `dxx` 目录复制到本运行目录，跳过第 3、4 步，本次提交次数为 0。`best.completedStages` 中已有 `repaired`（`source-resources/`）、`composed/` 或 `prepared*/` 时，一并复制最靠后的那个阶段的目录，从它的下一阶段继续；复制来的产物仍要经过第 5 步审核。不得修改历史运行目录。`best.hintMatch` 为 `unknown`（历史目录没有记录拆分说明）时同样复用，并在报告中注明。
+   - `layerwait-existing-task`：已有提交但结果未取回。把历史 `dxx` 目录复制到本运行目录，用第 4 步的 `Layerwait --task-id <best.dxx.taskId>` 取结果，不得重新提交。
+   - `submit-new`：没有可复用结果，执行第 3 步。
+3. 预检并提交拆层，**整个任务只允许提交这一次**：
+   - 预检（不收费）：`python -X utf8 <插件根>/ai/skills/dxx-image/scripts/dxx_image.py Decompose --file <source.png> {{decomposeArgs}} --check-only`。失败就停止并报告原因（例如总像素低于 262144 时建议用户换更大的图），不要擅自放大、缩放或改图。
+   - 提交：`python -X utf8 <插件根>/ai/skills/dxx-image/scripts/dxx_image.py Decompose --file <source.png> {{decomposeArgs}} --prompt <拆分说明> --out-dir <运行目录>/dxx --timeout-seconds 90`。`--prompt` 用 PowerShell 单引号字符串传入，文本中的 `'` 写成 `''`。taskId 会写入 `<运行目录>/dxx/layer-task-id.txt`，立即记录。
+4. 分段等待：上一条命令因等待超时退出（退出码 2）时，用 `Layerwait --task-id <taskId> --out-dir <运行目录>/dxx --timeout-seconds 90` 继续等，每轮输出一行状态。等待期间提前读完第 6–9 步需要的参考文档。
    - 禁止再次执行 `Decompose`，禁止换目录重新提交。只有提交响应丢失且没有 taskId 时才可以用 `Layerresume --out-dir <运行目录>/dxx`。
    - 拆层以 `error` 或 `submission_unknown` 结束，或累计等待超过 25 分钟时，停止并报告 taskId 和运行目录。
-5. 审核拆层结果：按 image-layer-to-figma 检查资源覆盖、遗漏、过度合并和图层上下顺序。不要自动补拆（会再次收费）；缺失或不理想的资源写进报告，并建议如何补拆。
+5. 审核拆层结果（审核加本地修补合计不超过 10 分钟）：
+   - 先运行 `python -X utf8 <插件根>/ai/skills/image-layer-to-figma/scripts/review_decomposition.py --manifest <运行目录>/dxx/manifest.json --source <source.png> --out-dir <运行目录>/review`，只看它生成的 `side-by-side.png`（原图｜合成｜差异热图）、`contact-sheet.png` 和 `review.json` 的前几个差异区域，不要另写审核脚本或逐层反复出图。
+   - 按 image-layer-to-figma 检查资源覆盖、遗漏、过度合并和图层上下顺序。差异区域的 `exposedLayer` 是底图（`exposesBase`）且位于前景附近时，通常是前景偏短或移位后露出的底图残留（例如旧描边），要在底图中抹掉，不能只修前景层。
+   - 本地修补只处理明显影响整体效果的缺陷：图层顺序错误、底板几何错误、文字烤在美术里、底图残留。每处缺陷写一个修补步骤；全部修完后对修补后的 manifest 再运行一次 review 脚本复核。修补时让 `idx` 等于自下而上的数组位置。
+   - 不要自动补拆（会再次收费）；缺失或不理想的资源写进报告，并建议如何补拆。
 6. 合并碎片：按 image-layer-to-figma 用 `compose_resources.py` 把同一用途的碎片合成完整资源。
 7. 普通文字转为可编辑 Text：在合并之后准备文字计划，再运行 `prepare_native_text.py`。文字计划必须声明 `idxSpace`：`sourceIdx` 写 DXX 原始编号时用 `"source"`（脚本会按合并输出目录中的 `resource-map.json` 自动换算），写合并后的编号时用 `"output"`；不要手工换算。
    - 字体只从 Figma 能直接加载的字体中选（同文件已有文字使用的字体、或 Figma 内置的 Google 字体），按外观选一款接近的即可；不要下载字体文件到本地做测量或比较，导入后看截图再微调字号。
-8. 导入 Figma：使用 image-layer-to-figma 指定的导入包装器，在原节点右侧新建 Frame「<原节点名>_拆图」作为结果容器。原节点及其子节点不得修改、移动、隐藏或删除。导入后逐层读回名称、类型和文字内容，确认没有套错层。
-9. 整理业务层级：按 image-layer-to-figma 的 resource-hierarchy 规则，只在结果 Frame 内分组。
+8. 导入 Figma：使用 image-layer-to-figma 指定的导入包装器，在原节点右侧新建 Frame「<原节点名>_拆图」作为结果容器（同名 Frame 已存在时加 `_v2`、`_v3` 后缀，不覆盖旧结果）。原节点及其子节点不得修改、移动、隐藏或删除。导入后逐层读回名称、类型和文字内容，确认没有套错层；再把导入截图与原图并排看一次。
+9. 整理业务层级：按 image-layer-to-figma 的 resource-hierarchy 规则，只在结果 Frame 内分组。层级脚本允许文字边缘少量抗锯齿差异并写入 `renderPixelDiff`；仍报 `Live rendered pixels differ` 时，统计差异像素数、最大差值和位置后写进报告，不要反复重试。
 10. 验证：按 image-layer-to-figma 的交付要求核对图片填充、可编辑文字、图层顺序与位置，并与原图对比整体效果。
 
 ## 边界
@@ -59,5 +68,5 @@
 ## 完成时报告
 
 - 结果 Frame 的名称和节点 ID；资源图层数、可编辑文字数及所用字体。
-- DXX taskId、运行目录、实际提交次数（应为 1）、各阶段耗时。任务中断时说明可用 `Layerwait --task-id <taskId> --out-dir <运行目录>/dxx` 继续取结果，不要重新拆层。
+- DXX taskId、运行目录、实际提交次数（新提交为 1，复用历史结果为 0，并写明复用的运行目录）、各阶段耗时（来自 `stages.log`，区分 DXX 等待、审核修补、导入、层级、验证）。任务中断时说明可用 `Layerwait --task-id <taskId> --out-dir <运行目录>/dxx` 继续取结果，不要重新拆层。
 - 未解决的问题：遗漏资源、透明边缘、遮挡像素、字体替换、仍为图片的文字等。
