@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="icon" href="data:,">
+<title>交互界面模板</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --frame-bg:#203331; --frame-ink:#eef6ec; --accent:#d9fa8d;
+    font: 14px "Microsoft YaHei","PingFang SC",sans-serif;
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body {
+    min-height:100dvh; margin:0; display:grid; place-items:center;
+    background:radial-gradient(ellipse at 50% 12%,#3b5750,var(--frame-bg) 56%,#162522);
+  }
+  button { font:inherit; cursor:pointer; touch-action:manipulation; }
+  button:focus-visible { outline:3px solid var(--accent); outline-offset:4px; }
+  .preview { width:var(--view-w,320px); padding:10px 0; }
+  .toolbar {
+    min-height:40px; margin-bottom:9px; padding:0 2px 0 5px; display:flex;
+    align-items:center; justify-content:space-between; color:var(--frame-ink);
+  }
+  .toolbar button,.launcher button {
+    min-height:38px; border-radius:100px; padding:7px 15px;
+    border:1px solid #ecfff777; color:var(--frame-ink); background:#132925;
+  }
+  .toolbar button:hover { background:#37524b; }
+  .toolbar button:disabled { opacity:.55; cursor:default; }
+  .viewport {
+    position:relative; width:var(--view-w); height:var(--view-h);
+    overflow:hidden; border-radius:18px; background:#132723;
+    box-shadow:0 0 0 1px #edffea55,0 20px 55px #10231d90;
+  }
+  .scene-scale { position:absolute; transform:scale(var(--scale)); transform-origin:0 0; }
+  .scene,.entry,.loop,.visual { position:absolute; inset:0; }
+  .scene { isolation:isolate; overflow:hidden; }
+  .layer { position:absolute; }
+  .entry,.loop,.visual,.surface { width:100%; height:100%; }
+  .surface { display:block; }
+  img.surface { object-fit:fill; user-select:none; -webkit-user-drag:none; }
+  .text {
+    display:flex; align-items:center; justify-content:center;
+    text-align:center; white-space:pre-wrap; overflow-wrap:break-word;
+  }
+  .layer-button {
+    border:1px solid currentColor; border-radius:15px; background:#234842;
+    color:#f1faeb; font-weight:700; letter-spacing:.03em;
+    transition:filter .14s;
+  }
+  .layer-button:hover { filter:brightness(1.14); }
+  .layer-button:active { filter:brightness(.93); }
+  .layer-button:focus-visible { outline:5px solid #32847a; outline-offset:5px; }
+  .layer-button[aria-disabled="true"] { cursor:default; }
+  .launcher {
+    position:absolute; inset:0; display:grid; justify-items:center;
+    align-content:center; padding:20px; gap:12px;
+  }
+  .launcher button { background:var(--accent); color:#162722; border-color:transparent; font-weight:700; }
+  .launcher button:disabled { opacity:.55; cursor:default; }
+  .launcher p { max-width:275px; margin:0; color:#ffe4d5; }
+  dialog {
+    width:min(360px,calc(100vw - 32px)); color:#244238; padding:22px;
+    background:#f1f7e9; border:1px solid #a9c6ae; border-radius:20px;
+    box-shadow:0 16px 48px #132722a0;
+  }
+  dialog::backdrop { background:#182e2bc9; backdrop-filter:blur(2px); }
+  dialog h2 { margin:0 0 10px; font-size:22px; }
+  dialog p { margin:0 0 16px; line-height:1.7; white-space:pre-wrap; }
+  dialog button {
+    min-height:38px; padding:6px 16px; border:0; border-radius:100px;
+    color:#f3fff0; background:#25463e;
+  }
+  dialog button:focus-visible { outline-color:#65984e; }
+  .sr-only {
+    position:absolute; width:1px; height:1px; padding:0;
+    overflow:hidden; clip-path:inset(50%); white-space:nowrap;
+  }
+  @media (prefers-reduced-motion:reduce) { .layer-button { transition:none; } }
+</style>
+</head>
+<body>
+<main id="preview" class="preview">
+  <header class="toolbar"><strong id="preview-title"></strong><button id="close" type="button" hidden>退出</button></header>
+  <div class="viewport">
+    <div id="scene-scale" class="scene-scale" hidden><section id="scene" class="scene" data-phase="closed" inert></section></div>
+    <div id="launcher" class="launcher">
+      <button id="open" type="button" disabled>打开界面</button>
+      <p id="error" role="alert" hidden></p>
+    </div>
+  </div>
+  <div id="status" class="sr-only" role="status"></div>
+</main>
+<dialog id="dialog" aria-labelledby="dialog-title">
+  <h2 id="dialog-title"></h2><p id="dialog-body"></p>
+  <form method="dialog"><button type="submit">返回</button></form>
+</dialog>
+
+<!--
+  从这里替换配置。layers 按从下到上的顺序排列，x/y/w/h 是相对父层的设计像素。
+  type 支持 group、image、text、shape、button。group 用 children 嵌套。
+  图片放进 assets，例如 "icon":"data:image/png;base64,..."，然后在图层写 "asset":"icon"。
+  图层的 enter 设置独立入场，loop 设置待机循环；按钮的 action 指向 actions 中的键。
+  state 提供初值；文字可用 {{变量}}。动作执行完更新状态，也可打开原生面板。
+  style 使用 DOM 样式名，例如 fontSize、borderRadius，尺寸需带 px。
+-->
+<script id="preview-config" type="application/json">
+{
+  "scene": { "title":"界面预览", "width":640, "height":804, "background":"#edf4e8", "autoOpen":true },
+  "assets": {},
+  "state": { "count":0 },
+  "motion": {
+    "enter": { "duration":380, "y":32, "scale":0.975 },
+    "exit": { "duration":280, "y":38, "scale":0.96 }
+  },
+  "layers": [
+    { "id":"surface", "type":"shape", "x":38, "y":38, "w":564, "h":442,
+      "style":{"borderRadius":"31px","background":"radial-gradient(ellipse at 54% 37%, #5c947b 2%, #27564a 65%, #244339 100%)"} },
+    { "id":"orb", "type":"shape", "x":204, "y":125, "w":232, "h":232,
+      "style":{"borderRadius":"50%","background":"radial-gradient(circle at 38% 28%, #f9ffe8 0%, #dbf4a7 34%, #8ec377 70%, #55875c 100%)",
+               "boxShadow":"0 30px 58px #162a2780, 0 0 0 22px #f0ffe825, 0 0 0 50px #f0ffe810"},
+      "enter":{"delay":85,"duration":420,"y":24}, "loop":{"duration":3200,"y":-20,"scale":1.018} },
+    { "id":"value", "type":"text", "x":52, "y":500, "w":536, "h":92, "text":"已操作 {{count}} 次",
+      "style":{"fontSize":"42px","fontWeight":"700","color":"#284b3c","letterSpacing":"-.035em"},
+      "enter":{"delay":138,"duration":360,"y":18} },
+    { "id":"primary", "type":"button", "x":86, "y":618, "w":468, "h":76, "text":"执行动作","action":"increment",
+      "style":{"fontSize":"26px","borderRadius":"24px"},
+      "enter":{"delay":184,"duration":370,"y":18} },
+    { "id":"secondary", "type":"button", "x":86, "y":711, "w":468, "h":60, "text":"查看面板","action":"details",
+      "style":{"fontSize":"22px","background":"transparent","color":"#234842","borderColor":"#9fb7a4","borderRadius":"22px"},
+      "enter":{"delay":217,"duration":370,"y":18} }
+  ],
+  "actions": {
+    "increment": {
+      "motion":{"target":"orb","duration":360,"y":-22,"scale":1.09},
+      "update":{"count":{"add":1}},
+      "announce":"已操作 {{count}} 次"
+    },
+    "details": {
+      "panel":{"title":"操作记录","body":"本次预览中已操作 {{count}} 次。"}
+    }
+  }
+}
+</script>
+<script>
+"use strict";
+
+const get = id => document.getElementById(id);
+const scene = get("scene");
+const scaleLayer = get("scene-scale");
+const preview = get("preview");
+const dialog = get("dialog");
+const openButton = get("open");
+const closeButton = get("close");
+const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
+const layersById = new Map();
+const transient = new Map();
+const loops = new Map();
+const boundText = [];
+const actionButtons = [];
+const images = [];
+
+let config;
+let state;
+let phase = "closed";
+let epoch = 0;
+let panelTrigger = null;
+
+function pose({x = 0, y = 0, scale = 1, rotate = 0} = {}) {
+  return "translate(" + x + "px," + y + "px) rotate(" + rotate + "deg) scale(" + scale + ")";
+}
+
+function textFrom(pattern) {
+  return String(pattern ?? "").replace(/\{\{([\w-]+)\}\}/g, (_, key) => state[key] ?? "");
+}
+
+function updateText() {
+  for (const {node, pattern, label} of boundText) {
+    node.textContent = textFrom(pattern);
+    if (label) node.setAttribute("aria-label", textFrom(label));
+  }
+}
+
+function renderLayer(layer, parent) {
+  const {id, type, x, y, w, h} = layer;
+  if (!id || layersById.has(id) || ![x,y,w,h].every(Number.isFinite) || w <= 0 || h <= 0) {
+    throw new Error("图层 ID 或尺寸无效 " + (id ?? ""));
+  }
+  const outer = document.createElement("div");
+  outer.className = "layer";
+  outer.dataset.layer = id;
+  Object.assign(outer.style,{left:x+"px",top:y+"px",width:w+"px",height:h+"px"});
+  const entry = document.createElement("div");
+  entry.className = "entry";
+  const loop = document.createElement("div");
+  loop.className = "loop";
+  const visual = document.createElement("div");
+  visual.className = "visual";
+  outer.append(entry);
+  entry.append(loop);
+  loop.append(visual);
+  layersById.set(id,{entry,loop,visual,layer});
+  parent.append(outer);
+
+  if (type === "group") {
+    Object.assign(visual.style,layer.style);
+    for (const child of layer.children ?? []) renderLayer(child,visual);
+    return;
+  }
+
+  let surface;
+  if (type === "image") {
+    const source = config.assets[layer.asset];
+    if (typeof source !== "string" || !source.startsWith("data:image/")) {
+      throw new Error("需要内嵌的图片资源 " + id);
+    }
+    surface = document.createElement("img");
+    surface.src = source;
+    surface.alt = layer.alt ?? "";
+    surface.draggable = false;
+    images.push(surface);
+  } else if (type === "button") {
+    if (!Object.hasOwn(config.actions,layer.action)) throw new Error("按钮未绑定动作 " + id);
+    surface = document.createElement("button");
+    surface.type = "button";
+    surface.classList.add("layer-button");
+    surface.dataset.action = layer.action;
+    actionButtons.push(surface);
+    boundText.push({node:surface,pattern:layer.text,label:layer.label});
+  } else if (type === "text" || type === "shape") {
+    surface = document.createElement("div");
+    if (type === "text") {
+      surface.classList.add("text");
+      boundText.push({node:surface,pattern:layer.text});
+    }
+  } else {
+    throw new Error("未知图层类型 " + type);
+  }
+  surface.classList.add("surface");
+  Object.assign(surface.style,layer.style);
+  visual.append(surface);
+}
+
+function fitScene() {
+  const viewport = window.visualViewport;
+  const width = Math.max(1,(viewport?.width ?? innerWidth) - 24);
+  const height = Math.max(1,(viewport?.height ?? innerHeight) - 72);
+  const {width:designWidth,height:designHeight} = config.scene;
+  const scale = Math.min(width / designWidth,height / designHeight,1);
+  preview.style.setProperty("--view-w",designWidth * scale + "px");
+  preview.style.setProperty("--view-h",designHeight * scale + "px");
+  preview.style.setProperty("--scale",scale);
+}
+
+function stopAnimations(registry) {
+  for (const animation of registry.keys()) animation.cancel();
+  registry.clear();
+}
+
+function updateLoops() {
+  if (phase === "closed" || motionPreference.matches || typeof scene.animate !== "function") {
+    stopAnimations(loops);
+    return;
+  }
+  if (phase !== "idle" || dialog.open) {
+    for (const animation of loops.keys()) animation.pause();
+    return;
+  }
+  if (loops.size) {
+    for (const animation of loops.keys()) animation.play();
+    return;
+  }
+  for (const {loop,layer} of layersById.values()) {
+    const settings = layer.loop;
+    if (!settings || !(settings.duration > 0)) continue;
+    const animation = loop.animate(
+      [{transform:"none"},{transform:pose(settings)},{transform:"none"}],
+      {duration:settings.duration,iterations:Infinity,easing:"ease-in-out"}
+    );
+    loops.set(animation,loop);
+  }
+}
+
+function setPhase(value) {
+  phase = value;
+  scene.dataset.phase = value;
+  scene.inert = value !== "idle" && value !== "acting";
+  closeButton.hidden = value === "closed";
+  closeButton.disabled = value === "closing";
+  for (const button of actionButtons) button.setAttribute("aria-disabled",String(value === "acting"));
+  updateLoops();
+}
+
+function animate(node, frames, settings = {}) {
+  if (motionPreference.matches || typeof node.animate !== "function" || !(settings.duration > 0)) {
+    return Promise.resolve();
+  }
+  const animation = node.animate(frames,{
+    duration:settings.duration,delay:settings.delay ?? 0,fill:"both",
+    easing:settings.easing ?? "cubic-bezier(.22,.7,.25,1)"
+  });
+  transient.set(animation,node);
+  return animation.finished.catch(() => {});
+}
+
+async function openScene(restoreFocus = false) {
+  if (phase !== "closed" || openButton.disabled) return;
+  const current = ++epoch;
+  get("launcher").hidden = true;
+  scaleLayer.hidden = false;
+  setPhase("opening");
+  const settings = config.motion?.enter;
+  const motions = [
+    animate(scene,[{transform:pose(settings),opacity:0},{transform:"none",opacity:1}],settings)
+  ];
+  for (const {entry,layer} of layersById.values()) {
+    if (!layer.enter) continue;
+    motions.push(animate(entry,[{transform:pose(layer.enter),opacity:0},{transform:"none",opacity:1}],layer.enter));
+  }
+  await Promise.all(motions);
+  if (current !== epoch) return;
+  stopAnimations(transient);
+  setPhase("idle");
+  if (restoreFocus) (actionButtons[0] ?? closeButton).focus({preventScroll:true});
+}
+
+async function closeScene() {
+  if (phase === "closed" || phase === "closing") return;
+  const current = ++epoch;
+  const nodes = new Set([scene,...transient.values(),...loops.values()]);
+  const frozen = new Map();
+  for (const node of nodes) {
+    const css = getComputedStyle(node);
+    frozen.set(node,{transform:css.transform,opacity:css.opacity});
+  }
+  stopAnimations(transient);
+  stopAnimations(loops);
+  for (const [node, style] of frozen) Object.assign(node.style,style);
+  setPhase("closing");
+  if (dialog.open) dialog.close();
+  const settings = config.motion?.exit;
+  await animate(scene,[frozen.get(scene),{transform:pose(settings),opacity:0}],settings);
+  if (current !== epoch) return;
+  scaleLayer.hidden = true;
+  stopAnimations(transient);
+  for (const node of frozen.keys()) {
+    node.style.removeProperty("transform");
+    node.style.removeProperty("opacity");
+  }
+  get("launcher").hidden = false;
+  setPhase("closed");
+  openButton.focus({preventScroll:true});
+}
+
+function applyUpdate(updates) {
+  for (const [key, rule] of Object.entries(updates ?? {})) {
+    if (Object.hasOwn(rule,"set")) state[key] = rule.set;
+    if (Number.isFinite(rule.add)) state[key] = Number(state[key] ?? 0) + rule.add;
+  }
+  updateText();
+}
+
+async function performAction(button) {
+  if (phase !== "idle" || dialog.open) return;
+  const action = config.actions[button.dataset.action];
+  const current = ++epoch;
+  setPhase("acting");
+  if (action.motion) {
+    const target = layersById.get(action.motion.target)?.visual ?? button.parentElement;
+    await animate(target,[{transform:"none"},{transform:pose(action.motion),offset:.42},{transform:"none"}],action.motion);
+  }
+  if (current !== epoch) return;
+  stopAnimations(transient);
+  applyUpdate(action.update);
+  if (action.announce) get("status").textContent = textFrom(action.announce);
+  setPhase("idle");
+  if (action.panel) {
+    panelTrigger = button;
+    get("dialog-title").textContent = textFrom(action.panel.title);
+    get("dialog-body").textContent = textFrom(action.panel.body);
+    dialog.showModal();
+    updateLoops();
+  }
+}
+
+function bindEvents() {
+  openButton.addEventListener("click",() => openScene(true));
+  closeButton.addEventListener("click",closeScene);
+  scene.addEventListener("click",event => {
+    const button = event.target.closest("button[data-action]");
+    if (button) performAction(button);
+  });
+  dialog.addEventListener("close",() => {
+    updateLoops();
+    if (phase === "idle") panelTrigger?.focus({preventScroll:true});
+    panelTrigger = null;
+  });
+  document.addEventListener("keydown",event => {
+    if (event.key === "Escape" && !dialog.open) closeScene();
+  });
+  addEventListener("resize",fitScene);
+  window.visualViewport?.addEventListener("resize",fitScene);
+  motionPreference.addEventListener("change",updateLoops);
+}
+
+async function init() {
+  config = JSON.parse(get("preview-config").textContent);
+  state = {...config.state};
+  const {width,height,title,background,autoOpen} = config.scene;
+  if (![width,height].every(n => Number.isFinite(n) && n > 0)) throw new Error("画板尺寸无效");
+  get("preview-title").textContent = title;
+  scene.setAttribute("aria-label",title);
+  scene.style.background = background;
+  scaleLayer.style.width = width + "px";
+  scaleLayer.style.height = height + "px";
+  fitScene();
+  for (const layer of config.layers) renderLayer(layer,scene);
+  updateText();
+  bindEvents();
+  await Promise.all(images.map(image => image.decode()));
+  openButton.disabled = false;
+  if (autoOpen !== false) await openScene();
+}
+
+init().catch(error => {
+  get("error").textContent = "配置或资源有误。 " + error.message;
+  get("error").hidden = false;
+});
+</script>
+</body>
+</html>

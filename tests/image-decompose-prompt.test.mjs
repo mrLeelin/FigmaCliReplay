@@ -13,7 +13,7 @@ function aiPromptTemplates() {
 }
 
 test("image decompose prompt is bundled from its Markdown source", () => {
-  assert.equal(aiPromptTemplates().imageDecompose, source.trim());
+  assert.equal(aiPromptTemplates().imageDecompose, source.replaceAll("\r\n", "\n").trim());
 });
 
 test("image decompose prompt exposes only the placeholders the plugin fills", () => {

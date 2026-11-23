@@ -405,7 +405,7 @@ test("UI derives quoted executable paths from Relay health and injects the full 
   assert.doesNotMatch(rendered, /python "ai\/skills\/figma-to-prefab\/scripts\/run_full_import\.py"/);
   assert.doesNotMatch(rendered, /\{\{relayFullImportScriptPath\}\}/);
   assert.match(ui, /if \(aiPromptTemplateSelect\.value === "unity"\)[\s\S]*?await refreshRelayRuntimePaths\(\)/);
-  assert.match(ui, /relayFullImportScriptPath:\s*relayRuntimePaths\.fullImportScriptPath/);
+  assert.match(ui, /relayFullImportScriptPath:\s*relayRuntimePaths && relayRuntimePaths\.fullImportScriptPath/);
   assert.match(ui, /python \{\{relayFullImportScriptPath\}\}/);
   assert.doesNotMatch(ui, /const relayStartBatPath = "<relay-root>/);
 

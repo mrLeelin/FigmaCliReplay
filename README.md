@@ -74,7 +74,7 @@ PNG / 截图拆层与已有结果的过细拆分修正使用 [Image Layer To Fig
 
 默认交付还包含业务嵌套层级：区域 → 功能组 → 独立资源。导入成功不是拆图任务的最终完成状态；使用 [资源层级流程](ai/skills/image-layer-to-figma/references/resource-hierarchy.md) 和 `ai/skills/image-layer-to-figma/scripts/structure_resources.py` 校验完整节点归属，再执行原生整理事务，验证节点守恒、位置和 RGBA 截图一致。明确要求原始平铺图层时才跳过；该阶段不会自动修改已有 Unity Prefab。
 
-插件入口：在 Figma 中选中 1 个图片节点，打开插件「工具 → 拆图」，选择模型（默认 Seedream 5.5，可切换 Seedream 5.0 Pro）、尺寸、最多图层数和输出格式，按需填写拆分说明，点击「复制提示词」。插件本身不调用 AI：把剪贴板中的提示词粘贴给 Claude Code、Codex 等本机 AI，由它按上述 Skill 完成导出原图、DXX 拆层（收费，每个任务只提交一次）、合并碎片、普通文字转可编辑 Text、导入和层级整理。结果放在原图右侧新建的「<原节点名>_拆图」Frame，原节点不改动。提示词带有当前插件会话 ID；重新打开插件后会话 ID 会变化，AI 会按文件 Key 找到同一文件的在线会话。Seedream 5.5 只接受 PNG/JPEG，总像素需在 262,144–36,000,000 之间；原图按节点 1 倍尺寸导出，过小的节点会在不收费的预检阶段被拦下。
+插件入口：在 Figma 中选中 1 个图片节点，打开插件「AI 提示词 → 拆图」，选择模型（默认 Seedream 5.5，可切换 Seedream 5.0 Pro）、尺寸、最多图层数和输出格式，按需填写拆分说明，点击「复制提示词」。插件本身不调用 AI：把剪贴板中的提示词粘贴给 Claude Code、Codex 等本机 AI，由它按上述 Skill 完成导出原图、DXX 拆层（收费，每个任务只提交一次）、合并碎片、普通文字转可编辑 Text、导入和层级整理。结果放在原图右侧新建的「<原节点名>_拆图」Frame，原节点不改动。提示词带有当前插件会话 ID；重新打开插件后会话 ID 会变化，AI 会按文件 Key 找到同一文件的在线会话。Seedream 5.5 只接受 PNG/JPEG，总像素需在 262,144–36,000,000 之间；原图按节点 1 倍尺寸导出，过小的节点会在不收费的预检阶段被拦下。
 
 [DXX Skill 与 Python 客户端](ai/skills/dxx-image/SKILL.md) 已随项目提供。在插件「设置 → DXX 图片拆层」输入 API Key，点击「保存」；关闭再打开插件会从本机配置读取并明文显示。若此前仅使用环境变量，点击保存也会将当前 Key 写入本机配置。「测试连接」仅进行鉴权与拆层服务可用性检查，不上传图片或创建任务，也不保存尚未提交的输入。设置页和 Python 共用 `.local/dxx-config.json`，项目保存值优先于兼容的 `GORILLA_API_KEY` / `GORILLA_API_BASE` 环境变量。`.local` 已被 Git 忽略，普通状态查询与日志不返回 Key。
 

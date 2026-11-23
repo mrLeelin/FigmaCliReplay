@@ -23,8 +23,9 @@ test("Figma UI exposes multi-project selection controls", () => {
   assert.match(ui, /selectedUnityProject\.path/);
 });
 
-test("Unity AI task carries the selected project snapshot and explicit script path", () => {
-  assert.match(ui, /unityProject:\s*selectedUnityProject/);
+test("Unity prompt carries the selected project and explicit script path", () => {
+  assert.match(ui, /unityProjectPath:\s*selectedUnityProject \? selectedUnityProject\.path/);
+  assert.match(ui, /relayFullImportScriptPath:\s*relayRuntimePaths && relayRuntimePaths\.fullImportScriptPath/);
   assert.match(ui, /--unity-project\s+\\?"?\{\{unityProjectPath\}\}/);
 });
 

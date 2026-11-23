@@ -170,9 +170,9 @@ CLI action 支持 relay.sessions、figma.selection、figma.command、relay.contr
 
 大清单使用 `--payload-file manifest.json`，资源登记使用 `--assets-file assets.json`（资源 ID 到本机路径的 JSON 对象）。请求上限为 16 MB，资源仍受 Relay 允许目录限制；二进制资源继续通过受控下载读取。Python 入口 `client/figma_relay_cli.py` 用临时 JSON 文件调用本项目 CLI，保留脚本依赖的 requestId/result 结构，等待超时只重新订阅同一任务，不重复提交。
 
-`control --job-type ai.run.get --payload-file control.json` 等控制命令使用原有 runId/capabilityToken 校验。已接入 ai.providers/status/config/open-terminal、ai.run.start/get/followup/stop，以及 cleanup.run.start/get/approve/cancel/confirm-component-sets。CLI 与插件共用控制处理；需要执行会话的动作必须唯一匹配在线目标，CLI 目标参数不能与 payload 冲突。
+`control --job-type ai.run.get --payload-file control.json` 等控制命令使用原有 runId/capabilityToken 校验。已接入 ai.providers/status/config/open-terminal、ai.run.start/get/followup/stop，以及 cleanup.run.start/get/approve/cancel/confirm-component-sets。需要执行会话的动作必须唯一匹配在线目标，CLI 目标参数不能与 payload 冲突。
 
-AI UI 通过 ai.run.subscribe 或 cleanup.run.subscribe 订阅进度。Relay 在本机读取运行状态，仅在状态或输出变化时发送 relay.event；UI 不再定时查询状态。断线释放订阅，重连后从 lastSequence 恢复输出。终态分页输出读完后退订。AI 控制不再回落 HTTP；普通启动与打开终端遇到结果不明时不会自动重试。
+Figma 插件的「AI 提示词」页供生成和复制提示词，用户可将其粘贴到外部 AI 会话。上述运行 control 命令供显式调用的 CLI 客户端使用。
 
 Figma 任务全部通过 WebSocket 下发及回传，旧 polling 配置不能开启任务轮询。UI 拒绝缺少 WebSocket 任务身份的旧命令；旧 POST /figma/result 返回 410 升级提示，不能绕过令牌提交结果。
 

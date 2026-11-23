@@ -87,8 +87,7 @@ test("the complete cleanup skill keeps hierarchy approval separate from variant 
   assert.match(skill, /插件窗口 AI 整理对话不得追加 health\/端口探测/);
 });
 
-test("cleanup prompt keeps the AI read-only and delegates validated execution to Relay", () => {
-  const prompt = fs.readFileSync(new URL("../prompts/cleanup.md", import.meta.url), "utf8");
+test("CLI cleanup conversation keeps the first turn read-only and delegates validated execution to Relay", () => {
   const skill = fs.readFileSync(new URL("../ai/skills/figma-hierarchy-cleanup/SKILL.md", import.meta.url), "utf8");
   const runner = fs.readFileSync(new URL("../src/localAiRunner.ts", import.meta.url), "utf8");
 
@@ -102,11 +101,9 @@ test("cleanup prompt keeps the AI read-only and delegates validated execution to
     assert.match(source, /本地.*校验/);
     assert.match(source, /不得询问确认/);
   }
-  assert.match(prompt, /Relay 会在启动 AI 前生成唯一的执行规则和权威快照/);
   assert.match(runner, /The first turn remains read-only/);
   assert.match(runner, /Relay dispatches the validated safe hierarchy transaction automatically/);
   assert.match(runner, /Only an explicit satisfied response/);
-  assert.match(prompt, /\$figma-hierarchy-cleanup/);
 });
 
 test("AI controls require a uniquely matched live session over WebSocket", () => {
@@ -188,32 +185,4 @@ test("confirmed satisfaction invokes the ComponentSet-only skill stage", () => {
   const command = [process.command, ...process.args].join(" ");
   assert.match(command, /--auto-component-sets-only/);
   assert.doesNotMatch(command, /--auto-nested-generic/);
-});
-
-test("cleanup UI opens a resumable conversation instead of auto-applying a transaction", () => {
-  const source = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
-  const start = source.indexOf("function startAiRun");
-  const end = source.indexOf("function scheduleAiCleanupPoll", start);
-  const startAiRun = source.slice(start, end);
-  const requestStart = source.indexOf("function requestAiRun");
-  const requestEnd = source.indexOf("function requestCleanupSnapshot", requestStart);
-  const requestAiRun = source.slice(requestStart, requestEnd);
-
-  assert.match(startAiRun, /postIdempotentAiStartWithRetry\(payload, startOperation\)/);
-  assert.match(startAiRun, /cleanupSnapshot:\s*template === "cleanup" \? selection : undefined/);
-  assert.match(startAiRun, /clientRequestId:\s*clientRequestId/);
-  assert.doesNotMatch(startAiRun, /autoApprove:\s*true/);
-  assert.match(requestAiRun, /requestCleanupSnapshot\(\)/);
-  assert.match(source, /AI 整理对话/);
-});
-
-test("cleanup UI does not request a hierarchy-plan confirmation for new conversation runs", () => {
-  const source = fs.readFileSync(new URL("../ui.html", import.meta.url), "utf8");
-  const start = source.indexOf("function cleanupFollowupNeedsFreshSnapshot");
-  const end = source.indexOf("function captureCleanupSnapshotForFollowup", start);
-  const followupSnapshotRule = source.slice(start, end);
-
-  assert.doesNotMatch(followupSnapshotRule, /awaiting_plan_confirmation/);
-  assert.match(source, /Relay 已完成层级整理并等待满意确认/);
-  assert.match(source, /ComponentSet 变体已完成/);
 });

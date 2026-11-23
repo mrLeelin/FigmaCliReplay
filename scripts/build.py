@@ -78,6 +78,7 @@ PROMPT_FILES = {
     "componentVariants": "component-variants.md",
     "unity": "unity.md",
     "imageDecompose": "image-decompose.md",
+    "htmlMotion": "html-motion.md",
 }
 
 

@@ -92,9 +92,9 @@ function buildPrompt(state) {
   )(...Object.values(deps));
 }
 
-test("tools page has a 拆图 tab that copies a prompt instead of starting an AI run", () => {
-  assert.match(ui, /data-tools-tab="image-decompose-tab"[^>]*>拆图<\/button>/);
-  assert.match(ui, /<div class="sync-sub-page" id="image-decompose-tab">/);
+test("AI prompt page has a 拆图 section that copies a prompt instead of starting an AI run", () => {
+  assert.match(ui, /data-prompt="imageDecompose"[^>]*>拆图<\/button>/);
+  assert.match(ui, /<div id="image-decompose-tab" hidden>/);
   for (const id of [
     "imageDecomposeSourceBox", "imageDecomposeModelSelect", "imageDecomposeSizeSelect",
     "imageDecomposeMaxImagesInput", "imageDecomposeFormatSelect", "imageDecomposeHintInput",
