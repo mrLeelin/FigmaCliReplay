@@ -23,7 +23,7 @@ Only run that test when the user asks to verify configuration. Actual image work
 
 | User request | Capability |
 |---|---|
-| Screenshot/image layering, background plus transparent layers, or Seedream5.0Pro layering | `Decompose`, separate built-in decomposition API |
+| Screenshot/image layering, background plus transparent layers, or Seedream5.0Pro / Seedream5.5 layering | `Decompose`, separate built-in decomposition API; `--model seedream55` selects 5.5 |
 | `dxx_image2.5` | `image2.5生图`, zero to ten reference images |
 | `dxx_banana` / `dxx_banana2` | `文生图(banana)` without references, `图像编辑(banana)` with references |
 | `dxx_seedream5` | `文生图(seedream5.0)` without references, `图像编辑(seedream5.0)` with references |
@@ -45,6 +45,8 @@ Read [layer-decomposition.md](references/layer-decomposition.md) once for the ex
 ```powershell
 python -X utf8 ai/skills/dxx-image/scripts/dxx_image.py Decompose --file <image.png> --prompt <resource-boundaries> --size 2K --out-dir <unique-directory>
 ```
+
+Without `--model` the server default (Seedream5.0Pro) is used and the request is unchanged. Add `--model seedream55` only when the user asks for Seedream5.5; it accepts `--size auto` and the 5.5-only `--max-images`, `--text-recognition`, `--output-format`. Model limits are listed in [layer-decomposition.md](references/layer-decomposition.md); invalid combinations fail before upload.
 
 For the screenshot-to-Figma workflow, resource boundaries come from the adjacent [image-layer-to-figma Skill](../image-layer-to-figma/SKILL.md). The CLI executes that plan; it does not choose the user-facing asset granularity.
 

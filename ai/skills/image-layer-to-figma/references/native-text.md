@@ -46,6 +46,8 @@ The plan identifies actual source `idx` values. Characters, fonts, sizes and col
 
 Bounds default to the source layer's `x/y/w/h`. Supply an optional `bounds` object with those four fields when the verified text bounds differ. Declaring a mixed text/art layer is rejected until the resources are separated. Unlisted artwork stays unchanged; the script does not perform OCR or decide whether unlisted pixels contain ordinary text.
 
+`compose_resources.py` renumbers layers by output position and writes `resource-map.json` beside its manifest. When that file is present, the plan must declare `"idxSpace"`: `"source"` means `sourceIdx` uses the original (for example DXX) layer numbers and is translated through `resource-map.json`; `"output"` means it uses the composed manifest numbers. A missing declaration, an unknown source number, or text that was merged into a multi-member resource is rejected before any output is written. The report records `idxSpace`, the map path and each entry's `planSourceIdx`. After import, still read back each node's name, type and characters.
+
 Ordinary entries produce `mode: "text"`, `semanticMode: "text"`, `textRole: "ordinary"`, explicit characters/font/fill/stroke metadata, and no raster fallback path. Decorative entries retain their image mode with `textRole: "decorative"` and `rasterTextReason`. The import wrapper validates these roles. An invalid ordinary entry or failed font load blocks that text instead of quietly replacing it with a PNG. Review the report's classification counts and `unclassifiedLayerCount` before submitting: inspect unclassified resources for missed ordinary text, rather than treating a successful preparation as semantic coverage proof.
 
 ## Verify the live result

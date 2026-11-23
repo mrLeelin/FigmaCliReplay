@@ -6,6 +6,11 @@ from pathlib import Path
 # Observed upstream rejection threshold; override only for a verified backend change.
 MIN_INPUT_PIXELS = 262144
 MAX_INPUT_BYTES = 50 * 1024 * 1024
+# Per-model input limits published by GET /api/v1/layer-decomposition (modelOptions).
+MODEL_INPUT_LIMITS = {
+    'seedream55': dict(suffixes=('.png', '.jpg', '.jpeg'), kinds=('png', 'jpeg'),
+                       max_bytes=31457280, max_pixels=36000000),
+}
 
 
 def image_dimensions(path):
@@ -56,7 +61,19 @@ def image_dimensions(path):
     raise ValueError('无法读取 PNG/JPEG/WebP 尺寸；未上传、未创建拆层任务。')
 
 
-def preflight_image(file, min_pixels=MIN_INPUT_PIXELS):
+def image_kind(path):
+    with Path(path).open('rb') as stream:
+        header = stream.read(12)
+    if header[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'png'
+    if header[:2] == b'\xff\xd8':
+        return 'jpeg'
+    if header[:4] == b'RIFF' and header[8:12] == b'WEBP':
+        return 'webp'
+    return None
+
+
+def preflight_image(file, min_pixels=MIN_INPUT_PIXELS, model=None):
     if not file:
         raise ValueError('Decompose 需要 --file 本地 PNG/JPEG/WebP。')
     path = Path(file).expanduser().resolve()
@@ -71,9 +88,18 @@ def preflight_image(file, min_pixels=MIN_INPUT_PIXELS):
     if min(width, height) < 1 or width * height < min_pixels:
         raise ValueError('图片 %sx%s 仅 %s 像素，拆层至少需要 %s；未上传、未创建任务。请扩大裁切区域并记录坐标变换。'
                          % (width, height, width * height, min_pixels))
+    limits = MODEL_INPUT_LIMITS.get(model)
+    if limits:
+        if path.suffix.lower() not in limits['suffixes'] or image_kind(path) not in limits['kinds']:
+            raise ValueError('%s 拆层仅支持 PNG/JPEG 输入；未上传、未创建任务。' % model)
+        if size > limits['max_bytes']:
+            raise ValueError('%s 拆层输入不超过 %s 字节，当前 %s；未上传、未创建任务。' % (model, limits['max_bytes'], size))
+        if width * height > limits['max_pixels']:
+            raise ValueError('%s 拆层输入最多 %s 像素，当前 %sx%s；未上传、未创建任务。'
+                             % (model, limits['max_pixels'], width, height))
     digest = hashlib.sha256()
     with path.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(chunk)
     return dict(file=str(path), width=width, height=height, pixels=width * height,
-                bytes=size, sha256=digest.hexdigest(), minInputPixels=min_pixels, passed=True)
+                bytes=size, sha256=digest.hexdigest(), minInputPixels=min_pixels, model=model, passed=True)

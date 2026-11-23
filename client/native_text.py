@@ -119,6 +119,44 @@ from a reviewed resource inventory, never a filename/character regex or OCR gues
     return counts
 
 
+def _plan_idx_translation(manifest_path, plan):
+    """Resolve which index space plan.sourceIdx uses for a compose_resources.py output.
+
+    compose_resources.py renumbers layers by output position and records the original
+    members in resource-map.json beside its manifest. A plan written against the
+    original idx would otherwise attach text to whichever resource now owns that number.
+    """
+    idx_space = plan.get("idxSpace")
+    if idx_space not in (None, "source", "output"):
+        raise NativeTextError('plan.idxSpace must be "source" or "output"')
+    map_path = manifest_path.parent / "resource-map.json"
+    if not map_path.is_file():
+        return idx_space or "output", None, None
+    if idx_space is None:
+        raise NativeTextError(
+            'manifest was produced by compose_resources.py (resource-map.json is beside it); declare '
+            'plan.idxSpace as "source" (original layer idx, mapped through resource-map.json) or '
+            '"output" (the composed manifest idx)')
+    if idx_space == "output":
+        return idx_space, None, str(map_path)
+    resource_map = json.loads(map_path.read_bytes().decode("utf-8-sig"))
+    resources = resource_map.get("resources") if isinstance(resource_map, dict) else None
+    if not isinstance(resources, list):
+        raise NativeTextError("resource-map.json requires a resources array")
+    translation = {}
+    for resource in resources:
+        members = resource.get("sourceMembersInStackingOrder") if isinstance(resource, dict) else None
+        output_idx = resource.get("outputIdx") if isinstance(resource, dict) else None
+        if (not isinstance(members, list) or not members or isinstance(output_idx, bool)
+                or not isinstance(output_idx, int)):
+            raise NativeTextError("resource-map.json resources need outputIdx and sourceMembersInStackingOrder")
+        for member in members:
+            if isinstance(member, bool) or not isinstance(member, int) or member in translation:
+                raise NativeTextError(f"resource-map.json has an invalid or duplicate source member: {member!r}")
+            translation[member] = (output_idx, len(members), resource.get("id"))
+    return idx_space, translation, str(map_path)
+
+
 def prepare_native_text(manifest_path, plan_path, out_dir):
     """Compile reviewed layer IDs into a mixed raster/native-text import manifest."""
     manifest_path, plan_path, out_dir = [Path(p).resolve() for p in (manifest_path, plan_path, out_dir)]
@@ -145,15 +183,25 @@ def prepare_native_text(manifest_path, plan_path, out_dir):
         if isinstance(idx, bool) or not isinstance(idx, int) or idx in by_idx:
             raise NativeTextError(f"invalid or duplicate layer index: {idx!r}")
         by_idx[idx] = layer
+    idx_space, translation, resource_map_path = _plan_idx_translation(manifest_path, plan)
     seen, mappings = set(), []
     for entry in plan["layers"]:
         if not isinstance(entry, dict):
             raise NativeTextError("every text plan entry must be an object")
         idx = entry.get("sourceIdx")
+        plan_idx = idx
+        if translation is not None:
+            if isinstance(idx, bool) or not isinstance(idx, int) or idx not in translation:
+                raise NativeTextError(f"sourceIdx {idx!r} is not a source member in resource-map.json")
+            idx, member_count, resource_id = translation[idx]
+            if member_count != 1:
+                raise NativeTextError(f"sourceIdx {plan_idx} was merged into resource {resource_id!r} with other "
+                                      "layers; keep ordinary text as its own resource before composing")
         if isinstance(idx, bool) or not isinstance(idx, int) or idx not in by_idx or idx in seen:
-            raise NativeTextError(f"unknown or duplicate sourceIdx: {idx!r}")
+            raise NativeTextError(f"unknown or duplicate sourceIdx: {plan_idx!r}")
         seen.add(idx)
         layer = by_idx[idx]
+        origin = {"planSourceIdx": plan_idx} if translation is not None else {}
         role = entry.get("classification")
         if role == "mixed" or layer.get("textRole") == "mixed":
             raise NativeTextError(f"layer {idx}: separate ordinary text and artwork first")
@@ -162,7 +210,7 @@ def prepare_native_text(manifest_path, plan_path, out_dir):
         layer["textRole"] = role
         if role == "decorative":
             layer["rasterTextReason"] = _string(entry.get("reason"), f"layer {idx}.reason")
-            mappings.append({"sourceIdx": idx, "classification": role, "reason": entry["reason"]})
+            mappings.append({"sourceIdx": idx, **origin, "classification": role, "reason": entry["reason"]})
             continue
         chars = _string(entry.get("characters"), f"layer {idx}.characters")
         font = entry.get("font")
@@ -201,7 +249,7 @@ def prepare_native_text(manifest_path, plan_path, out_dir):
                          "figma": {"fontFallbackCandidates": [font]},
                          "effects": {"stroke": {"enabled": stroke["enabled"], "size": stroke["size"],
                                                  "color": {k: stroke.get(k, 0) for k in ("r", "g", "b")}}}}
-        mappings.append({"sourceIdx": idx, "classification": role, "characters": chars, "font": font,
+        mappings.append({"sourceIdx": idx, **origin, "classification": role, "characters": chars, "font": font,
                          "sourceBounds": geometry, "rasterReference": layer.get("rasterReference")})
     output = deepcopy(source)
     for bucket in ("imageLayers", "textLayers", "commonLayers", "nineSliceLayers", "__source_path"):
@@ -230,6 +278,7 @@ def prepare_native_text(manifest_path, plan_path, out_dir):
               "planSha256": hashlib.sha256(plan_bytes).hexdigest(), **counts,
               "layerCount": len(layers), "copiedRasterAssets": len(copies),
               "unclassifiedLayerCount": sum(layer.get("textRole") is None for layer in layers),
+              "idxSpace": idx_space, "resourceMap": resource_map_path,
               "textMappings": mappings,
               "figmaWrites": 0, "liveVerificationRequired": True}
     for name, value in (("manifest.json", output), ("native-text-report.json", report)):

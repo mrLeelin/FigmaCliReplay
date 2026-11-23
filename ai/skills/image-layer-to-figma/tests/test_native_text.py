@@ -211,5 +211,79 @@ class NativeTextTests(unittest.TestCase):
             SUBMIT.build_payload(manifest, "test", "", "")
 
 
+class ComposedResourceIdxTests(unittest.TestCase):
+    """compose_resources.py renumbers layers; text plans must not silently hit the wrong resource."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.composed = self.root / "composed"
+        self.composed.mkdir()
+        self.manifest = self.composed / "manifest.json"
+        self.plan = self.root / "plan.json"
+        self.output = self.root / "prepared"
+        for name in ("resource-000.png", "resource-001.png", "resource-002.png"):
+            (self.composed / name).write_bytes(name.encode())
+        # Output idx 1 is the SPIN label (source 9); output idx 2 is a panel merged from sources 1 and 2.
+        self.manifest.write_text(json.dumps({"canvas": {"width": 100, "height": 200}, "layers": [
+            {"idx": 0, "name": "background", "path": "resource-000.png", "mode": "image", "x": 0, "y": 0, "w": 100, "h": 200},
+            {"idx": 1, "name": "spin label", "path": "resource-001.png", "mode": "image", "x": 10, "y": 150, "w": 40, "h": 20},
+            {"idx": 2, "name": "bottom panel", "path": "resource-002.png", "mode": "image", "x": 0, "y": 160, "w": 100, "h": 40},
+        ]}), encoding="utf-8")
+        (self.composed / "resource-map.json").write_text(json.dumps({"resources": [
+            {"id": "r00", "outputIdx": 0, "sourceMembersInStackingOrder": [0]},
+            {"id": "r01", "outputIdx": 1, "sourceMembersInStackingOrder": [9]},
+            {"id": "r02", "outputIdx": 2, "sourceMembersInStackingOrder": [1, 2]},
+        ]}), encoding="utf-8")
+
+    def write_plan(self, source_idx, idx_space="__unset__"):
+        plan = {"schemaVersion": 1, "layers": [
+            {"sourceIdx": source_idx, "classification": "ordinary", "characters": "SPIN",
+             "font": {"family": "Chewy", "style": "Regular"}, "fontSize": 30, "fillColor": "#FFFFFF"}]}
+        if idx_space != "__unset__":
+            plan["idxSpace"] = idx_space
+        self.plan.write_text(json.dumps(plan), encoding="utf-8")
+
+    def test_composed_manifest_requires_an_explicit_idx_space(self):
+        self.write_plan(2)
+        with self.assertRaisesRegex(NativeTextError, "declare plan.idxSpace"):
+            prepare_native_text(self.manifest, self.plan, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_source_idx_is_translated_through_resource_map(self):
+        self.write_plan(9, "source")
+        report = prepare_native_text(self.manifest, self.plan, self.output)
+        layers = json.loads((self.output / "manifest.json").read_text(encoding="utf-8"))["layers"]
+        self.assertEqual([layer["mode"] for layer in layers], ["image", "text", "image"])
+        self.assertEqual(layers[1]["chars"], "SPIN")
+        self.assertEqual(layers[2]["name"], "bottom panel", "the panel keeps its artwork")
+        self.assertEqual(report["textMappings"][0]["sourceIdx"], 1)
+        self.assertEqual(report["textMappings"][0]["planSourceIdx"], 9)
+        self.assertEqual(report["idxSpace"], "source")
+        self.assertTrue(report["resourceMap"].endswith("resource-map.json"))
+
+    def test_output_idx_space_uses_composed_numbers_directly(self):
+        self.write_plan(1, "output")
+        report = prepare_native_text(self.manifest, self.plan, self.output)
+        self.assertEqual(report["textMappings"][0]["sourceIdx"], 1)
+        self.assertNotIn("planSourceIdx", report["textMappings"][0])
+
+    def test_source_text_merged_with_artwork_is_rejected(self):
+        self.write_plan(2, "source")
+        with self.assertRaisesRegex(NativeTextError, "merged into resource 'r02'"):
+            prepare_native_text(self.manifest, self.plan, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_unknown_source_idx_and_invalid_space_are_rejected(self):
+        self.write_plan(7, "source")
+        with self.assertRaisesRegex(NativeTextError, "not a source member"):
+            prepare_native_text(self.manifest, self.plan, self.output)
+        self.write_plan(1, "dxx")
+        with self.assertRaisesRegex(NativeTextError, "idxSpace must be"):
+            prepare_native_text(self.manifest, self.plan, self.output)
+        self.assertFalse(self.output.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

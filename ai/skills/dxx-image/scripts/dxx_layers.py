@@ -14,6 +14,39 @@ from dxx_image import ID, MIME, origin, save, task_id
 from dxx_preflight import MIN_INPUT_PIXELS, preflight_image
 
 ENDPOINT = '/api/v1/layer-decomposition/jobs'
+# Model choices published by GET /api/v1/layer-decomposition; no model keeps the server default.
+LAYER_SIZES = {None: ('1K', '1.5K', '2K'), 'seedream50pro': ('1K', '1.5K', '2K'),
+               'seedream55': ('auto', '1K', '1.5K', '2K')}
+DEFAULT_SIZES = {None: '1K', 'seedream50pro': '1K', 'seedream55': 'auto'}
+
+
+def layer_options(args):
+    """Validate model-specific options before any upload; returns body fields except image/prompt."""
+    model = getattr(args, 'model', None)
+    if model not in LAYER_SIZES:
+        raise ValueError('拆层 model 仅支持 seedream50pro / seedream55。')
+    size = getattr(args, 'size', None) or DEFAULT_SIZES[model]
+    if size not in LAYER_SIZES[model]:
+        raise ValueError('拆层 size 在 %s 下仅支持 %s。' % (model or '默认模型', ' / '.join(LAYER_SIZES[model])))
+    max_images = getattr(args, 'max_images', None)
+    text_recognition = getattr(args, 'text_recognition', False)
+    output_format = getattr(args, 'output_format', None)
+    if model != 'seedream55' and (max_images is not None or text_recognition or output_format is not None):
+        raise ValueError('--max-images / --text-recognition / --output-format 仅适用于 --model seedream55。')
+    if max_images is not None and (isinstance(max_images, bool) or not isinstance(max_images, int) or not 2 <= max_images <= 64):
+        raise ValueError('--max-images 须为 2–64（包含底图）。')
+    if output_format not in (None, 'png', 'jpeg'):
+        raise ValueError('--output-format 仅支持 png / jpeg。')
+    body = {'size': size}
+    if model:
+        body['model'] = model
+    if max_images is not None:
+        body['maxImages'] = max_images
+    if text_recognition:
+        body['textRecognition'] = True
+    if output_format:
+        body['outputFormat'] = output_format
+    return body
 
 
 def layer_task(response):
@@ -161,19 +194,18 @@ def execute_layers(args, client):
     if args.action == 'Decompose':
         if ident:
             raise ValueError('恢复已有拆层任务请使用 Layerwait，不要 Decompose。')
-        preflight = preflight_image(args.file, getattr(args, 'min_input_pixels', MIN_INPUT_PIXELS))
+        options = layer_options(args)
+        preflight = preflight_image(args.file, getattr(args, 'min_input_pixels', MIN_INPUT_PIXELS), options.get('model'))
         image = Path(preflight['file'])
         if args.prompt is not None and (not isinstance(args.prompt, str) or len(args.prompt) > 2000):
             raise ValueError('拆层 prompt 最多 2000 字符。')
-        if args.size not in ('1K', '1.5K', '2K'):
-            raise ValueError('拆层 size 仅支持 1K / 1.5K / 2K。')
         directory.mkdir(parents=True, exist_ok=True)
         if any(directory.iterdir()):
             raise ValueError('新拆层任务需要空输出目录；已有任务请 Layerwait/Layerresume。')
         save(directory / 'layer-preflight.json', preflight)
         write_private(directory / 'layer-started.json', {'requestId': str(uuid.uuid4()), 'startedAt': time.time()})
         request_id = json.loads((directory / 'layer-started.json').read_text(encoding='utf-8'))['requestId']
-        body = {'image': client.upload(image), 'size': args.size}
+        body = dict({'image': client.upload(image)}, **options)
         if args.prompt is not None:
             body['prompt'] = args.prompt
         if args.project_group_id:

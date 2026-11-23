@@ -409,6 +409,16 @@ def execute(args, client):
         time.sleep(min(args.poll_seconds, remaining))
 
 
+def saved_task_id(directory, action):
+    """Task ID already persisted by Submit/Decompose, so a client timeout still reports what to resume."""
+    name = 'layer-task-id.txt' if action in ('Decompose', 'Layerwait', 'Layerstatus', 'Layerresume') else 'task-id.txt'
+    try:
+        value = (directory / name).read_text(encoding='utf-8').strip()
+    except OSError:
+        return None
+    return value if ID.fullmatch(value) else None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['Run', 'List', 'Submit', 'Status', 'Wait', 'Test', 'Decompose', 'Layerwait', 'Layerstatus', 'Layerresume'], type=str.title)
@@ -421,7 +431,13 @@ def main(argv=None):
     parser.add_argument('--check-only', action='store_true', help='Decompose input check only; no configuration, upload or API calls')
     parser.add_argument('--min-input-pixels', type=int, default=MIN_INPUT_PIXELS, help='Decomposition input pixel minimum (override only for a verified backend change)')
     parser.add_argument('--prompt', default=None, help='Optional layer separation description, max 2000 characters')
-    parser.add_argument('--size', choices=['1K', '1.5K', '2K'], default='1K')
+    parser.add_argument('--size', choices=['auto', '1K', '1.5K', '2K'], default=None,
+                        help='Decomposition size; default 1K, or auto with --model seedream55')
+    parser.add_argument('--model', choices=['seedream50pro', 'seedream55'], default=None,
+                        help='Decomposition model; omitted keeps the server default (seedream50pro)')
+    parser.add_argument('--max-images', type=int, default=None, help='seedream55 only: 2-64 output images including base')
+    parser.add_argument('--text-recognition', action='store_true', help='seedream55 only: enable text recognition')
+    parser.add_argument('--output-format', choices=['png', 'jpeg'], default=None, help='seedream55 only: layer image format')
     parser.add_argument('--project-group-id', help='Only when user explicitly selected a billing group')
     parser.add_argument('--refresh-modules', action='store_true', help='Refresh metadata before submitting; default uses bundled verified snapshot')
     parser.add_argument('--no-preview', action='store_true', help='Skip optional Pillow thumbnail')
@@ -436,7 +452,9 @@ def main(argv=None):
     try:
         if args.check_only:
             from dxx_preflight import preflight_image
-            print(json.dumps(preflight_image(args.file, args.min_input_pixels), ensure_ascii=False, indent=2))
+            from dxx_layers import layer_options
+            model = layer_options(args).get('model')
+            print(json.dumps(preflight_image(args.file, args.min_input_pixels, model), ensure_ascii=False, indent=2))
             return 0
         config = load_config()
         key = config['apiKey']
@@ -452,13 +470,17 @@ def main(argv=None):
         return 0
     except Exception as error:
         message = protect(str(error), key)
+        task = args.task_id
         if args.out_dir and not args.check_only:
             directory = Path(args.out_dir).expanduser()
             if directory.is_dir():
+                task = task or saved_task_id(directory, args.action)
                 try:
-                    save(directory / 'error.json', dict(error=message, action=args.action, taskId=args.task_id), key)
+                    save(directory / 'error.json', dict(error=message, action=args.action, taskId=task), key)
                 except OSError:
                     pass
+        if task and task not in message:
+            message += ' taskId=' + task
         print(message, file=sys.stderr)
         return 2 if isinstance(error, TimeoutError) else 1
     finally:

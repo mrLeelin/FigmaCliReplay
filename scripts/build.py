@@ -77,6 +77,7 @@ PROMPT_FILES = {
     "cleanup": "cleanup.md",
     "componentVariants": "component-variants.md",
     "unity": "unity.md",
+    "imageDecompose": "image-decompose.md",
 }
 
 
