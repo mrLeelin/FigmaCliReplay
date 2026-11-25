@@ -3172,15 +3172,22 @@ async function setHierarchyNodePositionsJob(job) {
   const updated = [];
   const errors = [];
   const beforeBounds = {};
+  const psdTextRootId = String(options.psdTextRootId || "");
 
   for (const pos of positions) {
     const nodeId = String(pos.nodeId || "");
     if (!nodeId) { errors.push("position entry missing nodeId"); continue; }
     const node = await figma.getNodeByIdAsync(nodeId);
     if (!node) { errors.push("Node not found: " + nodeId); continue; }
+    if (psdTextRootId && (node.type !== "TEXT" || node.parent?.id !== psdTextRootId
+      || !readSharedPluginData(node, "psdLayerId") || !readSharedPluginData(node, "psdTextLayout"))) {
+      errors.push("Invalid PSD text layout target: " + nodeId);
+      continue;
+    }
     beforeBounds[nodeId] = { x: node.x, y: node.y, width: node.width, height: node.height };
     if (typeof pos.x === "number") node.x = pos.x;
     if (typeof pos.y === "number") node.y = pos.y;
+    if (psdTextRootId) writePluginData(node, { psdTextLayout: capturePsdTextLayout(node, node.parent) });
     updated.push({ nodeId, x: node.x, y: node.y, width: node.width, height: node.height });
   }
 
@@ -3718,6 +3725,13 @@ async function applyPsdIncrementalUpdate(job, assets) {
       throw new Error(`PSD incremental verification failed: ${verificationErrors.slice(0, 8).join("; ")}`);
     }
     for (const plan of prepared.plans) {
+      if (plan.source.visibilityOnly) {
+        writePluginData(plan.target.node, {
+          psdSourceState: stablePsdSourceStateJson(plan.incoming),
+          psdSourceStateHash: hashPsdSourceState(plan.incoming)
+        });
+        continue;
+      }
       writeLayerMetadata(
         plan.target.node,
         plan.source,
@@ -3762,6 +3776,7 @@ async function preparePsdIncrementalUpdate(job, assets) {
     stats: { image: 0, text: 0, commonInstance: 0, commonFallbackImage: 0, nineSlice: 0, slice: 0 }
   };
   const currentNodes = collectPsdBoundNodes(target);
+  appendPsdHiddenLayerStates(manifest, currentNodes);
   await enrichPsdLiveContentStates(currentNodes, manifest.layers, context.assetBytes);
   const diff = buildPsdIncrementalDiff(currentNodes, manifest.layers);
   appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, manifest);
@@ -3799,9 +3814,10 @@ function appendPsdMutationPreflightConflicts(diff, plans, target) {
       const baseline = plan.baseline.text || {};
       const incoming = plan.incoming.text || {};
       const source = plan.baseline.geometry;
-      if ((baseline.fillGradient || incoming.fillGradient)
+      if ((baseline.fillGradient || incoming.fillGradient || baseline.fillRuns || incoming.fillRuns)
         && !psdTextFillMatches(node, baseline, source.width, source.height)) {
-        diff.conflicts.push({ kind: "unsafe-text-gradient-override", layerId: plan.layerId, nodeId: plan.nodeId });
+        const kind = baseline.fillRuns || incoming.fillRuns ? "unsafe-text-fill-runs-override" : "unsafe-text-gradient-override";
+        diff.conflicts.push({ kind, layerId: plan.layerId, nodeId: plan.nodeId });
         continue;
       }
     }
@@ -3913,15 +3929,46 @@ function collectPsdBoundNodes(root) {
   return found;
 }
 
-function buildPsdLiveSourceState(node, root, storedSourceState) {
-  if (!storedSourceState || !node || !root || !node.absoluteTransform || !root.absoluteTransform) return null;
-  const liveState = clonePsdValue(storedSourceState);
-  const liveGeometry = mapPsdLiveGeometryToSource({
+function readPsdGeometryInRoot(node, root) {
+  if (!node?.absoluteTransform || !root?.absoluteTransform) return null;
+  return mapPsdLiveGeometryToSource({
     nodeAbsoluteTransform: node.absoluteTransform,
     nodeSize: { width: numericOr(node.width, 0), height: numericOr(node.height, 0) },
     nodeRotation: numericOr(node.rotation, 0),
     rootAbsoluteTransform: root.absoluteTransform
   });
+}
+
+function capturePsdTextLayout(node, root) {
+  const geometry = readPsdGeometryInRoot(node, root);
+  return geometry ? stablePsdSourceStateJson({ geometry, align: node.textAlignHorizontal }) : "";
+}
+
+function readPsdTextLayout(node) {
+  try {
+    const layout = JSON.parse(readSharedPluginData(node, "psdTextLayout") || "null");
+    return layout?.geometry && ["x", "y", "width", "height", "rotation"].every(
+      (key) => Number.isFinite(layout.geometry[key])
+    ) ? layout : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildPsdLiveSourceState(node, root, storedSourceState) {
+  if (!storedSourceState) return null;
+  const liveGeometry = readPsdGeometryInRoot(node, root);
+  if (!liveGeometry) return null;
+  const liveState = clonePsdValue(storedSourceState);
+  const textLayout = node.type === "TEXT" ? readPsdTextLayout(node) : null;
+  if (textLayout) {
+    // Preserve the displacement of an editable text box relative to its PSD glyph bounds.
+    for (const key of ["x", "y", "width", "height", "rotation"]) {
+      if (Number.isFinite(liveState.geometry[key])) {
+        liveGeometry[key] = liveState.geometry[key] + liveGeometry[key] - textLayout.geometry[key];
+      }
+    }
+  }
   if (liveState.geometry && liveState.geometry.rotation == null) liveGeometry.rotation = null;
   liveState.geometry = liveGeometry;
   liveState.display = {
@@ -3940,9 +3987,15 @@ function buildPsdLiveSourceState(node, root, storedSourceState) {
     liveState.text.effectiveFontSize = numericOr(node.fontSize, liveState.text.effectiveFontSize);
     liveState.text.leading = lineHeight.unit === "PIXELS" ? numericOr(lineHeight.value, 0) : 0;
     liveState.text.lineHeightMode = lineHeight.unit === "PIXELS" ? "PIXELS" : "AUTO";
-    liveState.text.textAlignHorizontal = String(node.textAlignHorizontal || liveState.text.textAlignHorizontal || "LEFT");
+    if (node.textAlignHorizontal !== textLayout?.align) {
+      liveState.text.textAlignHorizontal = String(node.textAlignHorizontal || liveState.text.textAlignHorizontal || "LEFT");
+    }
     const storedGradient = liveState.text.fillGradient;
-    if (storedGradient || (Array.isArray(node.fills) && node.fills.some((paint) => paint.type === "GRADIENT_LINEAR"))) {
+    if (liveState.text.fillRuns) {
+      if (!psdTextFillMatches(node, liveState.text, 0, 0)) {
+        liveState.text.fillRuns = { figmaDrift: "changed-fill-runs", fills: node.fills, ranges: readPsdMixedTextFills(node) };
+      }
+    } else if (storedGradient || (Array.isArray(node.fills) && node.fills.some((paint) => paint.type === "GRADIENT_LINEAR"))) {
       const source = storedSourceState.geometry || {};
       if (!storedGradient || !psdTextFillMatches(node, liveState.text, source.width, source.height)) {
         liveState.text.fillGradient = { figmaDrift: "changed-gradient-fill", fills: clonePsdValue(node.fills) };
@@ -4067,6 +4120,7 @@ function buildPsdLiveTextStroke(node, storedStroke) {
     enabled: true,
     present: true,
     position: String(node.strokeAlign || "OUTSIDE"),
+    ...(storedStroke && storedStroke.join ? { join: node.strokeJoin } : {}),
     opacity: numericOr(paint.opacity, 1),
     size: numericOr(node.strokeWeight, 1),
     color: {
@@ -4119,7 +4173,7 @@ async function enrichPsdLiveContentStates(currentNodes, incomingLayers, assetByt
   ]));
   await Promise.all((currentNodes || []).map(async (current) => {
     const source = incomingById.get(current.layerId);
-    const incomingState = source ? normalizePsdSourceState(source) : null;
+    const incomingState = source && !source.visibilityOnly ? normalizePsdSourceState(source) : null;
     if (!current.liveState || !incomingState || !incomingState.content) return;
     if (incomingState.mode !== "image" && incomingState.mode !== "nine-slice") return;
 
@@ -4148,6 +4202,24 @@ async function enrichPsdLiveContentStates(currentNodes, incomingLayers, assetByt
   }));
 }
 
+function appendPsdHiddenLayerStates(manifest, currentNodes) {
+  if (!manifest.hiddenLayerIds.size) return;
+  const incoming = new Set(manifest.layers.map((layer) => layer.layerId));
+  for (const current of currentNodes) {
+    if (!manifest.hiddenLayerIds.has(current.layerId) || incoming.has(current.layerId) || !current.sourceState) continue;
+    const state = clonePsdValue(current.sourceState);
+    const sourceState = { ...state, display: { ...state.display, visible: false } };
+    current.liveState = { ...state, display: { ...state.display, visible: current.node.visible !== false } };
+    manifest.layers.push({
+      layerId: current.layerId,
+      mode: state.mode,
+      name: current.name,
+      sourceState,
+      visibilityOnly: true
+    });
+  }
+}
+
 function readStoredPsdSourceState(node) {
   const raw = readSharedPluginData(node, "psdSourceState");
   if (!raw) return { state: null, error: "" };
@@ -4166,6 +4238,10 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
   const schemaVersion = readSharedPluginData(target, "psdImportSchemaVersion") || readSharedPluginData(target, "psdSchemaVersion");
   if (schemaVersion !== "2" && schemaVersion !== "3") {
     diff.conflicts.push({ kind: "missing-target-metadata", message: "目标不是带增量元数据的 PSD 导入结果。" });
+  }
+  const storedRenderer = readSharedPluginData(target, "psdRenderSource");
+  if (storedRenderer && manifest.renderSource && storedRenderer !== manifest.renderSource) {
+    diff.conflicts.push({ kind: "source-renderer-mismatch", expected: storedRenderer, actual: manifest.renderSource });
   }
   for (const current of currentNodes) {
     if (current.sourceStateError) {
@@ -4204,7 +4280,9 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
   }
   for (const pair of diff.changed) {
     const node = pair.target.node;
-    if (isOrdinaryTextLayer(pair.source) || readSharedPluginData(node, "textRole") === "ordinary") {
+    const textWithoutLayoutChange = pair.source.mode === "text" && pair.changes.length > 0
+      && pair.changes.every((change) => isPsdTextPaintPath(change.path) || change.path === "display.visible");
+    if (!textWithoutLayoutChange && (isOrdinaryTextLayer(pair.source) || readSharedPluginData(node, "textRole") === "ordinary")) {
       diff.conflicts.push({
         kind: "ordinary-text-requires-native-replacement",
         layerId: pair.source.layerId,
@@ -4217,7 +4295,7 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
       pair.target.ownership,
       pair.source.mode,
       node && node.type,
-      node && node.type === "TEXT" ? node.textAutoResize : ""
+      node && node.type === "TEXT" && !textWithoutLayoutChange ? node.textAutoResize : ""
     );
     const fontName = node && node.type === "TEXT" ? node.fontName : null;
     const imagePaintCount = node && node.type === "RECTANGLE" && Array.isArray(node.fills)
@@ -4230,7 +4308,8 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
     const nineSlicePaintConflict = pair.source.mode === "nine-slice" && nineSlicePaintCount !== 1
       ? "unsafe-nine-slice-fill-structure"
       : "";
-    if (conflictKind || paintConflict || nineSlicePaintConflict || (pair.source.mode === "text" && (!fontName || typeof fontName !== "object"))) {
+    if (conflictKind || paintConflict || nineSlicePaintConflict
+      || (pair.source.mode === "text" && !textWithoutLayoutChange && (!fontName || typeof fontName !== "object"))) {
       diff.conflicts.push({
         kind: conflictKind || paintConflict || nineSlicePaintConflict || "unsupported-text-font",
         layerId: pair.source.layerId,
@@ -4244,7 +4323,7 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
 function appendPsdIncrementalAssetConflicts(diff, context) {
   const sources = diff.changed
     .map((item) => item.source)
-    .filter((layer) => psdOwnershipForMode(layer.mode) !== "protected")
+    .filter((layer) => !layer.visibilityOnly && psdOwnershipForMode(layer.mode) !== "protected")
     .concat(diff.added.map((item) => item.source))
     .filter((layer) => layer.mode !== "text");
   for (const layer of sources) {
@@ -4333,6 +4412,12 @@ function buildPsdLiveWritableFieldSignature(node) {
       characters: String(node.characters || ""),
       fontName: node.fontName,
       fontRuns: readPsdTextFontRunState(node),
+      fills: node.fills,
+      mixedFills: readPsdMixedTextFills(node),
+      strokes: node.strokes,
+      strokeWeight: node.strokeWeight,
+      strokeAlign: node.strokeAlign,
+      strokeJoin: node.strokeJoin,
       fontSize: node.fontSize,
       lineHeight: node.lineHeight,
       textAlignHorizontal: node.textAlignHorizontal
@@ -4552,9 +4637,10 @@ function applyPsdTextStroke(node, stroke) {
     return;
   }
   const color = stroke.color || stroke;
-  node.strokes = [solidPaintFromManifest(color, 1)];
+  node.strokes = [solidPaintFromManifest(color, stroke.opacity == null ? 1 : stroke.opacity)];
   node.strokeWeight = numericOr(stroke.size, 1);
   node.strokeAlign = "OUTSIDE";
+  if (stroke.join === "ROUND") node.strokeJoin = "ROUND";
 }
 
 function applyPsdTextShadow(node, shadow) {
@@ -4611,7 +4697,6 @@ async function applyPsdTextPlan(plan, pair, prepared) {
   if (plan.changedPaths.includes("text.textAlignHorizontal")) {
     node.textAlignHorizontal = text.textAlignHorizontal;
   }
-  if (plan.changedPaths.includes("text.stroke")) applyPsdTextStroke(node, text.stroke);
   if (plan.changedPaths.includes("text.dropShadow")) applyPsdTextShadow(node, text.dropShadow);
   node.textAutoResize = "NONE";
 }
@@ -4661,9 +4746,10 @@ async function applyPsdMutationPlans(prepared) {
     if (plan.categories.includes("content") && plan.incoming.mode === "image") {
       node.fills = replacePsdOwnedImageHash(node.fills, prepared.imagePaints.get(plan.layerId));
     }
-    if (plan.categories.includes("textContent") || plan.categories.includes("textStyle")) {
+    if (plan.changedPaths.some((path) => path.startsWith("text.") && !isPsdTextPaintPath(path))) {
       await applyPsdTextPlan(plan, pair, prepared);
     }
+    if (plan.changedPaths.includes("text.stroke")) applyPsdTextStroke(node, plan.incoming.text.stroke);
     if (plan.categories.some((category) => (
       category === "position" || category === "size" || category === "rotation"
     ))) {
@@ -4671,7 +4757,7 @@ async function applyPsdMutationPlans(prepared) {
     }
     if (psdTextFillAffected(plan)) {
       const source = plan.incoming.geometry;
-      node.fills = [createPsdTextFillPaint(plan.incoming.text, node, source.width, source.height)];
+      applyPsdTextFill(node, plan.incoming.text, source.width, source.height);
     }
     if (plan.categories.includes("display")) applyPsdDisplayPlan(plan, node);
     if (plan.categories.includes("nineSlice")) await applyPsdNineSlicePlan(plan, pair, prepared);
@@ -4684,8 +4770,13 @@ async function preloadPsdMutationAssets(prepared) {
   for (const plan of prepared.plans) {
     if (plan.target.node.type === "TEXT" && plan.target.node.fontName && typeof plan.target.node.fontName === "object") {
       await figma.loadFontAsync(plan.target.node.fontName);
+    } else if (plan.target.node.type === "TEXT" && typeof plan.target.node.getRangeAllFontNames === "function"
+      && plan.target.node.characters.length > 0) {
+      for (const font of plan.target.node.getRangeAllFontNames(0, plan.target.node.characters.length)) {
+        await figma.loadFontAsync(font);
+      }
     }
-    if (plan.categories.includes("textContent") || plan.categories.includes("textStyle")) {
+    if (plan.changedPaths.some((path) => path.startsWith("text.") && !isPsdTextPaintPath(path))) {
       plan.expectedFontName = await loadBestFont(plan.source, prepared.context);
       prepared.resolvedFonts.set(plan.layerId, plan.expectedFontName);
     }
@@ -4752,8 +4843,10 @@ function verifyPsdTextStroke(node, stroke) {
   const color = stroke.color || stroke;
   return strokes.length === 1
     && psdSolidPaintMatches(strokes[0], color)
+    && psdNumberMatches(numericOr(strokes[0].opacity, 1), stroke.opacity == null ? 1 : stroke.opacity)
     && psdNumberMatches(node.strokeWeight, numericOr(stroke.size, 1))
-    && node.strokeAlign === "OUTSIDE";
+    && node.strokeAlign === "OUTSIDE"
+    && (!stroke.join || node.strokeJoin === stroke.join);
 }
 
 function verifyPsdTextShadow(node, shadow) {
@@ -4847,8 +4940,8 @@ function buildPsdIncrementalMetadataExtra(plan, prepared) {
     const fontName = prepared.resolvedFonts.get(plan.layerId) || {};
     const text = plan.incoming.text || {};
     return {
-      fontFamily: String(fontName.family || ""),
-      fontStyle: String(fontName.style || ""),
+      fontFamily: String(fontName.family || readSharedPluginData(plan.target.node, "fontFamily")),
+      fontStyle: String(fontName.style || readSharedPluginData(plan.target.node, "fontStyle")),
       effectiveFontSize: String(firstDefined(text.effectiveFontSize, text.fontSize)),
       originalFontSize: String(firstDefined(text.fontSize, ""))
     };
@@ -4977,9 +5070,11 @@ function capturePsdMutationRollback(node) {
     textAlignHorizontal: "textAlignHorizontal" in node ? node.textAlignHorizontal : null,
     textAutoResize: "textAutoResize" in node ? node.textAutoResize : null,
     fills: "fills" in node ? clonePsdValue(node.fills) : null,
+    mixedFills: readPsdMixedTextFills(node),
     strokes: "strokes" in node ? clonePsdValue(node.strokes) : null,
     strokeWeight: "strokeWeight" in node ? node.strokeWeight : null,
     strokeAlign: "strokeAlign" in node ? node.strokeAlign : null,
+    strokeJoin: "strokeJoin" in node ? node.strokeJoin : null,
     effects: "effects" in node ? clonePsdValue(node.effects) : null,
     sliceChildren: capturePsdSliceChildren(node),
     metadata: capturePsdLayerMetadata(node)
@@ -5024,16 +5119,20 @@ function restorePsdMutationRollback(record) {
   if (record.opacity !== null) node.opacity = record.opacity;
   if (record.blendMode !== null) node.blendMode = record.blendMode;
   if (record.constraints !== null) node.constraints = clonePsdValue(record.constraints);
-  if (record.fontName !== null) node.fontName = clonePsdValue(record.fontName);
-  if (record.fontSize !== null) node.fontSize = record.fontSize;
-  if (record.lineHeight !== null) node.lineHeight = clonePsdValue(record.lineHeight);
+  if (record.fontName && typeof record.fontName === "object") node.fontName = clonePsdValue(record.fontName);
+  if (typeof record.fontSize === "number") node.fontSize = record.fontSize;
+  if (record.lineHeight && typeof record.lineHeight === "object") node.lineHeight = clonePsdValue(record.lineHeight);
   if (record.textAlignHorizontal !== null) node.textAlignHorizontal = record.textAlignHorizontal;
   if (record.textAutoResize !== null) node.textAutoResize = record.textAutoResize;
-  if (record.characters !== null) node.characters = record.characters;
-  if (record.fills !== null) node.fills = clonePsdValue(record.fills);
+  if (record.characters !== null && node.characters !== record.characters) node.characters = record.characters;
+  if (Array.isArray(record.fills)) node.fills = clonePsdValue(record.fills);
+  for (const { start, end, fills } of record.mixedFills || []) {
+    node.setRangeFills(start, end, clonePsdValue(fills));
+  }
   if (record.strokes !== null) node.strokes = clonePsdValue(record.strokes);
   if (record.strokeWeight !== null) node.strokeWeight = record.strokeWeight;
   if (record.strokeAlign !== null) node.strokeAlign = record.strokeAlign;
+  if (typeof record.strokeJoin === "string") node.strokeJoin = record.strokeJoin;
   if (record.effects !== null) node.effects = clonePsdValue(record.effects);
   restorePsdSliceChildren(node, record.sliceChildren);
   writePluginData(node, record.metadata);
@@ -5043,10 +5142,10 @@ function verifyPsdRollbackRecords(records) {
   const errors = [];
   const numericFields = ["x", "y", "width", "height", "rotation", "opacity", "fontSize", "strokeWeight"];
   const exactFields = [
-    "visible", "blendMode", "characters", "textAlignHorizontal", "textAutoResize", "strokeAlign"
+    "visible", "blendMode", "characters", "textAlignHorizontal", "textAutoResize", "strokeAlign", "strokeJoin"
   ];
   const valueFields = [
-    "constraints", "fontName", "lineHeight", "fills", "strokes", "effects", "sliceChildren", "metadata"
+    "constraints", "fontName", "lineHeight", "fills", "mixedFills", "strokes", "effects", "sliceChildren", "metadata"
   ];
   for (const record of records) {
     const current = capturePsdMutationRollback(record.node);
@@ -5071,7 +5170,7 @@ function capturePsdLayerMetadata(node) {
   const keys = [
     "rawPsdLayerName", "normalizedLayerName", "semanticMode", "normalizationWarnings", "textRole",
     "psdLayerIndex", "psdLayerId", "psdOriginalName", "psdContentHash", "psdOwnership",
-    "psdSourceState", "psdSourceStateHash", "psdFontRunState"
+    "psdSourceState", "psdSourceStateHash", "psdFontRunState", "psdTextLayout"
   ];
   const values = {};
   for (const key of keys) values[key] = readSharedPluginData(node, key);
@@ -5081,7 +5180,7 @@ function capturePsdLayerMetadata(node) {
 function capturePsdRootMetadata(node) {
   const keys = [
     "importKind", "schemaVersion", "source", "psdSchemaVersion", "psdImportSchemaVersion",
-    "psdSourceFileName", "psdSourceKey", "psdLayerSetFingerprint", "psdCanvasWidth", "psdCanvasHeight"
+    "psdSourceFileName", "psdSourceKey", "psdLayerSetFingerprint", "psdCanvasWidth", "psdCanvasHeight", "psdRenderSource"
   ];
   const values = {};
   for (const key of keys) values[key] = readSharedPluginData(node, key);
@@ -5145,7 +5244,10 @@ function normalizeManifest(rawManifest) {
       width: positiveOr(canvas.width, 100),
       height: positiveOr(canvas.height, 100)
     },
-    layers: layers.map(normalizeLayer)
+    layers: layers.map(normalizeLayer),
+    renderSource: String(rawManifest.renderSource || "raw"),
+    hiddenLayerIds: new Set((Array.isArray(rawManifest.hiddenLayerIds) ? rawManifest.hiddenLayerIds : [])
+      .map(normalizePsdLayerId).filter(Boolean))
   };
 }
 
@@ -5183,6 +5285,9 @@ function normalizeLayer(layer) {
   normalized.sourceState = normalizePsdSourceState({ ...normalized, sourceState: layer.sourceState });
   if (normalized.fillGradient && normalized.sourceState.text) {
     normalized.sourceState.text.fillGradient = normalized.fillGradient;
+  }
+  if (normalized.fillRuns && normalized.sourceState.text) {
+    normalized.sourceState.text.fillRuns = normalized.fillRuns;
   }
   if (isOrdinaryTextLayer(normalized) && normalized.sourceState.text && !isMultilinePsdText(normalized)) {
     normalized.sourceState.text.lineHeightMode = "AUTO";
@@ -5235,6 +5340,11 @@ function applyNestedManifestCompatibility(normalized, layer, mode, width, height
     if (normalized.fillGradient != null && !isValidPsdTextGradient(normalized.fillGradient)) {
       throw new Error(`Invalid PSD text gradient: ${normalized.name}`);
     }
+    normalized.fillRuns = firstDefined(layer.fillRuns, firstDefined(text.fillRuns, sourceText.fillRuns));
+    if (normalized.fillRuns != null && (normalized.fillGradient
+      || !isValidPsdTextFillRuns(normalized.fillRuns, normalized.chars.length))) {
+      throw new Error(`Invalid PSD text fill ranges: ${normalized.name}`);
+    }
     normalized.textAlign = firstDefined(layer.textAlign, text.textAlignHorizontal);
     normalized.fontFallback = Array.isArray(layer.fontFallback)
       ? layer.fontFallback
@@ -5264,6 +5374,8 @@ function normalizeTextStroke(value) {
     r: numericOr(firstDefined(value.r, color.r), 0),
     g: numericOr(firstDefined(value.g, color.g), 0),
     b: numericOr(firstDefined(value.b, color.b), 0),
+    opacity: value.opacity,
+    join: value.join === "ROUND" ? "ROUND" : undefined,
     hex: String(firstDefined(value.hex, firstDefined(color.hex, "")))
   };
 }
@@ -5301,6 +5413,7 @@ function writePsdRootMetadata(root, job, manifest) {
     source: String(job.source || ""),
     psdSchemaVersion: "3",
     psdImportSchemaVersion: "3",
+    psdRenderSource: String(manifest.renderSource || "raw"),
     psdSourceFileName: normalizedPsdSourceFileName(job),
     psdSourceKey: buildPsdSourceKey(job, manifest),
     psdLayerSetFingerprint: hashPsdLayerIds(manifest.layers),
@@ -5482,27 +5595,13 @@ async function createTextLayer(root, layer, context) {
   text.textAutoResize = "WIDTH_AND_HEIGHT";
   text.textAlignHorizontal = normalizeTextAlign(layer.textAlign, layer, context.manifest.canvas);
   text.textAlignVertical = "CENTER";
-  if (layer.stroke && layer.stroke.enabled === true) {
-    // PSD 描边不透明度（如 56%）写入描边 Paint，旧 manifest 无此字段时回退 sourceState 或 1。
-    const sourceStroke = sourceText.stroke || {};
-    const rawStrokeOpacity = layer.stroke.opacity != null ? layer.stroke.opacity : sourceStroke.opacity;
-    const strokeOpacity = rawStrokeOpacity != null ? numericOr(rawStrokeOpacity, 1) : 1;
-    text.strokes = [solidPaintFromManifest({
-      r: layer.stroke.r,
-      g: layer.stroke.g,
-      b: layer.stroke.b
-    }, strokeOpacity)];
-    text.strokeWeight = numericOr(layer.stroke.size, 1);
-    text.strokeAlign = "OUTSIDE";
-  } else {
-    text.strokes = [];
-  }
+  applyPsdTextStroke(text, psdTextLayerStroke(layer, sourceText.stroke));
   applyPsdTextShadow(text, sourceText.dropShadow);
 
   centerNodeOnLayer(text, layer);
   const sourceGeometry = layer.sourceState && layer.sourceState.geometry || {};
   if (Number.isFinite(sourceGeometry.rotation)) text.rotation = sourceGeometry.rotation;
-  text.fills = [createPsdTextFillPaint(layer, text, layer.w, layer.h)];
+  applyPsdTextFill(text, layer, layer.w, layer.h);
   if ("constraints" in text && layer.constraints) {
     text.constraints = {
       horizontal: normalizeConstraint(layer.constraints.horizontal, "MIN"),
@@ -5516,6 +5615,7 @@ async function createTextLayer(root, layer, context) {
     fontFamily: fontName.family,
     fontStyle: fontName.style,
     psdFontRunState: fontRunState ? stablePsdSourceStateJson(fontRunState) : "",
+    psdTextLayout: isOrdinaryTextLayer(layer) ? capturePsdTextLayout(text, root) : "",
     fillHex: String(layer.fillColor && layer.fillColor.hex || ""),
     originalFontSize: String(layer.originalFontSize || layer.fontSize || ""),
     effectiveFontSize: String(resolvedFontSize),
@@ -6461,18 +6561,20 @@ function parseIndexFromName(name) {
 
 // Text 创建后与 manifest 的颜色、描边做全量对比。
 function validateTextAgainstLayer(node, layer) {
-  const result = { fillMismatch: false, strokeMismatch: false };
-  result.fillMismatch = !psdTextFillMatches(node, layer, layer.w, layer.h);
-  const strokes = Array.isArray(node.strokes) ? node.strokes : [];
-  if (layer.stroke && layer.stroke.enabled === true) {
-    const stroke = strokes[0] && strokes[0].type === "SOLID" ? strokes[0] : null;
-    if (!stroke || !closeNumber(stroke.color.r, layer.stroke.r) || !closeNumber(stroke.color.g, layer.stroke.g) || !closeNumber(stroke.color.b, layer.stroke.b) || !closeNumber(node.strokeWeight, layer.stroke.size)) {
-      result.strokeMismatch = true;
-    }
-  } else if (strokes.length > 0) {
-    result.strokeMismatch = true;
-  }
-  return result;
+  const sourceStroke = layer.sourceState && layer.sourceState.text && layer.sourceState.text.stroke;
+  return {
+    fillMismatch: !psdTextFillMatches(node, layer, layer.w, layer.h),
+    strokeMismatch: !verifyPsdTextStroke(node, psdTextLayerStroke(layer, sourceStroke))
+  };
+}
+
+function psdTextLayerStroke(layer, sourceStroke) {
+  if (!layer.stroke) return sourceStroke;
+  return {
+    ...layer.stroke,
+    opacity: layer.stroke.opacity == null ? sourceStroke && sourceStroke.opacity : layer.stroke.opacity,
+    join: layer.stroke.join || (sourceStroke && sourceStroke.join)
+  };
 }
 
 function isValidPsdTextGradient(gradient) {
@@ -6485,11 +6587,43 @@ function isValidPsdTextGradient(gradient) {
       && stop.color && ["r", "g", "b", "a"].every((channel) => isUnit(stop.color[channel])));
 }
 
+function isValidPsdTextFillRuns(runs, length) {
+  return Array.isArray(runs) && runs.length > 1
+    && runs.every((run, index) => run && run.start === (index ? runs[index - 1].end : 0)
+      && Number.isInteger(run.end) && run.end > run.start && run.end <= length
+      && run.color && ["r", "g", "b", "a"].every((key) => (
+        Number.isFinite(run.color[key]) && run.color[key] >= 0 && run.color[key] <= 1
+      )))
+    && runs[runs.length - 1].end === length;
+}
+
+function readPsdMixedTextFills(node) {
+  if (!node || node.type !== "TEXT" || Array.isArray(node.fills)
+    || typeof node.getStyledTextSegments !== "function") return null;
+  return clonePsdValue(node.getStyledTextSegments(["fills"]));
+}
+
+function isPsdTextFillPath(path) {
+  return path === "text.fillColor" || path === "text.fillGradient" || path === "text.fillRuns";
+}
+
+function isPsdTextPaintPath(path) {
+  return isPsdTextFillPath(path) || path === "text.stroke";
+}
+
 function psdTextFillAffected(plan) {
-  return plan.changedPaths.includes("text.fillColor") || plan.changedPaths.includes("text.fillGradient")
+  return plan.changedPaths.some(isPsdTextFillPath)
+    || (!!(plan.incoming.text && plan.incoming.text.fillRuns) && plan.changedPaths.includes("text.characters"))
     || (!!(plan.incoming.text && plan.incoming.text.fillGradient) && plan.changedPaths.some((path) => (
       path === "geometry.width" || path === "geometry.height" || path === "geometry.rotation"
     )));
+}
+
+function applyPsdTextFill(node, text, sourceWidth, sourceHeight) {
+  node.fills = [createPsdTextFillPaint(text, node, sourceWidth, sourceHeight)];
+  for (const { start, end, color } of text.fillRuns || []) {
+    node.setRangeFills(start, end, [solidPaintFromManifest(color, color.a)]);
+  }
 }
 
 function createPsdTextFillPaint(text, node, sourceWidth, sourceHeight) {
@@ -6523,9 +6657,19 @@ function createPsdTextGradientPaint(gradient, width, height, sourceWidth = width
 }
 
 function psdTextFillMatches(node, text, sourceWidth, sourceHeight) {
-  if (!Array.isArray(node.fills) || node.fills.length !== 1 || node.fills[0].visible === false) return false;
-  const actual = node.fills[0];
   const expected = createPsdTextFillPaint(text, node, sourceWidth, sourceHeight);
+  if (text.fillRuns) {
+    return isValidPsdTextFillRuns(text.fillRuns, String(node.characters || "").length)
+      && typeof node.getRangeFills === "function" && text.fillRuns.every(({ start, end, color }) => (
+      psdTextPaintMatches(node.getRangeFills(start, end), solidPaintFromManifest(color, color.a))
+    ));
+  }
+  return psdTextPaintMatches(node.fills, expected);
+}
+
+function psdTextPaintMatches(fills, expected) {
+  if (!Array.isArray(fills) || fills.length !== 1 || fills[0].visible === false) return false;
+  const actual = fills[0];
   if (actual.type !== expected.type || !closeNumber(firstDefined(actual.opacity, 1), firstDefined(expected.opacity, 1))) return false;
   if (expected.type === "SOLID") {
     return ["r", "g", "b"].every((channel) => closeNumber(actual.color[channel], expected.color[channel]));

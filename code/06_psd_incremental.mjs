@@ -138,7 +138,7 @@ var PSD_SOURCE_FIELD_DESCRIPTORS = [
   ["text.fontFallback", "textStyle"], ["text.fontSize", "textStyle"],
   ["text.effectiveFontSize", "textStyle"], ["text.leading", "textStyle"],
   ["text.lineHeightMode", "textStyle"], ["text.textAlignHorizontal", "textStyle"],
-  ["text.fillColor", "textStyle"], ["text.fillGradient", "textStyle"], ["text.stroke", "textStyle"],
+  ["text.fillColor", "textStyle"], ["text.fillGradient", "textStyle"], ["text.fillRuns", "textStyle"], ["text.stroke", "textStyle"],
   ["text.dropShadow", "textStyle"],
   ["nineSlice", "nineSlice"],
 ];
@@ -480,7 +480,14 @@ export function buildPsdIncrementalDiff(currentNodes, incomingLayers) {
     })) {
       conflicts.push({ kind: "unreliable-rotation-delta", layerId: layerId });
     }
-    if (sourceFieldDiff.unsupportedChanged) {
+    // Existing imports recorded translucent Color Overlay as unsupported. The
+    // fill is now representable, so allow this marker to disappear with a new fill.
+    var resolvedColorOverlay = sourceFieldDiff.unsupportedChanged
+      && sourceFieldDiff.changes.some((change) => change.path === "text.fillColor" || change.path === "text.fillRuns")
+      && stablePsdSourceStateJson(baselineState.unsupported.filter((item) => (
+        item.path !== "text.fillOverlay" || item.value !== "Unsupported Photoshop text Color Overlay"
+      ))) === stablePsdSourceStateJson(incomingState.unsupported);
+    if (sourceFieldDiff.unsupportedChanged && !resolvedColorOverlay) {
       conflicts.push({
         kind: "unsupported-source-change",
         layerId: layerId,

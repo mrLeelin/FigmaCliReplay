@@ -176,6 +176,30 @@ class PsdToolsRenderTest(unittest.TestCase):
         with self.image(result["imageLayers"][0]) as image:
             self.assertEqual(image.getpixel((2, 2))[:3], (255, 0, 0))
 
+    def test_group_mask_keeps_the_text_pixels_and_hides_the_editable_copy(self):
+        group = self.group("masked amount")
+        pixels = self.pixel("Amount", group, color=(255, 166, 25, 255))
+        text = TypeLayer(group, pixels._record, pixels._channels)
+        group._layers[group.index(pixels)] = text
+        with Image.new("L", (8, 8), 255) as mask:
+            mask.paste(0, (0, 4, 8, 8))
+            group.create_mask(mask, top=3, left=4)
+        self.base_layers = [{
+            "name": "Amount", "layerId": text.layer_id, "mode": "text",
+            "chars": "1,234,000", "x": 4, "y": 3, "w": 8, "h": 8, "visible": True,
+            "sourceState": {"display": {"visible": True}},
+        }]
+
+        result = self.build(patch_open=True)
+        image, editable = result["layers"]
+        self.assertEqual(image["layerId"], group.layer_id)
+        self.assertEqual(editable["chars"], "1,234,000")
+        self.assertFalse(editable["visible"])
+        self.assertFalse(editable["sourceState"]["display"]["visible"])
+        with self.image(image) as rendered:
+            self.assertEqual(rendered.size, (8, 4))
+            self.assertEqual(rendered.getpixel((2, 1)), (255, 166, 25, 255))
+
     def test_missing_editable_text_data_fails_instead_of_silently_dropping_text(self):
         pixels = self.pixel("Hello")
         self.psd._layers[0] = TypeLayer(self.psd, pixels._record, pixels._channels)

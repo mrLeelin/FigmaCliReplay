@@ -257,6 +257,7 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
             # Photoshop 合成图校正位置；旧式固定尺寸文字会被导入验收记为裁切风险而判定失败。
             entry["textRole"] = "ordinary"
             if unit.get("compositeLayerId") in rendered_image_ids:
+                entry["compositeLayerId"] = unit["compositeLayerId"]
                 entry["visible"] = False
                 source_state = entry.get("sourceState")
                 if isinstance(source_state, dict):
@@ -302,6 +303,7 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
     manifest = {
         "canvas": ps["canvas"],
         "renderSource": "photoshop",
+        "hiddenLayerIds": base.get("hiddenLayerIds", []),
         "layerCount": len(layers),
         "commonCount": 0,
         "nineSliceCount": 0,

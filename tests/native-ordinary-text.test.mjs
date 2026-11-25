@@ -71,10 +71,14 @@ function fixture({ fontFailure = false } = {}) {
     "isOrdinaryTextLayer", "assertOrdinaryTextLayer", "normalizeManifest", "normalizeLayer",
     "applyNestedManifestCompatibility", "extractTextFontFallback", "normalizeTextStroke",
     "normalizeConstraint", "normalizeTextAlign", "solidPaintFromManifest", "applyLayerCommonState",
-    "createPsdTextFillPaint", "createPsdTextGradientPaint", "psdTextFillMatches", "closeNumber", "validateTextAgainstLayer",
-    "isValidPsdTextGradient", "psdTextFillAffected", "appendPsdMutationPreflightConflicts",
+    "applyPsdTextFill", "createPsdTextFillPaint", "createPsdTextGradientPaint", "psdTextFillMatches",
+    "psdTextPaintMatches", "closeNumber", "validateTextAgainstLayer",
+    "applyPsdTextStroke", "psdTextLayerStroke", "verifyPsdTextStroke", "psdSolidPaintMatches", "psdNumberMatches",
+    "isValidPsdTextGradient", "isValidPsdTextFillRuns", "isPsdTextFillPath", "isPsdTextPaintPath", "psdTextFillAffected",
+    "appendPsdMutationPreflightConflicts",
     "applyPsdGeometryPlan", "applyPsdMutationPlans",
     "centerNodeOnLayer", "applyPsdTextShadow", "writeLayerMetadata", "capturePsdLayerMetadata",
+    "capturePsdTextLayout", "readPsdGeometryInRoot",
     "createTextLayer", "createImageLayer", "createLayerNode", "importPsdJob",
     "appendPsdIncrementalRuntimeConflicts", "applyPsdTextPlan",
     "isMultilinePsdText", "applyPsdFontRuns", "normalizeFontCandidates", "isTextClipRisk",
@@ -119,6 +123,49 @@ test("ordinary Unicode text imports without PNG bytes, stays automatic and keeps
   assert.equal(context.stats.text, 1);
   assert.deepEqual(calls, ["loadFont", "createText"]);
   assert.equal(root.children.length, 1);
+});
+
+test("PSD fill ranges stay editable and are verified independently of font runs", async () => {
+  const { api, root, context } = fixture();
+  const createText = api.figma.createText;
+  const paints = new Map();
+  api.figma.createText = () => {
+    const node = createText();
+    node.setRangeFills = (start, end, fills) => paints.set(`${start}:${end}`, fills);
+    node.getRangeFills = (start, end) => paints.get(`${start}:${end}`);
+    return node;
+  };
+  const fillRuns = [
+    { start: 0, end: 1, color: { r: 1, g: 1, b: 1, a: 1 } },
+    { start: 1, end: 4, color: { r: 0.55, g: 0.98, b: 1, a: 0.9 } },
+  ];
+  const input = api.normalizeLayer(layer({ chars: "A😀B", fillRuns }));
+  const node = await api.createLayerNode(root, input, context);
+
+  assert.equal(node.characters, "A😀B");
+  assert.equal(node.getRangeFills(1, 4)[0].opacity, 0.9);
+  assert.equal(api.validateTextAgainstLayer(node, input).fillMismatch, false);
+  assert.equal(incremental.diffPsdSourceStates({ text: {} }, input.sourceState).changes
+    .find(change => change.path === "text.fillRuns")?.category, "textStyle");
+  paints.delete("1:4");
+  assert.equal(api.validateTextAgainstLayer(node, input).fillMismatch, true);
+  assert.throws(() => api.normalizeLayer(layer({ chars: "A😀B", fillRuns: [{ ...fillRuns[0], start: 1 }, fillRuns[1]] })),
+    /Invalid PSD text fill ranges/);
+});
+
+test("a Photoshop text stroke keeps its rounded corners and paint opacity", async () => {
+  const { api, root, context } = fixture();
+  const input = api.normalizeLayer(layer({
+    stroke: { enabled: true, r: 0.25, g: 0.17, b: 0.17, size: 5, opacity: 0.5, join: "ROUND" },
+  }));
+  const node = await api.createLayerNode(root, input, context);
+  assert.equal(node.strokeWeight, 5);
+  assert.equal(node.strokeAlign, "OUTSIDE");
+  assert.equal(node.strokeJoin, "ROUND");
+  assert.equal(node.strokes[0].opacity, 0.5);
+  assert.equal(api.validateTextAgainstLayer(node, input).strokeMismatch, false);
+  node.strokeJoin = "MITER";
+  assert.equal(api.validateTextAgainstLayer(node, input).strokeMismatch, true);
 });
 
 test("PSD title gradient is written as native text and validated with the Photoshop layer bounds", async () => {
@@ -406,7 +453,7 @@ test("ordinary incremental edits are blocked using incoming or persisted role be
       metadata: persistedRole ? { textRole: "ordinary" } : {},
     };
     const input = layer({ textRole: persistedRole ? undefined : "ordinary" });
-    const pair = { source: input, target: { node, nodeId: "1:5" } };
+    const pair = { source: input, target: { node, nodeId: "1:5" }, changes: [{ path: "text.characters" }] };
     const diff = { changed: [pair], conflicts: [] };
     const target = { metadata: { psdImportSchemaVersion: "3", psdCanvasWidth: "800", psdCanvasHeight: "1200" } };
     api.appendPsdIncrementalRuntimeConflicts(diff, target, [{ layerId: "101" }], {}, { canvas: { width: 800, height: 1200 }, layers: [input] });
@@ -417,6 +464,30 @@ test("ordinary incremental edits are blocked using incoming or persisted role be
     assert.equal(node.characters, "×50");
     assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
   }
+});
+
+test("paint-only incremental changes preserve editable mixed-font text sizing", async () => {
+  const { api } = fixture();
+  const input = layer();
+  const node = { type: "TEXT", characters: input.chars, textAutoResize: "WIDTH_AND_HEIGHT", fontName: Symbol() };
+  const target = { metadata: { psdImportSchemaVersion: "3", psdCanvasWidth: "800", psdCanvasHeight: "1200" } };
+  const changedPaths = ["text.fillColor", "text.stroke"];
+  const pair = { source: input, target: { node, nodeId: "1:5", ownership: "text-content" }, changes: changedPaths.map(path => ({ path })) };
+  const diff = { changed: [pair], conflicts: [] };
+  api.appendPsdIncrementalRuntimeConflicts(diff, target, [{ layerId: "101" }], {}, { canvas: { width: 800, height: 1200 }, layers: [input] });
+  assert.equal(diff.conflicts.length, 0);
+  await api.applyPsdMutationPlans({ plans: [{
+    layerId: "101", source: input, target: pair.target,
+    incoming: {
+      text: { fillColor: { r: 0.55, g: 0.55, b: 0.59, a: 1 }, stroke: { ...input.stroke, join: "ROUND" } },
+      geometry: {},
+    },
+    categories: ["textStyle"], changedPaths,
+  }] });
+  assert.equal(node.fills[0].color.b, 0.59);
+  assert.equal(node.strokeJoin, "ROUND");
+  assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
+  assert.equal(typeof node.fontName, "symbol");
 });
 
 test("rollback metadata snapshots preserve ordinary text ownership annotation", () => {

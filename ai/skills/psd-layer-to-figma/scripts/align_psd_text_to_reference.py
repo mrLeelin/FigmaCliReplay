@@ -1,9 +1,7 @@
 """导入后把 Figma 原生文字按 Photoshop 合成图逐像素对齐。
 
-Figma 按 PSD 文字包围盒居中放置文字，但 Figma 与 Photoshop 的字体度量不同，
-文字整体会偏 1~6px。本脚本导出根节点截图，在每个文字层附近搜索与参照图误差
-最小的整像素偏移，并用 FIGMA_HIERARCHY_SET_NODE_POSITIONS 校正；参照图为
-photoshop_render_units.py 输出的 reference.png（Photoshop 自身合成）。
+Figma 与 Photoshop 的字体度量不同。本脚本通过截图中的文字填充和描边像素匹配字形，
+再用 FIGMA_HIERARCHY_SET_NODE_POSITIONS 校正位置。可匹配的字形不足时保留原位置。
 
 用法：
   python align_psd_text_to_reference.py <rootNodeId> <manifest_summary.json> <reference.png>
@@ -23,12 +21,16 @@ from PIL import Image, ImageChops
 RELAY_ROOT = Path(__file__).resolve().parents[4]
 CLI = RELAY_ROOT / "dist" / "cli.js"
 BOX_PADDING = 8  # 文字包围盒外扩，覆盖外描边。
+CHANNEL_MATCH = [255 if error <= 2 else 0 for error in range(256)]
 
 
-def run_cli(job_type: str, payload: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+def run_cli(job_type: str, payload: Dict[str, Any], session_id: str, relay_url: str = "") -> Dict[str, Any]:
+    args = ["node", str(CLI), "figma-command", "--job-type", job_type,
+            "--payload", json.dumps(payload, ensure_ascii=False), "--session-id", session_id]
+    if relay_url:
+        args.extend(["--url", relay_url])
     proc = subprocess.run(
-        ["node", str(CLI), "figma-command", "--job-type", job_type,
-         "--payload", json.dumps(payload, ensure_ascii=False), "--session-id", session_id],
+        args,
         capture_output=True, text=True, encoding="utf-8", timeout=300)
     lines = [line for line in proc.stdout.splitlines() if line.startswith("{") and '"ok"' in line]
     if not lines:
@@ -39,27 +41,69 @@ def run_cli(job_type: str, payload: Dict[str, Any], session_id: str) -> Dict[str
     return data["result"]
 
 
-def flatten_gray(path: str) -> Image.Image:
-    image = Image.open(path).convert("RGBA")
-    background = Image.new("RGBA", image.size, (255, 255, 255, 255))
-    background.alpha_composite(image)
-    return background.convert("L")
+def text_colors(layer: Dict[str, Any]) -> set[tuple[int, int, int]]:
+    if layer.get("opacity", 255) not in (1, 255):
+        return set()
+    stroke = layer.get("stroke") or {}
+    colors = []
+    if stroke.get("enabled") and stroke.get("opacity", 1) == 1:
+        colors.append(stroke)
+    if not layer.get("fillGradient"):
+        fills = layer.get("fillRuns") or [{"color": layer.get("fillColor")}]
+        colors.extend(run["color"] for run in fills if run.get("color"))
+    return {
+        tuple(round(color[channel] * 255) for channel in "rgb")
+        for color in colors
+        if color.get("a", 1) == 1 and all(channel in color for channel in "rgb")
+    }
 
 
-def abs_error(a: Image.Image, b: Image.Image) -> int:
-    return sum(value * count for value, count in enumerate(ImageChops.difference(a, b).histogram()))
+def color_mask(image: Image.Image, colors: set[tuple[int, int, int]]) -> Image.Image:
+    alpha = image.getchannel("A") if image.mode == "RGBA" else None
+    image = image.convert("RGB")
+    mask = Image.new("L", image.size)
+    for color in colors:
+        red, green, blue = ImageChops.difference(image, Image.new("RGB", image.size, color)).split()
+        distance = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+        mask = ImageChops.lighter(mask, distance.point(CHANNEL_MATCH))
+    if alpha is not None:
+        mask = ImageChops.darker(mask, alpha.point(lambda value: 255 if value >= 254 else 0))
+    return mask
 
 
-def best_shift(figma: Image.Image, reference: Image.Image, box: tuple, search: int) -> tuple:
-    """返回 (误差, dx, dy)：Figma 中文字内容相对参照图的偏移。"""
-    target = reference.crop(box)
-    best = (abs_error(figma.crop(box), target), 0, 0)
+def best_shift(figma: Image.Image, reference: Image.Image, box: tuple,
+               search: int, colors: set[tuple[int, int, int]]) -> tuple[float, int, int]:
+    """返回 (字形重合率, dx, dy)：Figma 中文字内容相对参照图的偏移。"""
+    if not colors:
+        return 0, 0, 0
+    x, y, right, bottom = box
+    x, y = max(x, 0), max(y, 0)
+    right, bottom = min(right, reference.width), min(bottom, reference.height)
+    if x >= right or y >= bottom:
+        return 0, 0, 0
+    target = color_mask(reference.crop((x, y, right, bottom)), colors)
+    target_pixels = target.histogram()[255]
+    if target_pixels < 16:
+        return 0, 0, 0
+    origin_x, origin_y = max(0, x - search), max(0, y - search)
+    roi = (origin_x, origin_y, min(figma.width, right + search), min(figma.height, bottom + search))
+    candidate = color_mask(figma.crop(roi), colors)
+    left, top = x - origin_x, y - origin_y
+
+    def score(dx: int, dy: int) -> float:
+        shifted = candidate.crop((left + dx, top + dy, right - origin_x + dx, bottom - origin_y + dy))
+        matched = ImageChops.darker(shifted, target).histogram()[255]
+        return matched / (target_pixels + shifted.histogram()[255] - matched)
+
+    baseline = score(0, 0)
+    best = (baseline, 0, 0)
     for dy in range(-search, search + 1):
         for dx in range(-search, search + 1):
-            shifted = figma.crop((box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy))
-            error = abs_error(shifted, target)
-            if error < best[0]:
-                best = (error, dx, dy)
+            overlap = score(dx, dy)
+            if overlap > best[0]:
+                best = (overlap, dx, dy)
+    if best[0] < 0.55 or best[0] - baseline < 0.02:
+        return baseline, 0, 0
     return best
 
 
@@ -69,19 +113,22 @@ def main() -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("reference", type=Path)
     parser.add_argument("--session-id", required=True)
+    parser.add_argument("--relay-url", default="")
     parser.add_argument("--search", type=int, default=12, help="单轴最大搜索像素。")
     parser.add_argument("--apply", action="store_true", help="写回位置；缺省只报告。")
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     layers = {int(layer["idx"]): layer for layer in manifest["layers"]}
-    shot = run_cli("FIGMA_EXPORT_NODE_SCREENSHOT", {"target": {"nodeId": args.root_node_id}}, args.session_id)
-    figma = flatten_gray(shot["screenshot"]["path"])
-    reference = flatten_gray(str(args.reference))
+    layer_ids = {str(layer["layerId"]): layer for layer in manifest["layers"] if layer.get("layerId")}
+    shot = run_cli("FIGMA_EXPORT_NODE_SCREENSHOT", {"target": {"nodeId": args.root_node_id}},
+                   args.session_id, args.relay_url)
+    figma = Image.open(shot["screenshot"]["path"]).convert("RGBA")
+    reference = Image.open(args.reference).convert("RGBA")
     if figma.size != reference.size:
         raise RuntimeError(f"截图尺寸 {figma.size} 与参照图 {reference.size} 不一致")
     root = run_cli("FIGMA_INSPECT_NODES", {"nodeIds": [args.root_node_id], "depth": 1, "includeText": False},
-                   args.session_id)["nodes"][0]
+                   args.session_id, args.relay_url)["nodes"][0]
 
     positions: List[Dict[str, Any]] = []
     report: List[Dict[str, Any]] = []
@@ -89,21 +136,28 @@ def main() -> int:
         if node["type"] != "TEXT" or node.get("visible") is False:
             continue
         prefix = node["name"].split("_", 1)[0]
-        layer = layers.get(int(prefix)) if prefix.isdigit() else None
+        layer = layer_ids.get(str(node["psdLayerId"])) if node.get("psdLayerId") else (
+            layers.get(int(prefix)) if prefix.isdigit() else None
+        )
         if not layer:
             continue
         box = (layer["x"] - BOX_PADDING, layer["y"] - BOX_PADDING,
                layer["x"] + layer["w"] + BOX_PADDING, layer["y"] + layer["h"] + BOX_PADDING)
-        error, dx, dy = best_shift(figma, reference, box, args.search)
-        area = (box[2] - box[0]) * (box[3] - box[1])
+        overlap, dx, dy = best_shift(figma, reference, box, args.search, text_colors(layer))
         report.append({"nodeId": node["id"], "idx": layer["idx"], "shift": [dx, dy],
-                       "meanAbsAfter": round(error / area, 2)})
+                       "glyphOverlap": round(overlap, 3)})
         if dx or dy:
             positions.append({"nodeId": node["id"], "x": node["x"] - dx, "y": node["y"] - dy})
 
     applied = None
     if args.apply and positions:
-        applied = run_cli("FIGMA_HIERARCHY_SET_NODE_POSITIONS", {"plan": {"positions": positions}}, args.session_id)
+        applied = run_cli(
+            "FIGMA_HIERARCHY_SET_NODE_POSITIONS",
+            {"plan": {"positions": positions}, "options": {"psdTextRootId": args.root_node_id}},
+            args.session_id, args.relay_url,
+        )
+        if not applied.get("allPass"):
+            raise RuntimeError(f"Figma did not apply all PSD text positions: {applied.get('errors', [])}")
     print(json.dumps({"texts": report, "moves": len(positions),
                       "applied": bool(applied and applied.get("allPass"))}, ensure_ascii=False, indent=2))
     return 0

@@ -36,12 +36,16 @@ mock.method(childProcess, 'spawn', (_command, args, options) => {
     let output = '';
     let stderr = '';
     if (script === 'export_psd_layers.py') {
-      write(path.join(value('--out'), 'manifest_summary.json'), { canvas: { width: 100, height: 100 }, layers: [] });
+      write(path.join(value('--out'), 'manifest_summary.json'), { canvas: { width: 100, height: 100 }, layers: [], hiddenLayerIds: [71] });
     } else if (script === 'photoshop_render_units.py' || script === 'psd_tools_render_units.py') {
-      write(path.join(value('--out'), 'manifest_summary.json'), { layers: [], renderSource: script });
+      const reference = path.join(value('--out'), script === 'photoshop_render_units.py' ? 'ps_render/reference.png' : 'reference.png');
+      const base = JSON.parse(fs.readFileSync(value('--base-manifest'), 'utf8'));
+      write(path.join(value('--out'), 'manifest_summary.json'), {
+        layers: [], renderSource: script, referencePath: reference, hiddenLayerIds: base.hiddenLayerIds,
+      });
+      write(reference, {});
       if (script === 'photoshop_render_units.py') {
         write(value('--session-receipt'), { version: 1, startedByImport: !scenario.preexisting, state: 'active' });
-        write(path.join(value('--out'), 'ps_render/reference.png'), {});
         if (scenario.failRender) code = 1;
       }
     } else if (script === 'submit_psd_import_job.py') {
@@ -52,6 +56,15 @@ mock.method(childProcess, 'spawn', (_command, args, options) => {
       } else write(value('--result-output'), { result: value('--import-mode') === 'incremental-preview'
         ? { status: 'preview-no-changes', baselineFingerprint: 'preview-fingerprint', canApply: false }
         : { status: 'completed', rootNodeId: '12:34' } });
+    } else if (script === 'verify_psd_visual.py') {
+      const report = {
+        status: scenario.visualDifference ? 'differences' : 'passed',
+        differenceCount: scenario.visualDifference ? 1 : 0,
+        screenshotPath: path.join(value('--out'), 'final.png'),
+        reportPath: path.join(value('--out'), 'report.json'),
+      };
+      output = JSON.stringify(report);
+      write(report.reportPath, report);
     } else if (script === 'photoshop_lifecycle.py') {
       output = JSON.stringify({ ok: true, action: scenario.preexisting || scenario.openDocuments ? 'kept' : 'closed',
         reason: scenario.openDocuments ? 'open-documents' : scenario.preexisting ? 'already-running' : 'owned-import-finished' });
@@ -119,17 +132,44 @@ test('auto selects Photoshop when installed and closes an owned instance only af
   assert.equal(result.status, 'completed');
   assert.equal(result.renderer, 'photoshop');
   assert.deepEqual(scripts(task), ['export_psd_layers.py', 'photoshop_render_units.py', 'submit_psd_import_job.py',
-    'align_psd_text_to_reference.py', 'align_psd_text_to_reference.py', 'photoshop_lifecycle.py']);
+    'align_psd_text_to_reference.py', 'align_psd_text_to_reference.py', 'verify_psd_visual.py', 'photoshop_lifecycle.py']);
+  assert.equal(result.summary.visualValidation.status, 'passed');
+  assert.equal(JSON.parse(fs.readFileSync(result.resultPath, 'utf8')).result.visualValidation.status, 'passed');
   assert.match(result.logs.join('\n'), /本次导入启动的 Photoshop 已退出/);
   assert.ok(!events.find(event => event.taskId === task.taskId && event.script === 'export_psd_layers.py').args.includes('--include-hidden'));
 });
 
-test('incremental previews retain hidden source layer IDs so visibility changes can be applied', async () => {
+test('incremental previews submit rendered manifest with hidden IDs and release the renderer', async () => {
+  const initial = await completed(start());
+  const task = start('incremental-preview');
+  await waitFor(() => getPsdImportTask(task.taskId).status === 'preview-no-changes');
+  const result = getPsdImportTask(task.taskId);
+  const initialManifest = JSON.parse(fs.readFileSync(initial.manifestSummaryPath, 'utf8'));
+  const previewManifest = JSON.parse(fs.readFileSync(result.manifestSummaryPath, 'utf8'));
+  assert.equal(result.renderer, initial.renderer);
+  assert.deepEqual(previewManifest.hiddenLayerIds, [71]);
+  assert.equal(previewManifest.renderSource, initialManifest.renderSource);
+  assert.deepEqual(scripts(task), ['export_psd_layers.py', 'photoshop_render_units.py', 'submit_psd_import_job.py',
+    'photoshop_lifecycle.py']);
+});
+
+test('explicit raw incremental mode keeps the original hidden-layer export', async () => {
+  process.env.FIGMA_RELAY_PSD_RENDERER = 'raw';
   const task = start('incremental-preview');
   await waitFor(() => getPsdImportTask(task.taskId).status === 'preview-no-changes');
   const exported = events.find(event => event.taskId === task.taskId && event.script === 'export_psd_layers.py');
-  assert.ok(exported.args.includes('--include-hidden'), 'incremental export must retain effectively hidden layers');
+  assert.ok(exported.args.includes('--include-hidden'));
   assert.deepEqual(scripts(task), ['export_psd_layers.py', 'submit_psd_import_job.py']);
+});
+
+test('visual differences are surfaced after import without repeating the Figma write', async () => {
+  scenario.visualDifference = true;
+  const task = start();
+  const result = await completed(task);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.summary.visualValidation.differenceCount, 1);
+  assert.match(result.summary.warnings.join('\n'), /视觉校验发现 1 个区域有差异/);
+  assert.equal(scripts(task).filter(script => script === 'submit_psd_import_job.py').length, 1);
 });
 
 test('auto selects psd-tools without Photoshop and never touches its lifecycle', async () => {
@@ -138,7 +178,8 @@ test('auto selects psd-tools without Photoshop and never touches its lifecycle',
   const result = await completed(task);
   assert.equal(result.status, 'completed');
   assert.equal(result.renderer, 'psd-tools');
-  assert.deepEqual(scripts(task), ['export_psd_layers.py', 'psd_tools_render_units.py', 'submit_psd_import_job.py']);
+  assert.deepEqual(scripts(task), ['export_psd_layers.py', 'psd_tools_render_units.py', 'submit_psd_import_job.py',
+    'verify_psd_visual.py']);
 });
 
 test('an already running Photoshop is retained after import', async () => {

@@ -68,7 +68,7 @@ test('nested groups, clipping chains and hidden children keep the same saved pix
 test('atomic groups retain text affected by overlapping artwork and keep other editable text visible', () => {
   const h = renderHarness();
   const group = h.layer('CASH', h.doc, true, true);
-  group.info = { effects: true, blend: 'passThrough' };
+  group.info = { opacity: 240, blend: 'passThrough' };
   const highlight = h.layer('highlight', group);
   highlight.info = { blend: 'colorDodge', bounds: [0, 0, 20, 20] };
   const title = h.layer('Cash', group);
@@ -92,6 +92,25 @@ test('atomic groups retain text affected by overlapping artwork and keep other e
   assert.equal(h.context.units.length, 3);
   h.render(groupUnit, 0);
   assert.deepEqual(h.snapshots, [['highlight', 'Cash', 'lower highlight']]);
+  h.restore();
+});
+
+test('group effects render the whole text stack and retain the editable text separately', () => {
+  const h = renderHarness();
+  const pile = h.layer('amount group', h.doc, true, true);
+  pile.info = { effects: true, blend: 'passThrough' };
+  h.layer('partial highlight', pile);
+  const subgroup = h.layer('nested', pile, true, true);
+  const amount = h.layer('1,234,000', subgroup);
+  amount.kind = 'text';
+  h.context.layerInfo = (layer) => ({ bounds: [0, 0, 20, 20], opacity: 255, blend: 'normal', ...layer.info });
+
+  h.context.walk(h.doc, null, 0, []);
+  const [groupUnit, textUnit] = Array.from(h.context.units);
+  assert.equal(groupUnit.hideTexts.length, 0);
+  assert.equal(textUnit.compositeLayerId, pile.id);
+  h.render(groupUnit, 0);
+  assert.deepEqual(h.snapshots, [['partial highlight', '1,234,000']]);
   h.restore();
 });
 

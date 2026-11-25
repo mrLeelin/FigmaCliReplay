@@ -762,6 +762,8 @@ def _build_psd_source_state(
         }
         if text_info.get("fillGradient"):
             text_state["fillGradient"] = text_info["fillGradient"]
+        if text_info.get("fillRuns"):
+            text_state["fillRuns"] = text_info["fillRuns"]
         if text_info.get("unsupportedFillOverlay"):
             unsupported.append({"path": "text.fillOverlay", "value": text_info["unsupportedFillOverlay"]})
 
@@ -1004,6 +1006,7 @@ def _parse_stroke_effect(payload: Optional[bytes]) -> Optional[Dict[str, Any]]:
         "enabled": True,
         "present": present,
         "position": "OUTSIDE" if b"OutF" in section else "CENTER",
+        "join": "ROUND",
         "opacity": (opacity / 100.0) if opacity is not None else None,
         "size": size,
         "color": _extract_descriptor_color(section),
@@ -1082,7 +1085,57 @@ def _read_linear_overlay(effect: Any) -> Optional[Dict[str, Any]]:
     return {"angle": angle, "scale": scale / 100, "stops": stops}
 
 
-def _read_text_fill_overlay(payload: Optional[bytes]) -> Dict[str, Any]:
+def _read_text_fill_runs(payload: bytes, characters: str, default_color: Any) -> List[Dict[str, Any]]:
+    if b"/StyleRun" not in payload or not characters:
+        return []
+    try:
+        from psd_tools.psd.tagged_blocks import TypeToolObjectSetting
+
+        engine = TypeToolObjectSetting.frombytes(payload).text_data[b"EngineData"].value["EngineDict"]
+        style_run = engine["StyleRun"]
+        raw_text = engine["Editor"]["Text"].value
+        raw_utf16 = raw_text.encode("utf-16-le")
+        if _normalize_text_characters(raw_text).rstrip("\n") != characters:
+            return []
+        runs: List[Dict[str, Any]] = []
+        offset = 0
+        lengths = style_run["RunLengthArray"]
+        styles = style_run["RunArray"]
+        if len(lengths) != len(styles):
+            return []
+        for length, style in zip(lengths, styles):
+            length = length.value
+            if length <= 0 or (offset + length) * 2 > len(raw_utf16):
+                return []
+            end_offset = offset + length
+            start, end = (
+                min(len(characters.encode("utf-16-le")) // 2,
+                    len(_normalize_text_characters(raw_utf16[:position * 2].decode("utf-16-le")).encode("utf-16-le")) // 2)
+                for position in (offset, end_offset)
+            )
+            offset = end_offset
+            if start == end:
+                continue
+            fill = style["StyleSheet"]["StyleSheetData"].get("FillColor")
+            color = default_color
+            if fill is not None:
+                values = [value.value for value in fill["Values"]]
+                if fill["Type"].value != 1 or len(values) != 4 or not all(0 <= value <= 1 for value in values):
+                    return []
+                alpha, red, green, blue = values
+                color = {"a": alpha, "r": red, "g": green, "b": blue, "hex": _rgb_to_hex(red, green, blue)}
+            if color is None:
+                return []
+            if runs and runs[-1]["color"] == color:
+                runs[-1]["end"] = end
+            else:
+                runs.append({"start": start, "end": end, "color": color})
+        return runs if offset * 2 == len(raw_utf16) else []
+    except (AttributeError, IndexError, KeyError, OSError, TypeError, ValueError):
+        return []
+
+
+def _read_text_fill_overlay(payload: Optional[bytes], base_color: Any, base_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """读取作用于文字填充的 Photoshop 图层样式。"""
     if not payload or not any(marker in payload for marker in (b"SoFi", b"GrFl", b"patternFill")):
         return {}
@@ -1114,13 +1167,23 @@ def _read_text_fill_overlay(payload: Optional[bytes]) -> Dict[str, Any]:
 
     overlay = overlays[0]
     unsupported = {"unsupportedFillOverlay": f"Unsupported Photoshop text {fill_types[overlay.classID]}"}
-    if getattr(overlay.get(b"Md  "), "enum", b"Nrml") != b"Nrml" or _effect_value(overlay, b"Opct", 100) != 100:
+    opacity = _effect_value(overlay, b"Opct", 100) / 100
+    if getattr(overlay.get(b"Md  "), "enum", b"Nrml") != b"Nrml" or not 0 < opacity <= 1:
         return unsupported
     if overlay.classID == b"SoFi":
         color = _effect_rgb(overlay.get(b"Clr "))
-        if color:
+        if color and opacity == 1:
             return {"fillColor": {**color, "hex": _rgb_to_hex(color["r"], color["g"], color["b"])}}
-    if overlay.classID == b"GrFl":
+        if color and base_color and all(fill["a"] == 1 for fill in [base_color, *(run["color"] for run in base_runs)]):
+            def blend(fill: Dict[str, Any]) -> Dict[str, Any]:
+                red, green, blue = (fill[c] * (1 - opacity) + color[c] * opacity for c in "rgb")
+                return {"a": 1, "r": red, "g": green, "b": blue, "hex": _rgb_to_hex(red, green, blue)}
+
+            result: Dict[str, Any] = {"fillColor": blend(base_color)}
+            if base_runs:
+                result["fillRuns"] = [{**run, "color": blend(run["color"])} for run in base_runs]
+            return result
+    if overlay.classID == b"GrFl" and opacity == 1:
         try:
             gradient = _read_linear_overlay(overlay)
         except (AttributeError, TypeError, ValueError):
@@ -1154,7 +1217,12 @@ def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]
         warnings.append("text layer font size was not parsed")
 
     effects_payload = next((tag_payloads[tag] for tag in ("lfx2", "lmfx", "lfxs", "lfx ") if tag_payloads.get(tag)), None)
-    fill_overlay = _read_text_fill_overlay(effects_payload)
+    fill_color = _extract_engine_color(engine_text, "FillColor")
+    fill_runs = _read_text_fill_runs(tysh_payload, characters or "", fill_color)
+    if fill_runs:
+        fill_color = fill_runs[0]["color"]
+    mixed_fills = {"fillRuns": fill_runs} if len(fill_runs) > 1 else {}
+    fill_overlay = _read_text_fill_overlay(effects_payload, fill_color, mixed_fills.get("fillRuns", []))
     if fill_overlay.get("unsupportedFillOverlay"):
         warnings.append(fill_overlay["unsupportedFillOverlay"])
     has_multiline = "\n" in characters if characters else False
@@ -1170,7 +1238,8 @@ def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]
         "effectiveSizeSource": (effective_size or {}).get("source"),
         "leading": leading,
         "lineHeightMode": line_height_mode,
-        "fillColor": _extract_engine_color(engine_text, "FillColor"),
+        "fillColor": fill_color,
+        **(mixed_fills if not ("fillColor" in fill_overlay or "fillGradient" in fill_overlay) else {}),
         **fill_overlay,
         "textAlignHorizontal": alignment,
         "source": "TySh/EngineData",
@@ -2507,6 +2576,10 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool,
     out_dir.mkdir(parents=True, exist_ok=True)
     # 初次导入忽略隐藏层；增量源状态必须保留这些层，才能识别可见性变更。
     hidden_indices = _effective_hidden_indices(layers)
+    hidden_layer_ids = [
+        layer["layerId"] for layer in layers
+        if layer.get("layerId") and int(layer["index"]) in hidden_indices
+    ]
     skipped_hidden_layer_count = 0
     if include_hidden:
         # 图层自己的 visible 可能为 True，但任一隐藏祖先都会使它实际不可见。
@@ -2651,6 +2724,7 @@ def _write_layers(psd_path: Path, out_dir: Path, composite_check: bool,
         "canvas": canvas,
         "layerCount": len(manifest_layers),
         "skippedHiddenLayerCount": skipped_hidden_layer_count,
+        "hiddenLayerIds": hidden_layer_ids,
         "hasGroups": any(layer.get("sectionType") in (1, 2, 3) for layer in manifest_layers),
         "commonComponentCount": sum(1 for layer in manifest_layers if layer.get("mode") == "common-component"),
         "componentSearchCount": sum(1 for layer in manifest_layers if layer.get("componentSearch")),
@@ -2949,6 +3023,8 @@ def _generate_summary(
             entry["fillColor"] = t.get("fillColor", {})
             if t.get("fillGradient"):
                 entry["fillGradient"] = t["fillGradient"]
+            if t.get("fillRuns"):
+                entry["fillRuns"] = t["fillRuns"]
             stroke = t.get("effects", {}).get("stroke")
             entry["stroke"] = {
                 "enabled": stroke.get("enabled", False),
@@ -2957,6 +3033,7 @@ def _generate_summary(
                 "b": stroke.get("color", {}).get("b", 0),
                 "size": stroke.get("size", 0),
                 "opacity": stroke.get("opacity"),
+                "join": stroke.get("join"),
             } if stroke else None
             drop_shadow = t.get("effects", {}).get("dropShadow")
             entry["dropShadow"] = {
@@ -2988,6 +3065,7 @@ def _generate_summary(
 
     return {
         "canvas": {"width": canvas["width"], "height": canvas["height"]},
+        "hiddenLayerIds": manifest.get("hiddenLayerIds", []),
         "layerCount": len(summary_layers),
         "commonCount": len(common_layers),
         "nineSliceCount": len(nine_slice_layers),

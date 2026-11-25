@@ -61,8 +61,12 @@ def _blend_name(layer: Layer) -> str:
     return words[0] + "".join(word.title() for word in words[1:])
 
 
+def _group_has_pixel_effects(layer: Layer) -> bool:
+    return layer.has_mask() or layer.has_vector_mask() or layer.has_effects()
+
+
 def _group_is_atomic(layer: Layer) -> bool:
-    return (layer.has_mask() or layer.has_vector_mask() or layer.has_effects()
+    return (_group_has_pixel_effects(layer)
             or (not isinstance(layer, Artboard) and layer.blend_mode != BlendMode.PASS_THROUGH)
             or layer.opacity < 255
             or layer.fill_opacity < 255
@@ -79,14 +83,16 @@ def _native_texts(layer: Layer) -> Iterator[Layer]:
         yield layer
 
 
-def _has_blended_artwork_above(text: Layer, group: Layer, clip: Rect) -> bool:
-    """Check for artwork that blends with the text inside the atomic group."""
+def _text_requires_group_composite(text: Layer, group: Layer, clip: Rect) -> bool:
+    """Keep group masks, effects and overlapping blends in the rendered pixels."""
     text_area = _intersection(text.bbox, clip)
     if text_area is None:
         return False
     branch = text
     while branch is not group:
         parent = branch.parent
+        if _group_has_pixel_effects(parent):
+            return True
         for sibling in parent[parent.index(branch) + 1:]:
             if (sibling.is_visible() and sibling.opacity > 0 and not sibling.clipping
                     and sibling.blend_mode not in (BlendMode.NORMAL, BlendMode.PASS_THROUGH)
@@ -143,7 +149,7 @@ def collect_units(psd: PSDImage, warnings: List[str]) -> List[RenderUnit]:
                 continue
             native_text = layer.kind == "type" and not clipped
             texts = list(_native_texts(layer)) if layer.is_group() else []
-            composited_text_ids = {id(text) for text in texts if _has_blended_artwork_above(text, layer, layer_clip)}
+            composited_text_ids = {id(text) for text in texts if _text_requires_group_composite(text, layer, layer_clip)}
             units.append(RenderUnit(layer, ids[id(layer)], chain_ids, unit_path, layer_clip,
                                     native_text=native_text,
                                     hide_texts=tuple(id(text) for text in texts if id(text) not in composited_text_ids)))
@@ -221,6 +227,7 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path] 
                 entry["renderSource"] = "psd-tools"
                 display = (entry.get("sourceState") or {}).get("display")
                 if unit.composite_group_id in rendered_image_ids:
+                    entry["compositeLayerId"] = unit.composite_group_id
                     entry["visible"] = False
                     if display is not None:
                         display["visible"] = False
@@ -285,13 +292,21 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path] 
         layer["idx"] = index
     text_layers = [layer for layer in layers if layer["mode"] == "text"]
     image_layers = [layer for layer in layers if layer["mode"] != "text"]
+    reference_path = ""
+    reference = psd.topil()
+    if reference is not None:
+        with reference:
+            path = out_dir / "reference.png"
+            reference.save(path)
+            reference_path = path.as_posix()
     manifest = {
         "canvas": {"width": psd.width, "height": psd.height}, "renderSource": "psd-tools",
+        "hiddenLayerIds": base.get("hiddenLayerIds", []),
         "layerCount": len(layers), "commonCount": 0, "nineSliceCount": 0,
         "textCount": len(text_layers), "imageCount": len(image_layers),
         "layers": layers, "commonLayers": [], "nineSliceLayers": [],
         "textLayers": text_layers, "imageLayers": image_layers,
-        "warnings": warnings, "referencePath": "",
+        "warnings": warnings, "referencePath": reference_path,
     }
     (out_dir / "manifest_summary.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

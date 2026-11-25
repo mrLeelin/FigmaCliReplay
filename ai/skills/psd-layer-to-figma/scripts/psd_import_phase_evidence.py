@@ -129,6 +129,10 @@ def unwrap_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def screenshot_ok(result: dict[str, Any]) -> tuple[bool, str]:
+    visual = result.get("visualValidation")
+    if isinstance(visual, dict) and visual.get("screenshotPath"):
+        path = str(visual["screenshotPath"])
+        return resolve_path(path).is_file(), path
     screenshot = result.get("screenshot")
     if isinstance(screenshot, dict):
         if screenshot.get("fileValid") is False:
@@ -229,10 +233,15 @@ def build_result_phase(path: Path | None, max_samples: int) -> dict[str, Any]:
         "missingGateNames": missing_gates,
         "screenshot": screenshot_evidence,
     }
+    visual = result.get("visualValidation")
+    if isinstance(visual, dict):
+        evidence["visualValidation"] = visual
     if result.get("status") != "completed":
         return phase("stop", evidence, "Fix the Figma import failure before cleanup or Unity import.")
     if errors or failing_gates or not screenshot_pass:
         return phase("stop", evidence, "Diagnose only the failing PSD import gates.")
+    if isinstance(visual, dict) and visual.get("status") == "differences":
+        return phase("stop", evidence, "Review the mismatched PSD layer crops in the visual report.")
     if warnings or missing_gates:
         return phase("unknown", evidence, "Review warnings or missing gates before claiming import success.")
     return phase("go", evidence)

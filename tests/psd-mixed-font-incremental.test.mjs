@@ -129,6 +129,41 @@ test('fresh imported mixed font text produces preview-no-changes', async () => {
   assert.equal(diff.conflicts.length, 0);
 });
 
+test('the same rendered PSD stays unchanged after native layout and reference alignment', async () => {
+  const { api, root, node, preview, stored } = await fixture();
+  node.x += 1;
+  node.y -= 6;
+  node.width -= 11;
+  node.height += 5;
+  node.data.set('psdTextLayout', api.capturePsdTextLayout(node, root));
+
+  assert.equal(preview().status, 'preview-no-changes');
+  assert.equal(api.buildPsdLiveSourceState(node, root, stored).geometry.width, stored.geometry.width);
+
+  node.x += 8;
+  const drift = preview();
+  assert.equal(drift.status, 'preview-blocked');
+  assert.equal(drift.changed[0].changes.find(change => change.path === 'geometry.x').delta, -8);
+});
+
+test('rendered source carries visibility for previously imported hidden layers without adding raster assets', async () => {
+  const { api } = await fixture();
+  const sourceState = incremental.normalizePsdSourceState({
+    layerId: "200", mode: "image", w: 40, h: 20, contentHash: "last-render",
+  });
+  const manifest = api.normalizeManifest({ canvas: { width: 100, height: 100 }, layers: [], hiddenLayerIds: [200, 201] });
+  const current = [{
+    layerId: "200", nodeId: "1:200", name: "existing", node: { visible: true }, sourceState,
+    liveState: { ...sourceState, geometry: { ...sourceState.geometry, x: 80 } },
+  }];
+  api.appendPsdHiddenLayerStates(manifest, current);
+  const diff = incremental.buildPsdIncrementalDiff(current, manifest.layers);
+  api.appendPsdIncrementalAssetConflicts(diff, { assetBytes: new Map() });
+  assert.equal(diff.status, "preview-ready");
+  assert.equal(diff.added.length, 0);
+  assert.deepEqual(Array.from(diff.changed[0].changes, change => change.path), ["display.visible"]);
+});
+
 test('an image-only update stays applicable beside unchanged mixed ordinary text', async () => {
   const { preview } = await fixture();
   const diff = preview({ imageChange: true });

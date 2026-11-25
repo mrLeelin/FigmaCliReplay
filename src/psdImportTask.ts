@@ -296,6 +296,7 @@ async function runPsdImportTask(
   };
   try {
     if (!options.reuseExportArtifacts) {
+      task.renderer = resolvePsdLayerRenderer();
       setTaskStage(task, "exporting_psd_layers", 10, "开始导出 PSD 图层");
       const exportScript = path.join(PSD_SKILL_SCRIPTS, "export_psd_layers.py");
       const exportArgs = [
@@ -304,16 +305,15 @@ async function runPsdImportTask(
         task.artifactDir,
         "--summary"
       ];
-      // 增量预览必须保留源图层身份，隐藏变化才能作为 visible=false 应用，而非误判为删除。
-      if (task.mode === "incremental-preview") exportArgs.push("--include-hidden");
+      // Rendered manifests retain hidden layer IDs without generating hidden image assets.
+      if (task.mode === "incremental-preview" && task.renderer === "raw") exportArgs.push("--include-hidden");
       await runPythonScript(task, exportScript, exportArgs);
     }
     if (task.status === "cancel_requested") throw new Error("PSD export cancellation requested");
     if (!fs.existsSync(task.manifestSummaryPath)) {
       throw new Error(`manifest_summary.json was not created: ${task.manifestSummaryPath}`);
     }
-    if (!options.reuseExportArtifacts && task.mode === "initial") {
-      task.renderer = resolvePsdLayerRenderer();
+    if (!options.reuseExportArtifacts) {
       if (task.renderer === "photoshop") {
         setTaskStage(task, "waiting_for_photoshop", 20, "等待 Photoshop 导入会话");
         releasePhotoshopSlot = await acquirePhotoshopImportSlot();
@@ -375,6 +375,7 @@ async function runPsdImportTask(
       if (!stringValue(result.baselineFingerprint)) {
         throw new Error("PSD incremental preview did not return a baseline fingerprint");
       }
+      await cleanupPhotoshop(true);
       task.preview = result;
       task.baselineFingerprint = stringValue(result.baselineFingerprint);
       task.status = previewStatus as PsdPreviewStatus;
@@ -404,8 +405,13 @@ async function runPsdImportTask(
     if (task.mode === "incremental-apply" && (!isRecord(result) || result.status !== "applied")) {
       throw new Error("PSD incremental apply was not completed");
     }
-    if (task.mode === "initial" && task.renderer === "photoshop" && isRecord(result)) {
-      await alignTextToPhotoshopReference(task, stringValue(result.rootNodeId));
+    if (task.mode === "initial" && isRecord(result)) {
+      const rootNodeId = stringValue(result.rootNodeId);
+      const cliUrl = publicUrl(config).replace(/^http:/, "ws:") + "/relay";
+      if (task.renderer === "photoshop") {
+        await alignTextToPhotoshopReference(task, rootNodeId, cliUrl);
+      }
+      await verifyPsdVisualImport(task, result, rootNodeId, cliUrl);
     }
     await cleanupPhotoshop(true);
     setTaskStage(task, "completed", 100, task.mode === "incremental-apply" ? "PSD 增量更新完成" : "PSD 导入完成");
@@ -546,7 +552,7 @@ async function releasePhotoshopImportSession(task: PsdImportTask, receiptPath: s
 }
 
 /** 按 Photoshop 合成图校正 Figma 原生文字位置；失败只记警告，不影响已完成的导入。 */
-async function alignTextToPhotoshopReference(task: PsdImportTask, rootNodeId: string): Promise<void> {
+async function alignTextToPhotoshopReference(task: PsdImportTask, rootNodeId: string, cliUrl: string): Promise<void> {
   const reference = path.join(path.dirname(task.manifestSummaryPath), "ps_render", "reference.png");
   if (!rootNodeId || !fs.existsSync(reference)) {
     task.logs.push(formatTaskLog(task, "缺少根节点或 Photoshop 参照图，跳过文字对齐"));
@@ -554,7 +560,10 @@ async function alignTextToPhotoshopReference(task: PsdImportTask, rootNodeId: st
   }
   setTaskStage(task, "aligning_psd_text", 90, "按 Photoshop 合成图校正文字位置");
   const script = path.join(PSD_SKILL_SCRIPTS, "align_psd_text_to_reference.py");
-  const args = [rootNodeId, task.manifestSummaryPath, reference, "--session-id", task.target.sessionId, "--apply"];
+  const args = [
+    rootNodeId, task.manifestSummaryPath, reference, "--session-id", task.target.sessionId,
+    "--relay-url", cliUrl, "--apply"
+  ];
   try {
     // 第二轮校正第一轮移动后残留的 1px 级偏移。
     await runPythonScript(task, script, args);
@@ -563,6 +572,51 @@ async function alignTextToPhotoshopReference(task: PsdImportTask, rootNodeId: st
     const message = error instanceof Error ? error.message : String(error);
     task.logs.push(formatTaskLog(task, `文字对齐失败（导入结果已保留）：${trimText(message, 300)}`));
     taskOperations.get(task.taskId)?.step("align.failed", "文字对齐失败", { error: trimText(message, 500) }, "warn");
+  }
+}
+
+async function verifyPsdVisualImport(
+  task: PsdImportTask, result: Record<string, unknown>, rootNodeId: string, cliUrl: string
+): Promise<void> {
+  setTaskStage(task, "verifying_psd_visual", 95, "对比 Figma 最终截图与 PSD 合成图");
+  let evidence: Record<string, unknown>;
+  try {
+    const manifest = readResultSummary(task.manifestSummaryPath);
+    const reference = isRecord(manifest) ? stringValue(manifest.referencePath) : "";
+    if (!rootNodeId || !reference || !fs.existsSync(reference)) {
+      throw new Error("Missing Figma root or PSD composite reference");
+    }
+    const output = await runPythonScript(task, path.join(PSD_SKILL_SCRIPTS, "verify_psd_visual.py"), [
+      task.manifestSummaryPath, reference, "--out", path.join(path.dirname(task.resultPath), "visual"),
+      "--root-node-id", rootNodeId, "--session-id", task.target.sessionId, "--relay-url", cliUrl
+    ]);
+    const report: unknown = JSON.parse(output);
+    if (!isRecord(report) || !["passed", "differences", "not-applicable"].includes(stringValue(report.status))) {
+      throw new Error("Invalid PSD visual report");
+    }
+    evidence = report;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    evidence = { status: "unavailable", reason: trimText(message, 300) };
+  }
+  result.visualValidation = evidence;
+  if (evidence.status === "not-applicable") {
+    task.logs.push(formatTaskLog(task, "没有适用的可见文字区域"));
+  } else if (evidence.status !== "passed") {
+    const warning = evidence.status === "differences"
+      ? `视觉校验发现 ${evidence.differenceCount} 个区域有差异，报告：${evidence.reportPath}`
+      : `视觉校验未完成：${evidence.reason}`;
+    result.warnings = [...(Array.isArray(result.warnings) ? result.warnings : []), warning];
+    task.logs.push(formatTaskLog(task, warning));
+  }
+  try {
+    const payload: unknown = JSON.parse(fs.readFileSync(task.resultPath, "utf8"));
+    const updated = isRecord(payload) && "result" in payload ? { ...payload, result } : result;
+    const temporary = task.resultPath + ".visual.tmp";
+    fs.writeFileSync(temporary, JSON.stringify(updated, null, 2), "utf8");
+    fs.renameSync(temporary, task.resultPath);
+  } catch (error) {
+    task.logs.push(formatTaskLog(task, `保存视觉校验结果失败：${String(error)}`));
   }
 }
 

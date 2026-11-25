@@ -68,6 +68,17 @@ class PsdSourceStateTests(unittest.TestCase):
         self.assertEqual(active["fillColor"], {"r": 1, "g": 1, "b": 1, "a": 1, "hex": "#FFFFFF"})
         self.assertEqual(disabled["fillColor"]["hex"], "#000000")
 
+    def test_partial_normal_color_overlay_blends_over_the_opaque_engine_fill(self):
+        tint = _overlay(b"SoFi", {b"Clr ": _rgb(238, 238.8, 255), b"Opct": Double(59)})
+        text = _text_info(_effect_payload({
+            b"SoFi": tint,
+            b"GrFl": _overlay(b"GrFl", {}, enabled=False),
+        }))
+
+        self.assertEqual(text["fillColor"]["hex"], "#8C8D96")
+        self.assertEqual(text["fillColor"]["a"], 1)
+        self.assertEqual(text["warnings"], [])
+
     def test_enabled_linear_overlay_and_ignored_disabled_color_overlay_survive_manifest(self):
         style = _effect_payload({
             b"SoFi": _overlay(b"SoFi", {b"Clr ": _rgb(255, 165, 25)}, enabled=False),

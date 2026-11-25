@@ -95,17 +95,21 @@ function isText(layer) {
   return layer.typename === 'ArtLayer' && layer.kind === LayerKind.TEXT;
 }
 
-function collectTexts(group, out, ancestorBlendBounds) {
+function groupHasPixelEffects(info) {
+  return info.effects || info.userMask || info.vectorMask;
+}
+
+function collectTexts(group, out, ancestorBlendBounds, keepComposite) {
   var blendBounds = ancestorBlendBounds.slice(0);
   for (var i = 0; i < group.layers.length; i++) {
     var child = group.layers[i];
     if (!child.visible) continue;
     var info = layerInfo(child);
     if (child.typename === 'LayerSet') {
-      collectTexts(child, out, blendBounds);
+      collectTexts(child, out, blendBounds, keepComposite || groupHasPixelEffects(info));
     } else if (isText(child)) {
-      var composited = false;
-      for (var b = 0; info.bounds && b < blendBounds.length; b++) {
+      var composited = keepComposite;
+      for (var b = 0; !composited && info.bounds && b < blendBounds.length; b++) {
         if (intersect(info.bounds, blendBounds[b])) {
           composited = true;
           break;
@@ -122,7 +126,7 @@ function collectTexts(group, out, ancestorBlendBounds) {
 
 // 组需要整体渲染的条件：组级样式、蒙版、非穿透混合或组透明度会改变子层合成结果。
 function groupIsAtomic(info) {
-  return info.effects || info.userMask || info.vectorMask || info.blend !== 'passThrough' || info.opacity < 255;
+  return groupHasPixelEffects(info) || info.blend !== 'passThrough' || info.opacity < 255;
 }
 
 var units = [];
@@ -156,7 +160,7 @@ function walk(container, clipRect, depth, path) {
         continue;
       }
       var texts = [];
-      collectTexts(layer, texts, []);
+      collectTexts(layer, texts, [], groupHasPixelEffects(info));
       var hideTexts = [];
       units.push({ kind: 'image', layers: chain, layerId: layer.id, name: name, path: unitPath,
         clip: clipRect, blend: info.blend, hideTexts: hideTexts, group: true });

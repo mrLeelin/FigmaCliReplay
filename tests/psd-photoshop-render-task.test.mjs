@@ -12,13 +12,14 @@ function sliceFunction(source, signature, nextSignature) {
   return source.slice(start, end > start ? end : source.length);
 }
 
-test("initial PSD import renders through Photoshop after the raw export", () => {
+test("initial PSD import and new incremental preview use the same renderer before submission", () => {
   const run = sliceFunction(taskSource, "async function runPsdImportTask(", "function readResultSummary(");
   const exportAt = run.indexOf("export_psd_layers.py");
   const renderAt = run.indexOf("renderPsdLayers(task, photoshopReceiptPath)");
   const submitAt = run.indexOf("submit_psd_import_job.py");
   assert.ok(exportAt >= 0 && renderAt > exportAt && submitAt > renderAt, "render must run between export and submit");
-  assert.match(run, /!options\.reuseExportArtifacts && task\.mode === "initial"/);
+  assert.match(run, /if \(!options\.reuseExportArtifacts\) \{\s*if \(task\.renderer === "photoshop"\)/);
+  assert.match(run, /task\.mode === "incremental-preview" && task\.renderer === "raw"/);
 });
 
 test("Photoshop render replaces the submitted manifest and uses the raw manifest as text base", () => {
@@ -42,8 +43,10 @@ test("renderer falls back to psd-tools when Photoshop COM is missing and can be 
 
 test("text alignment runs only for Photoshop-rendered initial imports and never fails the import", () => {
   const run = sliceFunction(taskSource, "async function runPsdImportTask(", "function readResultSummary(");
-  assert.match(run, /task\.mode === "initial" && task\.renderer === "photoshop"/);
-  const align = sliceFunction(taskSource, "async function alignTextToPhotoshopReference(", "function readResultSummary(");
+  assert.match(run, /task\.mode === "initial" && isRecord\(result\)/);
+  assert.match(run, /if \(task\.renderer === "photoshop"\) \{\s*await alignTextToPhotoshopReference/);
+  assert.ok(run.indexOf("await verifyPsdVisualImport(") > run.indexOf("await alignTextToPhotoshopReference("));
+  const align = sliceFunction(taskSource, "async function alignTextToPhotoshopReference(", "async function verifyPsdVisualImport(");
   assert.match(align, /align_psd_text_to_reference\.py/);
   assert.match(align, /"--apply"/);
   assert.match(align, /catch \(error\)/);
@@ -60,4 +63,5 @@ test("plugin UI labels the new render and alignment stages", () => {
   assert.match(uiSource, /rendering_psd_tools: "/);
   assert.match(uiSource, /closing_psd_photoshop: "/);
   assert.match(uiSource, /aligning_psd_text: "/);
+  assert.match(uiSource, /verifying_psd_visual: "/);
 });

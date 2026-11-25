@@ -157,6 +157,11 @@ export function designEditDescribeNode(node, options) {
   if ("strokes" in node) info.strokes = designEditSummarizePaints(node.strokes, mixed);
   const strokeWeight = designEditScalar(node, "strokeWeight", mixed);
   if (strokeWeight !== undefined) info.strokeWeight = strokeWeight;
+  if (node.type === "TEXT" && "strokeJoin" in node) info.strokeJoin = designEditScalar(node, "strokeJoin", mixed);
+  if (typeof node.getSharedPluginData === "function") {
+    const layerId = node.getSharedPluginData("psd_layer_to_figma_bridge", "psdLayerId");
+    if (layerId) info.psdLayerId = layerId;
+  }
   const cornerRadius = designEditScalar(node, "cornerRadius", mixed);
   if (cornerRadius !== undefined) info.cornerRadius = cornerRadius;
   const layout = designEditAutoLayout(node);
