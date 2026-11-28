@@ -98,6 +98,21 @@ test("a failure after applying an image restores the previous rectangle bounds a
   assert.deepEqual([rectangle.x, rectangle.y, rectangle.width, rectangle.height], [12, 34, 100, 50]);
 });
 
+test("an image asset replaces an existing frame fill and keeps its children", async () => {
+  const child = text("1:3", new Set());
+  const card = frame("1:2", { children: [child] });
+  child.parent = card;
+  const api = runtime([page(card)]);
+  api.getImageBytes = (id) => id === "art" ? Uint8Array.of(137, 80, 78, 71) : undefined;
+  api.createImage = () => ({ hash: "art-image" });
+  const result = await designEditApplyEdits({ edits: [{ op: "setImageFill", nodeId: card.id, assetId: "art" }] }, api);
+  assert.equal(result.allPass, true);
+  assert.equal(card.type, "FRAME");
+  assert.deepEqual(card.fills, [{ type: "IMAGE", scaleMode: "FILL", imageHash: "art-image", opacity: 1, visible: true }]);
+  assert.deepEqual(card.children, [child]);
+  assert.equal(child.characters, "旧文字");
+});
+
 test("an undecodable image blocks the batch before any rectangle or text mutation", async () => {
   const rectangle = frame("1:2", { type: "RECTANGLE" });
   const label = text("1:3", new Set());

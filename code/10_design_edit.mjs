@@ -245,6 +245,9 @@ export async function designEditInspectNodes(job, getNodeById, mixed, getMainCom
 // → 任一条失败则删除新建节点、恢复原值并核对；成功后由 handler 调用 commitUndo 合并为一步撤销。
 // runtime 注入：getNodeById、loadFont、getMainComponent、getVariableById、createFrame、createText、bindPaint、mixed、log。
 
+/** setImageFill 可写入的节点类型：已有矩形，或已有 Frame（整块背景换成图片，子节点不变）。 */
+const DESIGN_EDIT_IMAGE_FILL_TYPES = new Set(["RECTANGLE", "FRAME"]);
+
 export const DESIGN_EDIT_SUPPORTED_OPS = [
   "setFill", "setLinearGradientFill", "setImageFill", "setStroke", "setCornerRadius", "setOpacity", "setVisible", "rename",
   "setText", "setTextStyle", "setAutoLayout", "setLayoutSizing",
@@ -556,19 +559,19 @@ async function designEditSimulateProperty(edit, index, ctx, step) {
       set("fills", designEditFillPaint(edit));
       return null;
     case "setImageFill": {
-      if (view.type !== "RECTANGLE" || view.created || view.insideInstance) return "setImageFill requires an existing RECTANGLE outside an instance";
+      if (!DESIGN_EDIT_IMAGE_FILL_TYPES.has(view.type) || view.created || view.insideInstance) return "setImageFill requires an existing RECTANGLE or FRAME outside an instance";
       const bytes = ctx.runtime.getImageBytes?.(edit.assetId);
       if (!bytes?.byteLength) return "image asset missing or empty: " + edit.assetId;
       if (edit.bounds) {
         const parent = designEditParentView(ctx.sim, view);
         const layout = parent && designEditViewGet(parent, "layoutMode");
         if (parent?.type === "GROUP" || (layout && layout !== "NONE" && get("layoutPositioning") !== "ABSOLUTE")) {
-          return "image bounds require a free-positioned rectangle outside a GROUP";
+          return "image bounds require a free-positioned node outside a GROUP";
         }
         if (designEditBoundId(view.node, "width") || designEditBoundId(view.node, "height")) {
           return "image bounds cannot replace width or height bound to a variable";
         }
-        if (typeof view.node.resize !== "function") return "rectangle does not support resizing";
+        if (typeof view.node.resize !== "function") return view.type + " does not support resizing";
         for (const [key, value] of Object.entries(edit.bounds)) set(key, value);
       }
       step.imageBytes = bytes;
