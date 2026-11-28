@@ -1160,6 +1160,34 @@ def _read_linear_overlay(effect: Any) -> Optional[Dict[str, Any]]:
     return {"angle": angle, "scale": scale / 100, "stops": stops}
 
 
+def _compose_gradient_tint(gradient_effect: Any, tint_effect: Any) -> Dict[str, Any]:
+    """Photoshop places Color Overlay above Gradient Overlay in the layer style stack."""
+    gradient = _read_linear_overlay(gradient_effect)
+    color = _effect_rgb(tint_effect.get(b"Clr "))
+    opacity = _effect_value(tint_effect, b"Opct", 100) / 100
+    blend_mode = getattr(tint_effect.get(b"Md  "), "enum", b"Nrml")
+    if not gradient or not color or not 0 < opacity <= 1 or blend_mode not in (b"Nrml", b"Ovrl"):
+        return {}
+
+    def tint_channel(base: float, tint: float) -> float:
+        if blend_mode == b"Nrml":
+            blended = tint
+        elif base < 0.5:
+            blended = 2 * base * tint
+        else:
+            blended = 1 - 2 * (1 - base) * (1 - tint)
+        return base + opacity * (blended - base)
+
+    stops = [
+        {"position": stop["position"], "color": {
+            **{channel: tint_channel(stop["color"][channel], color[channel]) for channel in "rgb"},
+            "a": 1.0,
+        }}
+        for stop in gradient["stops"]
+    ]
+    return {"fillGradient": {**gradient, "stops": stops}, "refineTextGradient": True}
+
+
 def _read_text_fill_runs(payload: bytes, characters: str, default_color: Any) -> List[Dict[str, Any]]:
     if b"/StyleRun" not in payload or not characters:
         return []
@@ -1238,6 +1266,18 @@ def _read_text_fill_overlay(payload: Optional[bytes], base_color: Any, base_runs
     if not overlays:
         return {}
     if len(overlays) != 1:
+        if len(overlays) == 2:
+            by_type = {effect.classID: effect for effect in overlays}
+            gradient = by_type.get(b"GrFl")
+            tint = by_type.get(b"SoFi")
+            if (gradient and tint and _effect_value(gradient, b"Opct", 100) == 100
+                    and getattr(gradient.get(b"Md  "), "enum", b"Nrml") == b"Nrml"):
+                try:
+                    composed = _compose_gradient_tint(gradient, tint)
+                except (AttributeError, TypeError, ValueError):
+                    composed = {}
+                if composed:
+                    return composed
         return {"unsupportedFillOverlay": "Multiple active Photoshop text fill overlays"}
 
     overlay = overlays[0]
@@ -3099,6 +3139,8 @@ def _generate_summary(
             entry["fillColor"] = t.get("fillColor", {})
             if t.get("fillGradient"):
                 entry["fillGradient"] = t["fillGradient"]
+                if t.get("refineTextGradient"):
+                    entry["refineTextGradient"] = True
             if t.get("fillRuns"):
                 entry["fillRuns"] = t["fillRuns"]
             stroke = t.get("effects", {}).get("stroke")

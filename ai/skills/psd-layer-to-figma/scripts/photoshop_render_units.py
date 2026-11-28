@@ -13,13 +13,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 # Relay invokes Python with -I; explicitly expose only these trusted sibling helpers.
@@ -227,6 +229,83 @@ def _attach_font_runs(entry: Dict[str, Any], runs: List[Dict[str, Any]], fonts: 
         entry["fontRuns"] = font_runs
 
 
+def _refine_text_gradient(entry: Dict[str, Any], reference: Image.Image) -> Optional[Dict[str, Any]]:
+    """Fit editable stops to Photoshop's actual color ramp through the opaque glyphs."""
+    gradient = entry["fillGradient"]
+    display = entry["sourceState"].get("display", {})
+    if display.get("opacity", 1) != 1 or display.get("blendMode", "NORMAL") != "NORMAL":
+        return None
+    x, y, width, height = (int(entry[key]) for key in ("x", "y", "w", "h"))
+    if not (0 <= x < x + width <= reference.width and 0 <= y < y + height <= reference.height):
+        return None
+    try:
+        with Image.open(entry["path"]) as raw:
+            if raw.size != (width, height) or "A" not in raw.getbands():
+                return None
+            # Exclude anti-aliased boundaries, outlines and the drop shadow.
+            opaque_glyphs = raw.getchannel("A").filter(ImageFilter.MinFilter(5))
+    except OSError:
+        return None
+    mask = opaque_glyphs.load()
+    colors = reference.load()
+    angle = math.radians(gradient["angle"])
+    dx, dy = math.cos(angle), -math.sin(angle)
+    span = gradient["scale"] * (abs(dx) * width + abs(dy) * height)
+    step = max(1, math.ceil(math.sqrt(width * height / 16384)))
+    buckets = defaultdict(Counter)
+    for row in range(0, height, step):
+        for col in range(0, width, step):
+            if mask[col, row] < 250:
+                continue
+            distance = dx * (col + 0.5 - width / 2) + dy * (row + 0.5 - height / 2)
+            position = min(1.0, max(0.0, 0.5 + distance / span))
+            buckets[round(position * 512)][colors[x + col, y + row]] += 1
+
+    samples = []
+    selected_pixels = 0
+    for index, counts in sorted(buckets.items()):
+        rgb, votes = counts.most_common(1)[0]
+        if votes < 2:
+            continue
+        selected_pixels += votes
+        samples.append((index / 512, rgb))
+    if (len(samples) < 12 or samples[-1][0] - samples[0][0] < 0.3
+            or selected_pixels < 0.75 * sum(c.total() for c in buckets.values())
+            or len({rgb for _, rgb in samples}) < 3):
+        return None
+
+    # Split at the largest interpolation error until the measured ramp fits
+    # within the editable Figma stop budget.
+    stops = {0, len(samples) - 1}
+    while True:
+        worst_index, worst_error = 0, 0.0
+        ordered = sorted(stops)
+        for left, right in zip(ordered, ordered[1:]):
+            low, first = samples[left]
+            high, last = samples[right]
+            for index in range(left + 1, right):
+                position, rgb = samples[index]
+                weight = (position - low) / (high - low)
+                error = max(abs(c - (a + weight * (b - a))) for a, b, c in zip(first, last, rgb))
+                if error > worst_error:
+                    worst_index, worst_error = index, error
+        if worst_error <= 2:
+            break
+        if len(stops) >= 30:
+            return None
+        stops.add(worst_index)
+
+    ramp = [samples[index] for index in sorted(stops)]
+    if ramp[0][0] > 0:
+        ramp.insert(0, (0.0, ramp[0][1]))
+    if ramp[-1][0] < 1:
+        ramp.append((1.0, ramp[-1][1]))
+    return {**gradient, "stops": [
+        {"position": position, "color": {"r": red / 255, "g": green / 255, "b": blue / 255, "a": 1.0}}
+        for position, (red, green, blue) in ramp
+    ]}
+
+
 def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
                    only_orders: Optional[List[int]] = None,
                    session_receipt: Optional[Path] = None) -> Dict[str, Any]:
@@ -239,10 +318,17 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
     text_ids = [int(unit["layerId"]) for unit in ps["units"] if unit["kind"] == "text"]
     font_runs = _psd_font_runs(psd_path, text_ids)
     local_fonts = _figma_local_fonts() if font_runs else {}
+    warnings: List[str] = list(ps.get("errors", []))
+    reference = None
+    if ps.get("reference") and any(layer.get("refineTextGradient") for layer in base_by_id.values()):
+        try:
+            with Image.open(ps["reference"]) as composite:
+                reference = composite.convert("RGB")
+        except OSError:
+            warnings.append("Could not read Photoshop reference for text gradient refinement")
 
     layers: List[Dict[str, Any]] = []
     rendered_image_ids = set()
-    warnings: List[str] = list(ps.get("errors", []))
     for unit in ps["units"]:
         layer_id = int(unit["layerId"])
         source = base_by_id.get(layer_id)
@@ -253,6 +339,12 @@ def build_manifest(psd_path: Path, out_dir: Path, base_manifest: Optional[Path],
                 continue
             entry = dict(source)
             entry.pop("idx", None)
+            if entry.pop("refineTextGradient", False) and reference is not None and not unit.get("compositeLayerId"):
+                gradient = _refine_text_gradient(entry, reference)
+                if gradient is not None:
+                    entry["fillGradient"] = gradient
+                    state = entry["sourceState"]
+                    entry["sourceState"] = {**state, "text": {**state["text"], "fillGradient": gradient}}
             # 普通原生文字：插件按自动宽高 + 自动行高创建，导入后由 align_psd_text_to_reference 按
             # Photoshop 合成图校正位置；旧式固定尺寸文字会被导入验收记为裁切风险而判定失败。
             entry["textRole"] = "ordinary"

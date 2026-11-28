@@ -66,6 +66,7 @@ def summarize(manifest_path):
             effects = txt.get("effects", {})
             stroke = effects.get("stroke")
             shadow = effects.get("dropShadow")
+            shadows = shadow if isinstance(shadow, list) else [shadow] if shadow else []
             text_layers.append({
                 **base,
                 "text": txt,
@@ -83,8 +84,9 @@ def summarize(manifest_path):
                     "hex": stroke.get("color", {}).get("hex", ""),
                 } if stroke else None,
                 "dropShadow": {
-                    "enabled": shadow.get("enabled", False),
-                } if shadow else None,
+                    "enabled": any(effect.get("enabled", False) for effect in shadows),
+                    "count": len(shadows),
+                } if shadows else None,
                 "fontFallback": [
                     fallback.get("family", "") for fallback in
                     txt.get("figma", {}).get("fontFallbackCandidates", [])[:3]

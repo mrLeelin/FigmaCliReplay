@@ -145,6 +145,25 @@ class PsdSourceStateTests(unittest.TestCase):
         self.assertEqual(gradient["stops"][-1]["color"], {"r": 1, "g": 207 / 255, "b": 41 / 255, "a": 1})
         self.assertEqual(manifest["layers"][0]["sourceState"]["text"]["fillGradient"], gradient)
 
+    def test_overlay_tint_composites_over_an_opaque_linear_gradient(self):
+        tint = _overlay(b"SoFi", {
+            b"Clr ": _rgb(79, 133, 255),
+            b"Md  ": Enumerated(b"BlnM", b"Ovrl"),
+            b"Opct": Double(82),
+        })
+        text = _text_info(_effect_payload({b"SoFi": tint, b"GrFl": _gradient()}))
+        reversed_keys = _text_info(_effect_payload({b"GrFl": _gradient(), b"SoFi": tint}))
+        ramp = text["fillGradient"]
+
+        self.assertEqual(ramp, reversed_keys["fillGradient"])
+        self.assertEqual(ramp["angle"], 90)
+        self.assertEqual(ramp["scale"], 0.87)
+        red = 248 / 255
+        blended = 1 - 2 * (1 - red) * (1 - 79 / 255)
+        self.assertAlmostEqual(ramp["stops"][0]["color"]["r"], 0.18 * red + 0.82 * blended)
+        self.assertTrue(text["refineTextGradient"])
+        self.assertEqual(text["warnings"], [])
+
     def test_reversed_gradient_reverses_stops_and_positions(self):
         gradient = _text_info(_effect_payload({b"GrFl": _gradient(reverse=True)}))["fillGradient"]
 

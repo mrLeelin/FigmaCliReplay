@@ -74,6 +74,32 @@ class BuildManifestTest(unittest.TestCase):
         self.assertEqual(manifest["layers"][1]["textRole"], "ordinary")
         self.assertEqual(manifest["textCount"], 1)
 
+    def test_native_text_gradient_uses_the_rendered_glyph_colors(self) -> None:
+        source = _text_layer(30)
+        raw_path = self.tmp / "glyph.png"
+        glyph = Image.new("RGBA", (80, 30), (0, 0, 0, 0))
+        glyph.paste((244, 219, 183, 255), (4, 4, 76, 26))
+        glyph.save(raw_path)
+        reference = Image.new("RGB", (300, 100), (255, 255, 0))
+        for column in range(4, 76):
+            reference.paste((80 + column, 200 - column, 255), (120 + column, 44, 121 + column, 66))
+        reference.save(self.ps_result["reference"])
+        descriptor_gradient = {"angle": 0, "scale": 1, "stops": [
+            {"position": 0, "color": {"r": 1, "g": 0, "b": 1, "a": 1}},
+            {"position": 1, "color": {"r": 0, "g": 1, "b": 1, "a": 1}},
+        ]}
+        source.update(path=str(raw_path), fillGradient=descriptor_gradient, refineTextGradient=True,
+                      sourceState={"text": {"fillGradient": descriptor_gradient}})
+        self.base.write_text(json.dumps({"layers": [source]}), encoding="utf-8")
+
+        text = self.build()["textLayers"][0]
+        gradient = text["fillGradient"]
+        self.assertEqual(text["textRole"], "ordinary")
+        self.assertEqual(gradient, text["sourceState"]["text"]["fillGradient"])
+        self.assertAlmostEqual(gradient["stops"][0]["color"]["r"], 86 / 255)
+        self.assertAlmostEqual(gradient["stops"][-1]["color"]["g"], 127 / 255)
+        self.assertNotIn("refineTextGradient", text)
+
     def test_composite_text_keeps_editable_metadata_but_is_hidden_over_the_render(self) -> None:
         source = _text_layer(30)
         source["visible"] = True
