@@ -6318,9 +6318,23 @@ function roundDelta(value) {
 async function buildComponentIndexes(job) {
   const config = Object.assign({ commonRootId: "62:115", imageRootId: "2896:32" }, job && job.componentLibrary || {});
   return {
-    common: await collectComponentIndex(config.commonRootId),
-    image: await collectComponentIndex(config.imageRootId)
+    common: await collectComponentIndexSafely("common", config.commonRootId),
+    image: await collectComponentIndexSafely("image", config.imageRootId)
   };
+}
+
+// 组件库扫描可能触发 Figma 远端页面加载；扫描失败时记录警告并返回空索引，导入降级为图片层继续进行。
+async function collectComponentIndexSafely(libraryName, rootId) {
+  try {
+    return await collectComponentIndex(rootId);
+  } catch (error) {
+    pluginLogger.warn("PSD 组件索引不可用，已回退为图片导入", {
+      libraryName: String(libraryName || ""),
+      rootId: String(rootId || ""),
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return { list: [], byName: {}, byNormalized: {} };
+  }
 }
 
 // 收集某个根节点下的 Component/ComponentSet，用标准化名称建立索引。
