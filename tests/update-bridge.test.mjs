@@ -5,9 +5,17 @@ import path from "node:path";
 import crypto from "node:crypto";
 import test from "node:test";
 import { resumeRequestedBridgeUpdate } from "../dist/updateBridge.js";
+import { unityBridgeTokenPath } from "../dist/unityBridgeInstaller.js";
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-bridge-update-"));
+  const homeVariable = process.platform === "win32" ? "LOCALAPPDATA" : "HOME";
+  const previousHome = process.env[homeVariable];
+  process.env[homeVariable] = path.join(root, "User Data");
+  t.after(() => {
+    if (previousHome === undefined) delete process.env[homeVariable];
+    else process.env[homeVariable] = previousHome;
+  });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, "Unity 工程");
   const source = path.join(root, "release");
@@ -45,7 +53,8 @@ test("requested Bridge update preserves GUID/settings and requires an actual suc
   await resumeRequestedBridgeUpdate({ ...f.options, probe: async (project, version) => { probes++; assert.equal(project, fs.realpathSync(f.project)); assert.equal(version, "1.2.3"); return true; } });
   assert.equal(fs.readFileSync(path.join(f.bridge, "Bridge.cs"), "utf8"), "new bridge");
   assert.equal(fs.readFileSync(f.bridge + ".meta", "utf8"), f.oldMeta);
-  assert.deepEqual(JSON.parse(fs.readFileSync(f.settings, "utf8")), { commonFontAsset: "Assets/KeepFont.asset", relayToken: "new-token" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.settings, "utf8")), { commonFontAsset: "Assets/KeepFont.asset" });
+  assert.equal(fs.readFileSync(unityBridgeTokenPath(f.project), "utf8"), "new-token");
   assert.equal(f.status().phase, "restart-required");
   assert.equal(f.status().bridge.phase, "completed");
   assert.equal(probes, 1);

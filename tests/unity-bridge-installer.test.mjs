@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 const installerModulePath = path.resolve("dist/unityBridgeInstaller.js");
 assert.equal(fs.existsSync(installerModulePath), true, "unityBridgeInstaller module must be built");
-const { installUnityBridge } = await import(pathToFileURL(installerModulePath));
+const { installUnityBridge, unityBridgeTokenPath } = await import(pathToFileURL(installerModulePath));
 
 test("bridge installer copies editor files and preserves project settings", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-bridge-install-"));
@@ -29,8 +29,16 @@ test("bridge installer copies editor files and preserves project settings", () =
   assert.equal(fs.readFileSync(settingsPath, "utf8"), "keep-me");
 });
 
-test("bridge installer writes the Relay Bridge token without dropping import settings", () => {
+test("bridge installer migrates credentials out of shared settings and preserves other fields", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "figma-bridge-token-"));
+  const homeVariable = process.platform === "win32" ? "LOCALAPPDATA" : "HOME";
+  const previousHome = process.env[homeVariable];
+  process.env[homeVariable] = path.join(root, "User Data");
+  t.after(() => {
+    if (previousHome === undefined) delete process.env[homeVariable];
+    else process.env[homeVariable] = previousHome;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   const sourceEditor = path.join(root, "source", "Assets", "Editor");
   const sourceBridge = path.join(sourceEditor, "FigmaBridge");
   fs.mkdirSync(sourceBridge, { recursive: true });
@@ -40,14 +48,28 @@ test("bridge installer writes the Relay Bridge token without dropping import set
   const projectPath = path.join(root, "UnityProject");
   scaffoldProject(projectPath);
   const settingsPath = path.join(projectPath, "ProjectSettings", "FigmaBridgeImportSettings.json");
-  fs.writeFileSync(settingsPath, JSON.stringify({ commonFontAsset: "Assets/Fonts/CommonFont.asset" }));
+  const fontSettings = { commonFontAsset: "Assets/Fonts/CommonFont.asset", otherSetting: true };
+  fs.writeFileSync(settingsPath, JSON.stringify({ ...fontSettings, relayToken: "exposed-fixture-token" }));
 
   installUnityBridge(projectPath, sourceEditor, "bridge-secret");
 
-  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), {
-    commonFontAsset: "Assets/Fonts/CommonFont.asset",
-    relayToken: "bridge-secret",
-  });
+  const credentialsPath = unityBridgeTokenPath(projectPath);
+  assert.equal(fs.readFileSync(credentialsPath, "utf8"), "bridge-secret");
+  assert.ok(credentialsPath.startsWith(process.env[homeVariable] + path.sep));
+  assert.notEqual(credentialsPath, unityBridgeTokenPath(path.join(root, "AnotherProject")));
+  if (process.platform !== "win32") assert.equal(fs.statSync(credentialsPath).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), fontSettings);
+
+  const originalSettings = fs.readFileSync(settingsPath, "utf8");
+  installUnityBridge(projectPath, sourceEditor, "rotated-bridge-secret");
+  assert.equal(fs.readFileSync(credentialsPath, "utf8"), "rotated-bridge-secret");
+  assert.equal(fs.readFileSync(settingsPath, "utf8"), originalSettings);
+
+  const newProject = path.join(root, "AnotherProject");
+  scaffoldProject(newProject);
+  installUnityBridge(newProject, sourceEditor, "another-bridge-secret");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(newProject, "ProjectSettings", "FigmaBridgeImportSettings.json"), "utf8")), {});
+  assert.equal(fs.readFileSync(unityBridgeTokenPath(newProject), "utf8"), "another-bridge-secret");
 });
 
 test("bridge installer removes the retired gateway discovery writer", () => {

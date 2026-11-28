@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { PLUGIN_ROOT } from "./config.js";
@@ -46,6 +47,8 @@ export function installUnityBridge(
       throw new Error(`FigmaBridge source is incomplete: ${sourceEditorPath}`);
     }
 
+    if (bridgeToken) writeBridgeToken(normalizedProjectPath, bridgeToken);
+
     const targetEditor = path.join(assetsPath, "Editor");
     const targetBridge = path.join(targetEditor, "FigmaBridge");
     fs.mkdirSync(targetBridge, { recursive: true });
@@ -53,7 +56,7 @@ export function installUnityBridge(
     copyDirectoryContents(sourceBridge, targetBridge, guidIndex);
     installMetaFile(sourceMeta, path.join(targetEditor, "FigmaBridge.meta"), guidIndex);
     const removed = removeRetiredFiles(targetBridge);
-    if (bridgeToken) writeBridgeToken(projectSettingsPath, bridgeToken);
+    if (bridgeToken) removeProjectBridgeToken(projectSettingsPath);
 
     if (guidIndex.regeneratedGuids.length > 0) {
       operation.step("meta-guid", "已为与工程内既有资产冲突的 .meta 分配新 GUID", {
@@ -199,23 +202,55 @@ function removeRetiredFiles(targetBridge: string): string[] {
   return removed;
 }
 
-function writeBridgeToken(projectSettingsPath: string, bridgeToken: string): void {
-  const settingsPath = path.join(projectSettingsPath, "FigmaBridgeImportSettings.json");
-  let settings: Record<string, unknown> = {};
-  if (fs.existsSync(settingsPath)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-    } catch (error) {
-      throw new Error(`FigmaBridgeImportSettings.json is invalid JSON; refusing to overwrite it: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("FigmaBridgeImportSettings.json must contain a JSON object");
-    }
-    settings = parsed as Record<string, unknown>;
+export function unityBridgeTokenPath(projectPath: string): string {
+  const normalized = normalizeUnityProjectPath(projectPath);
+  const windows = process.platform === "win32";
+  const projectKey = windows ? normalized.replaceAll("\\", "/").toLowerCase() : normalized;
+  const id = createHash("sha256").update(projectKey).digest("hex");
+  const directory = windows && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, "FigmaRelay")
+    : path.join(os.homedir(), ".figma-relay");
+  return path.join(directory, "unity-bridge", `${id}.token`);
+}
+
+function writeBridgeToken(projectPath: string, bridgeToken: string): void {
+  const tokenPath = unityBridgeTokenPath(projectPath);
+  fs.mkdirSync(path.dirname(tokenPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${tokenPath}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, bridgeToken, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    fs.renameSync(temporaryPath, tokenPath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
   }
-  settings.relayToken = bridgeToken;
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+}
+
+function removeProjectBridgeToken(projectSettingsPath: string): void {
+  const settingsPath = path.join(projectSettingsPath, "FigmaBridgeImportSettings.json");
+  if (!fs.existsSync(settingsPath)) {
+    fs.writeFileSync(settingsPath, "{}\n", { encoding: "utf8", flag: "wx" });
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8").replace(/^\uFEFF/, ""));
+  } catch {
+    throw new Error("FigmaBridgeImportSettings.json is unreadable or invalid; refusing to overwrite it");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("FigmaBridgeImportSettings.json must contain a JSON object");
+  }
+  const settings = parsed as Record<string, unknown>;
+  if (!Object.hasOwn(settings, "relayToken")) return;
+  delete settings.relayToken;
+  const temporaryPath = `${settingsPath}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(settings, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
+    fs.renameSync(temporaryPath, settingsPath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
 }
 
 function isDirectory(value: string): boolean {

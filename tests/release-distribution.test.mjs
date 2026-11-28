@@ -32,7 +32,8 @@ test("extracted distribution installs Bridge with its local token and preserves 
   const targetMeta = path.join(project, "Assets", "Editor", "FigmaBridge.meta");
   const originalMeta = "fileFormatVersion: 2\nguid: 123456789012345678901234567890ab\n";
   fs.writeFileSync(targetMeta, originalMeta);
-  const env = { ...process.env, FIGMA_RELAY_TOKEN: "", FIGMA_RELAY_BRIDGE_TOKEN: "" };
+  const localAppData = path.join(fixture, "User Data");
+  const env = { ...process.env, LOCALAPPDATA: localAppData, FIGMA_RELAY_TOKEN: "", FIGMA_RELAY_BRIDGE_TOKEN: "" };
   const installer = path.join(root, "scripts", "install_unity_bridge.ps1");
   const invoke = (target) => spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", installer, "-ProjectPath", target], {
     cwd: fixture, env, encoding: "utf8", windowsHide: true, timeout: 30_000,
@@ -56,8 +57,12 @@ test("extracted distribution installs Bridge with its local token and preserves 
   assert.match(installed.stderr, /succeeded/);
   assert.equal((installed.stdout + installed.stderr).includes(token), false, "installation logs must not expose the token");
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, "utf8")), {
-    commonFontAsset: "Assets/KeepFont.asset", relayToken: token,
+    commonFontAsset: "Assets/KeepFont.asset",
   });
+  const credentialDir = path.join(localAppData, "FigmaRelay", "unity-bridge");
+  const credentialNames = fs.readdirSync(credentialDir);
+  assert.equal(credentialNames.length, 1);
+  assert.equal(fs.readFileSync(path.join(credentialDir, credentialNames[0]), "utf8"), token);
   assert.equal(fs.readFileSync(targetMeta, "utf8"), originalMeta);
   const bridgeRelative = "unity/Assets/Editor/FigmaBridge/FigmaBridgeServer.cs";
   assert.equal(fs.readFileSync(path.join(project, "Assets/Editor/FigmaBridge/FigmaBridgeServer.cs"), "utf8"),

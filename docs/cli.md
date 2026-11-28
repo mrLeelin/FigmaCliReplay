@@ -67,7 +67,9 @@ node dist/cli.js control --job-type unity.command --payload '{"id":"<projectId>"
 node dist/cli.js control --job-type unity.command-status --payload '{"id":"<projectId>","requestId":"health-001"}'
 ```
 
-Unity Bridge 由 Unity **主动出站**连接 Relay 的 `/unity`：一条长连接，不需要发现文件、端口级联或每命令一次握手，断线按退避重连。中继侧不再有"读取本地发现文件并拨入 `/bridge`"的兼容路径——升级后必须重启 Relay，否则 Unity 侧只会记录"未连接"。握手校验 Bridge token、协议版本、精确产品版本与项目路径；Relay 使用 `FIGMA_RELAY_BRIDGE_TOKEN`（未设置时回退 `FIGMA_RELAY_TOKEN`），`unity.bridge.install` 会把该 token 写入目标工程的 `ProjectSettings/FigmaBridgeImportSettings.json`，不会写入日志或公开状态。公开 `unity.gateway.get` 不返回令牌，会话在线时返回 `transport: "inbound"` 与会话心跳时间，离线时返回 `{"found": false}`。
+Unity Bridge 由 Unity **主动出站**连接 Relay 的 `/unity`：一条长连接，不需要发现文件、端口级联或每命令一次握手，断线按退避重连。中继侧不再有"读取本地发现文件并拨入 `/bridge`"的兼容路径——升级后必须重启 Relay，否则 Unity 侧只会记录"未连接"。握手校验 Bridge token、协议版本、精确产品版本与项目路径。公开 `unity.gateway.get` 不返回令牌，会话在线时返回 `transport: "inbound"` 与会话心跳时间，离线时返回 `{"found": false}`。
+
+Relay 使用 `FIGMA_RELAY_BRIDGE_TOKEN`（未设置时回退 `FIGMA_RELAY_TOKEN`）。`unity.bridge.install` 按工程把凭据保存到当前用户的 `%LOCALAPPDATA%/FigmaRelay/unity-bridge/`（其他平台为 `~/.figma-relay/unity-bridge/`）。安装会清除 `ProjectSettings/FigmaBridgeImportSettings.json` 中的旧 `relayToken` 字段并保留共享导入设置。已有工程在新版本首次使用时需通过 Relay 重新安装 Bridge。手工更换时，在 Unity 的 **Tools → Figma Bridge** 中填入新 Token，点 **保存并重连**。如果旧 Token 已提交到 Git，应另外轮换 Relay 上对应的凭据。
 
 ## 长驻模式（消除每命令一次进程启动与握手）
 

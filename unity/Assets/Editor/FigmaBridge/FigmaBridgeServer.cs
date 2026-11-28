@@ -80,6 +80,8 @@ namespace MagicWarrior.Editor.FigmaBridge
         /// <summary>Unity 出站连接的 Relay 端点（新版中继在 /unity 接收）</summary>
         internal static string RelayClientUrl => $"ws://127.0.0.1:{RelayPort}/unity";
 
+        internal static string RelayTokenPath => FigmaBridgeCredentials.GetTokenPath(Path.GetDirectoryName(Application.dataPath));
+
         private static int ClampRelayPort(int port) => port < 1 || port > 65535 ? DefaultRelayPort : port;
 
         // ─────────────────────── 生命周期 ───────────────────────
@@ -103,7 +105,9 @@ namespace MagicWarrior.Editor.FigmaBridge
         {
             if (_running) return;
 
-            _webSocketTransport = new BridgeWebSocketTransport(Version, Path.GetDirectoryName(Application.dataPath), FigmaBridgeImportSettings.RelayToken);
+            string projectPath = Path.GetDirectoryName(Application.dataPath);
+            string tokenPath = RelayTokenPath;
+            _webSocketTransport = new BridgeWebSocketTransport(Version, projectPath, () => FigmaBridgeCredentials.ReadToken(tokenPath));
             _webSocketTransport.StartRelayClient(RelayClientUrl);
             _running = true;
 

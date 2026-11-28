@@ -13,9 +13,9 @@ internal static class Program
 {
     static async Task Main(string[] args)
     {
-        var transport = new BridgeWebSocketTransport(args[0], args[1], args[2]);
+        var transport = new BridgeWebSocketTransport(args[0], args[1], () => args[2]);
         transport.StartRelayClient(args[3]);
-        Console.WriteLine(JsonSerializer.Serialize(new { relayUrl = args[2], projectPath = args[1], version = args[0] }));
+        Console.WriteLine(JsonSerializer.Serialize(new { relayUrl = args[3], projectPath = args[1], version = args[0] }));
         Console.Out.Flush();
         await Task.Delay(Timeout.Infinite);
     }

@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -46,6 +47,7 @@ namespace MagicWarrior.Editor.FigmaBridge
         private int _serverPort = FigmaBridgeServer.RelayPort;
         private TMP_FontAsset _importFont;
         private string _relayToken = "";
+        private string _relayTokenError = "";
 
         /// <summary>最近一次推送的 Prefab 名称</summary>
         private string _lastPushPrefabName = "";
@@ -77,7 +79,6 @@ namespace MagicWarrior.Editor.FigmaBridge
             _figmaFileUrl = EditorPrefs.GetString(PrefsFigmaUrlKey, "");
             _serverPort = FigmaBridgeServer.RelayPort;
             _importFont = FigmaBridgeImportSettings.Font;
-            _relayToken = FigmaBridgeImportSettings.RelayToken;
         }
 
         /// <summary>
@@ -210,10 +211,32 @@ namespace MagicWarrior.Editor.FigmaBridge
         private void DrawRelayTokenConfig()
         {
             EditorGUILayout.LabelField("Relay Bridge 认证", EditorStyles.boldLabel);
-            EditorGUI.BeginChangeCheck();
-            _relayToken = EditorGUILayout.PasswordField("Bridge Token", _relayToken);
-            if (EditorGUI.EndChangeCheck()) FigmaBridgeImportSettings.SetRelayToken(_relayToken);
-            EditorGUILayout.HelpBox("必须与 Relay 的 FIGMA_RELAY_BRIDGE_TOKEN（或 FIGMA_RELAY_TOKEN）一致。", MessageType.Info);
+            _relayToken = EditorGUILayout.PasswordField("新 Bridge Token", _relayToken);
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(_relayToken)))
+            {
+                if (GUILayout.Button("保存并重连")) ApplyRelayToken();
+            }
+            EditorGUILayout.HelpBox("安装 Unity Bridge 时会自动配置本机凭据。只在需要手动更换时填写。", MessageType.Info);
+            if (!string.IsNullOrEmpty(_relayTokenError))
+                EditorGUILayout.HelpBox(_relayTokenError, MessageType.Error);
+        }
+
+        private void ApplyRelayToken()
+        {
+            try
+            {
+                FigmaBridgeCredentials.WriteToken(FigmaBridgeServer.RelayTokenPath, _relayToken.Trim());
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                _relayTokenError = "无法保存本机 Bridge 凭据，请检查当前系统用户的配置目录权限。";
+                return;
+            }
+
+            _relayToken = string.Empty;
+            _relayTokenError = string.Empty;
+            FigmaBridgeServer.Stop();
+            FigmaBridgeServer.Start();
         }
 
         /// <summary>

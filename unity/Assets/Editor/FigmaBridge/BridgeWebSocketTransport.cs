@@ -59,7 +59,7 @@ namespace MagicWarrior.Editor.FigmaBridge
 
         private readonly string _version;
         private readonly string _projectPath;
-        private readonly string _bridgeToken;
+        private readonly Func<string> _readBridgeToken;
         private readonly bool _windows;
         private readonly object _sync = new object();
         private readonly Dictionary<string, Record> _records = new Dictionary<string, Record>();
@@ -68,10 +68,10 @@ namespace MagicWarrior.Editor.FigmaBridge
         private volatile bool _relayClientRegistered;
         private volatile bool _relayClientStarted;
 
-        internal BridgeWebSocketTransport(string version, string projectPath, string bridgeToken)
+        internal BridgeWebSocketTransport(string version, string projectPath, Func<string> readBridgeToken)
         {
             _version = version;
-            _bridgeToken = bridgeToken ?? string.Empty;
+            _readBridgeToken = readBridgeToken;
             _windows = Application.platform == RuntimePlatform.WindowsEditor;
             _projectPath = Path.GetFullPath(projectPath).TrimEnd('/', '\\');
         }
@@ -108,7 +108,7 @@ namespace MagicWarrior.Editor.FigmaBridge
                                 role = "unity",
                                 protocolVersion = 1,
                                 clientVersion = _version,
-                                bridgeToken = _bridgeToken,
+                                bridgeToken = _readBridgeToken(),
                                 projectPath = _projectPath,
                                 capabilities = new[] { "unity.command" }
                             });
