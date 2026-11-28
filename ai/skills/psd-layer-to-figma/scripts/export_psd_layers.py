@@ -1051,6 +1051,81 @@ def _effect_rgb(descriptor: Any) -> Optional[Dict[str, float]]:
     return {"r": red / 255, "g": green / 255, "b": blue / 255, "a": 1.0}
 
 
+def _read_text_shadows(payload: Optional[bytes], stroke: Optional[Dict[str, Any]]) -> Tuple[Any, Optional[Dict[str, Any]]]:
+    if not payload or b"DrSh" not in payload:
+        return None, stroke
+    try:
+        from psd_tools.psd.descriptor import Descriptor, DescriptorBlock2, List as DescriptorList
+
+        effects = DescriptorBlock2.frombytes(payload)
+    except Exception:
+        return _parse_drop_shadow_effect(payload), stroke
+    if not _effect_value(effects, b"masterFXSwitch", True):
+        return None, None
+
+    shadows = []
+    outline_shadow = None
+    for item in effects.values():
+        for effect in (item if isinstance(item, DescriptorList) else [item]):
+            if not isinstance(effect, Descriptor) or effect.classID != b"DrSh":
+                continue
+            if not _effect_value(effect, b"enab", False) or not _effect_value(effect, b"present", True):
+                continue
+            opacity = _effect_value(effect, b"Opct", 100) / 100
+            if opacity <= 0:
+                continue
+            color = _effect_rgb(effect.get(b"Clr "))
+            if color:
+                color = {
+                    **{channel: color[channel] for channel in "rgb"},
+                    "rgb255": [round(color[channel] * 255, 3) for channel in "rgb"],
+                    "hex": _rgb_to_hex(color["r"], color["g"], color["b"]),
+                }
+            distance = _effect_value(effect, b"Dstn", 0)
+            spread = _effect_value(effect, b"Ckmt", 0)
+            blur = _effect_value(effect, b"blur", 0)
+            contour = effect.get(b"TrnS")
+            points = contour.get(b"Crv ", []) if contour is not None else []
+            linear_contour = contour is None or [
+                (_effect_value(point, b"Hrzn"), _effect_value(point, b"Vrtc")) for point in points
+            ] == [(0, 0), (255, 255)]
+            shadow = {
+                "enabled": True, "present": True, "opacity": opacity,
+                "angle": _effect_value(effect, b"lagl", 0), "distance": distance,
+                "spread": spread, "blur": blur, "color": color,
+            }
+            hard = (color and spread == 100 and blur > 0 and linear_contour
+                    and _effect_value(effect, b"Nose", 0) == 0
+                    and getattr(effect.get(b"Md  "), "enum", b"Nrml") == b"Nrml")
+            if (hard and stroke and stroke.get("enabled") is True
+                    and stroke.get("position") == "OUTSIDE" and stroke.get("join") == "ROUND"
+                    and stroke.get("opacity") == 1 and stroke.get("size") == blur and stroke.get("color")):
+                # Figma projects the stroked glyph. The outline supplies the same growth as Photoshop's hard spread.
+                shadow["hardSpreadWithStroke"] = True
+            if hard and opacity == 1 and blur <= 8:
+                shadow["hardSpread"] = True
+            if hard and distance == 0 and outline_shadow is None:
+                outline_shadow = shadow
+            shadows.append(shadow)
+
+    # A stroke is painted above all shadows in Figma. When Photoshop uses
+    # several hard shadows together, keep them all below the text face instead.
+    if (stroke is None and outline_shadow and 1 < len(shadows) <= 3
+            and any(shadow["distance"] > 0 for shadow in shadows)
+            and all(shadow.get("hardSpread") for shadow in shadows)):
+        return shadows, None
+    for shadow in shadows:
+        shadow.pop("hardSpread", None)
+    if stroke is None and outline_shadow:
+        stroke = {
+            "enabled": True, "present": True, "position": "OUTSIDE", "join": "ROUND",
+            "opacity": outline_shadow["opacity"], "size": outline_shadow["blur"], "color": outline_shadow["color"],
+        }
+        shadows.remove(outline_shadow)
+    # Keep the existing shape for PSDs with zero or one native shadow.
+    return (shadows if len(shadows) > 1 else next(iter(shadows), None)), stroke
+
+
 def _read_linear_overlay(effect: Any) -> Optional[Dict[str, Any]]:
     gradient = effect.get(b"Grad")
     offset = effect.get(b"Ofst")
@@ -1227,6 +1302,7 @@ def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]
         warnings.append(fill_overlay["unsupportedFillOverlay"])
     has_multiline = "\n" in characters if characters else False
     line_height_mode = "PIXELS" if has_multiline and leading is not None and leading > 0.01 else "AUTO"
+    drop_shadow, stroke = _read_text_shadows(effects_payload, _parse_stroke_effect(effects_payload))
     return {
         "characters": characters or "",
         "fontFamily": font_family,
@@ -1244,15 +1320,15 @@ def _build_text_info(tag_payloads: Dict[str, bytes]) -> Optional[Dict[str, Any]]
         "textAlignHorizontal": alignment,
         "source": "TySh/EngineData",
         "effects": {
-            "stroke": _parse_stroke_effect(effects_payload),
-            "dropShadow": _parse_drop_shadow_effect(effects_payload),
+            "stroke": stroke,
+            "dropShadow": drop_shadow,
         },
         "figma": {
             "fontFallbackCandidates": ([{"family": font_family, "style": "Regular"}] if font_family else []) + TEXT_FONT_FALLBACK_CANDIDATES,
             "notes": [
                 "PSD 字号默认按 1:1 写入 Figma；缺失原字体时先测量候选字体宽度，再按 bounds 做最小比例微调。",
                 "PSD FillColor Values 顺序为 A,R,G,B；Figma 颜色使用 R,G,B 的 0 到 1 通道。",
-                "lfx2 FrFX/Sz 映射为 Figma strokeWeight；DrSh 仅在 enabled=true 时映射为 DROP_SHADOW。",
+                "FrFX/Sz 与零距离硬投影映射为 Figma 描边，其余已启用的 DrSh 按顺序映射为 DROP_SHADOW。",
             ],
         },
         "warnings": warnings,
@@ -3037,7 +3113,8 @@ def _generate_summary(
             } if stroke else None
             drop_shadow = t.get("effects", {}).get("dropShadow")
             entry["dropShadow"] = {
-                "enabled": drop_shadow.get("enabled", False),
+                "enabled": True,
+                "count": len(drop_shadow) if isinstance(drop_shadow, list) else 1,
             } if drop_shadow else None
             entry["fontFallback"] = t.get("figma", {}).get("fontFallbackCandidates", [])[:3]
             text_layers.append(entry)

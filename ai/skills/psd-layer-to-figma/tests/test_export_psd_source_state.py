@@ -3,7 +3,7 @@ import math
 import unittest
 from pathlib import Path
 
-from psd_tools.psd.descriptor import Bool, Descriptor, DescriptorBlock2, Double, Enumerated, Integer, List
+from psd_tools.psd.descriptor import Bool, Descriptor, DescriptorBlock2, Double, Enumerated, Integer, List, UnitFloat
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "export_psd_layers.py"
@@ -60,6 +60,48 @@ def _text_info(effects):
 
 
 class PsdSourceStateTests(unittest.TestCase):
+    def test_matching_outside_stroke_supplies_hard_spread_for_translucent_shadow(self):
+        for spread, stroke_size, stroke_opacity, stroke_position, marked in (
+                (100, 4, 100, b"OutF", True), (50, 4, 100, b"OutF", False),
+                (100, 3, 100, b"OutF", False), (100, 4, 60, b"OutF", False),
+                (100, 4, 100, b"InsF", False)):
+            with self.subTest(spread=spread, size=stroke_size, opacity=stroke_opacity, position=stroke_position):
+                stroke = _overlay(b"FrFX", {
+                    b"Styl": Enumerated(b"FStl", stroke_position),
+                    b"Opct": UnitFloat(stroke_opacity, b"#Prc"), b"Sz  ": UnitFloat(stroke_size, b"#Pxl"),
+                    b"Clr ": _rgb(17, 44, 19),
+                })
+                shadow = _overlay(b"DrSh", {
+                    b"Clr ": _rgb(0, 0, 0), b"Opct": Double(47), b"lagl": Double(92),
+                    b"Dstn": Double(4), b"Ckmt": Double(spread), b"blur": Double(4),
+                })
+                text = _text_info(_effect_payload({b"FrFX": stroke, b"DrSh": shadow}))
+                parsed = text["effects"]["dropShadow"]
+                self.assertIs(parsed.get("hardSpreadWithStroke", False), marked)
+                self.assertEqual((parsed["opacity"], parsed["angle"], parsed["distance"], parsed["blur"], parsed["spread"]),
+                                 (0.47, 92, 4, 4, spread))
+
+    def test_hard_shadow_stack_preserves_the_centered_outline_and_extrusion_below_the_face(self):
+        def shadow(rgb, distance, blur, enabled=True):
+            return _overlay(b"DrSh", {
+                b"Clr ": _rgb(*rgb), b"lagl": Double(90), b"Dstn": Double(distance),
+                b"Ckmt": Double(100), b"blur": Double(blur),
+            }, enabled)
+
+        effects = _effect_payload({b"dropShadowMulti": List([
+            shadow((0, 0, 0), 0, 50, enabled=False),
+            shadow((156, 65, 29), 3, 1),
+            shadow((0, 0, 0), 3, 4),
+            shadow((0, 0, 0), 0, 2),
+        ])})
+        text = _text_info(effects)
+        self.assertIsNone(text["effects"]["stroke"])
+        self.assertEqual(
+            [(item["color"]["hex"], item["distance"], item["blur"], item["hardSpread"])
+             for item in text["effects"]["dropShadow"]],
+            [("#9C411D", 3, 1, True), ("#000000", 3, 4, True), ("#000000", 0, 2, True)],
+        )
+
     def test_opaque_normal_color_overlay_overrides_engine_fill(self):
         white = _overlay(b"SoFi", {b"Clr ": _rgb(255, 255, 255)})
         active = _text_info(_effect_payload({b"SoFi": white}))

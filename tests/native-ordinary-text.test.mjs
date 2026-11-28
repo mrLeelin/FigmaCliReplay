@@ -74,10 +74,13 @@ function fixture({ fontFailure = false } = {}) {
     "applyPsdTextFill", "createPsdTextFillPaint", "createPsdTextGradientPaint", "psdTextFillMatches",
     "psdTextPaintMatches", "closeNumber", "validateTextAgainstLayer",
     "applyPsdTextStroke", "psdTextLayerStroke", "verifyPsdTextStroke", "psdSolidPaintMatches", "psdNumberMatches",
-    "isValidPsdTextGradient", "isValidPsdTextFillRuns", "isPsdTextFillPath", "isPsdTextPaintPath", "psdTextFillAffected",
+    "isValidPsdTextGradient", "isValidPsdTextFillRuns", "isPsdTextFillPath", "isPsdTextAppearancePath", "psdTextFillAffected",
     "appendPsdMutationPreflightConflicts",
     "applyPsdGeometryPlan", "applyPsdMutationPlans",
-    "centerNodeOnLayer", "applyPsdTextShadow", "writeLayerMetadata", "capturePsdLayerMetadata",
+    "centerNodeOnLayer", "roundNumber", "psdTextShadowOffset", "psdTextShadowEffects", "psdTextShadowEffect",
+    "expandPsdHardTextShadows",
+    "applyPsdTextShadow", "verifyPsdTextShadow", "clonePsdValue",
+    "buildPsdLiveTextShadow", "writeLayerMetadata", "capturePsdLayerMetadata",
     "capturePsdTextLayout", "readPsdGeometryInRoot",
     "createTextLayer", "createImageLayer", "createLayerNode", "importPsdJob",
     "appendPsdIncrementalRuntimeConflicts", "applyPsdTextPlan",
@@ -166,6 +169,88 @@ test("a Photoshop text stroke keeps its rounded corners and paint opacity", asyn
   assert.equal(api.validateTextAgainstLayer(node, input).strokeMismatch, false);
   node.strokeJoin = "MITER";
   assert.equal(api.validateTextAgainstLayer(node, input).strokeMismatch, true);
+});
+
+test("native text projects Photoshop light angles away from the light source", async () => {
+  const { api, root, context } = fixture();
+  for (const [angle, expectedX, expectedY] of [[0, -6, 0], [90, 0, 6], [99, 0.938607, 5.926130]]) {
+    const shadow = { enabled: true, angle, distance: 6, opacity: 0.8, blur: 2, spread: 100 };
+    const input = api.normalizeLayer(layer({ sourceState: { text: { dropShadow: shadow }, geometry: {}, display: {} } }));
+    const node = await api.createLayerNode(root, input, context);
+    const [effect] = node.effects;
+
+    assert.equal(effect.type, "DROP_SHADOW");
+    assert.ok(Math.abs(effect.offset.x - expectedX) < 1e-5);
+    assert.ok(Math.abs(effect.offset.y - expectedY) < 1e-5);
+    assert.equal(effect.spread, 0);
+    assert.equal(api.verifyPsdTextShadow(node, shadow), true);
+    const live = api.buildPsdLiveTextShadow(node, shadow);
+    assert.ok(Math.abs(live.angle - angle) < 1e-5);
+    assert.equal(live.spread, 100);
+  }
+});
+
+test("PSD text creates and validates the full ordered shadow stack", async () => {
+  const { api, root, context } = fixture();
+  const shadows = [
+    { enabled: true, color: { r: 0.6, g: 0.25, b: 0.1 }, angle: 90, distance: 3, blur: 1, spread: 100 },
+    { enabled: true, color: { r: 0, g: 0, b: 0 }, angle: 90, distance: 3, blur: 4, spread: 100 },
+  ];
+  const input = api.normalizeLayer(layer({ sourceState: { text: { dropShadow: shadows }, geometry: {}, display: {} } }));
+  const node = await api.createLayerNode(root, input, context);
+
+  assert.deepEqual(Array.from(node.effects, effect => effect.radius), [1, 4]);
+  assert.equal(api.verifyPsdTextShadow(node, shadows), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.buildPsdLiveTextShadow(node, shadows))), shadows);
+  node.effects = node.effects.slice(0, 1);
+  assert.equal(api.verifyPsdTextShadow(node, shadows), false);
+  assert.notEqual(JSON.stringify(api.buildPsdLiveTextShadow(node, shadows)), JSON.stringify(shadows));
+});
+
+test("an outside text stroke carries matching PSD hard spread at the original shadow opacity", async () => {
+  const { api, root, context } = fixture();
+  const stroke = { enabled: true, position: "OUTSIDE", size: 4, opacity: 1, color: { r: 0.07, g: 0.17, b: 0.07 } };
+  const dropShadow = {
+    enabled: true, color: { r: 0, g: 0, b: 0 }, opacity: 0.47,
+    angle: 92, distance: 4, blur: 4, spread: 100, hardSpreadWithStroke: true,
+  };
+  const input = api.normalizeLayer(layer({ stroke, sourceState: { text: { stroke, dropShadow } } }));
+  const node = await api.createLayerNode(root, input, context);
+  const [effect] = node.effects;
+
+  assert.equal(node.type, "TEXT");
+  assert.equal(node.strokeWeight, 4);
+  assert.equal(node.strokeAlign, "OUTSIDE");
+  assert.equal(node.effects.length, 1);
+  assert.equal(effect.color.a, 0.47);
+  assert.ok(Math.abs(effect.offset.x - 0.139598) < 1e-6);
+  assert.ok(Math.abs(effect.offset.y - 3.997563) < 1e-6);
+  assert.equal(effect.radius, 0);
+  assert.equal(effect.spread, 0);
+  assert.equal(api.verifyPsdTextShadow(node, dropShadow), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.buildPsdLiveTextShadow(node, dropShadow))), dropShadow);
+
+  node.effects = [{ ...effect, radius: 4 }];
+  assert.equal(api.verifyPsdTextShadow(node, dropShadow), false);
+  assert.equal(api.buildPsdLiveTextShadow(node, dropShadow).figmaDrift, "changed-drop-shadows");
+});
+
+test("PSD text expands hard shadows as editable glyph effects underneath the face", async () => {
+  const { api, root, context } = fixture();
+  const dropShadow = { enabled: true, angle: 90, distance: 3, blur: 2, hardSpread: true };
+  const input = api.normalizeLayer(layer({ sourceState: { text: { dropShadow } } }));
+  const node = await api.createLayerNode(root, input, context);
+
+  assert.equal(node.type, "TEXT");
+  assert.ok(node.effects.length > 1);
+  assert.ok(node.effects.every(effect => effect.type === "DROP_SHADOW" && effect.radius === 0));
+  assert.ok(node.effects.some(effect => Math.abs(effect.offset.x - 2) < 1e-6 && effect.offset.y === 3));
+  assert.equal(api.verifyPsdTextShadow(node, dropShadow), true);
+  const brown = { ...dropShadow, blur: 1, color: { r: 0.61, g: 0.25, b: 0.11 } };
+  api.applyPsdTextShadow(node, [brown, { ...dropShadow, blur: 4 }, { ...dropShadow, distance: 0 }]);
+  assert.equal(node.effects.length, 8);
+  assert.equal(node.effects[0].color.r, 0);
+  assert.equal(node.effects[7].color.r, 0.61);
 });
 
 test("PSD title gradient is written as native text and validated with the Photoshop layer bounds", async () => {
@@ -466,12 +551,13 @@ test("ordinary incremental edits are blocked using incoming or persisted role be
   }
 });
 
-test("paint-only incremental changes preserve editable mixed-font text sizing", async () => {
+test("appearance-only incremental changes preserve editable mixed-font text sizing", async () => {
   const { api } = fixture();
   const input = layer();
   const node = { type: "TEXT", characters: input.chars, textAutoResize: "WIDTH_AND_HEIGHT", fontName: Symbol() };
   const target = { metadata: { psdImportSchemaVersion: "3", psdCanvasWidth: "800", psdCanvasHeight: "1200" } };
-  const changedPaths = ["text.fillColor", "text.stroke"];
+  const changedPaths = ["text.fillColor", "text.stroke", "text.dropShadow"];
+  const shadow = { enabled: true, distance: 3, blur: 4, angle: 90, spread: 100 };
   const pair = { source: input, target: { node, nodeId: "1:5", ownership: "text-content" }, changes: changedPaths.map(path => ({ path })) };
   const diff = { changed: [pair], conflicts: [] };
   api.appendPsdIncrementalRuntimeConflicts(diff, target, [{ layerId: "101" }], {}, { canvas: { width: 800, height: 1200 }, layers: [input] });
@@ -479,13 +565,18 @@ test("paint-only incremental changes preserve editable mixed-font text sizing", 
   await api.applyPsdMutationPlans({ plans: [{
     layerId: "101", source: input, target: pair.target,
     incoming: {
-      text: { fillColor: { r: 0.55, g: 0.55, b: 0.59, a: 1 }, stroke: { ...input.stroke, join: "ROUND" } },
+      text: {
+        fillColor: { r: 0.55, g: 0.55, b: 0.59, a: 1 },
+        stroke: { ...input.stroke, join: "ROUND" },
+        dropShadow: [shadow, { ...shadow, blur: 2 }],
+      },
       geometry: {},
     },
     categories: ["textStyle"], changedPaths,
   }] });
   assert.equal(node.fills[0].color.b, 0.59);
   assert.equal(node.strokeJoin, "ROUND");
+  assert.deepEqual(Array.from(node.effects, effect => effect.radius), [4, 2]);
   assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
   assert.equal(typeof node.fontName, "symbol");
 });

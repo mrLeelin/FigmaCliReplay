@@ -1,4 +1,4 @@
-// Figma Relay build #384
+// Figma Relay build #385
 function createImageHealth(status, reason, details = {}) {
   return Object.assign({ status, reason }, details);
 }
@@ -174,15 +174,15 @@ const pluginLogger = new PluginLogger({
     figma.ui.postMessage({ type: "LOG_EVENT", event: event });
   }
 });
-// Figma Relay build #384
+// Figma Relay build #385
 figma.showUI(__html__, {
   width: 1120,
   height: 800,
   themeColors: true
 });
-// DIAG: 插件启动标记 (384 由 build.py 替换)
-figma.notify("Figma Relay 插件已加载 (build 384)", { timeout: 1000 });
-pluginLogger.info("插件初始化完成", { build: "384" });
+// DIAG: 插件启动标记 (385 由 build.py 替换)
+figma.notify("Figma Relay 插件已加载 (build 385)", { timeout: 1000 });
+pluginLogger.info("插件初始化完成", { build: "385" });
 
 const McpMetadataNamespace = "psd_layer_to_figma_bridge";
 const PrefabToFigmaNamespace = "prefab_to_figma";
@@ -446,7 +446,7 @@ await handleFigmaHierarchyCleanupAnalyze(message);
       requestId: message.requestId,
       result: {
         status: "completed",
-        build: "384",
+        build: "385",
         fileKey: figma.fileKey || "",
         pageName: figma.currentPage && figma.currentPage.name ? figma.currentPage.name : ""
       }
@@ -10906,15 +10906,14 @@ function buildPsdLiveTextStroke(node, storedStroke) {
 }
 
 function buildPsdLiveTextShadow(node, storedShadow) {
+  if (verifyPsdTextShadow(node, storedShadow)) return clonePsdValue(storedShadow) ?? null;
   const shadows = Array.isArray(node && node.effects)
     ? node.effects.filter((effect) => effect && effect.visible !== false && effect.type === "DROP_SHADOW")
     : [];
-  if (shadows.length === 0) {
-    return storedShadow && storedShadow.enabled === false
-      ? clonePsdValue(storedShadow)
-      : null;
+  if (shadows.length === 0) return null;
+  if (shadows.length !== 1 || Array.isArray(storedShadow) || storedShadow?.hardSpreadWithStroke === true) {
+    return { figmaDrift: "changed-drop-shadows" };
   }
-  if (shadows.length !== 1) return { figmaDrift: "multiple-drop-shadows" };
   const effect = shadows[0];
   const offsetX = numericOr(effect.offset && effect.offset.x, 0);
   const offsetY = numericOr(effect.offset && effect.offset.y, 0);
@@ -10926,9 +10925,9 @@ function buildPsdLiveTextShadow(node, storedShadow) {
     enabled: true,
     present: true,
     opacity: numericOr(effect.color && effect.color.a, 1),
-    angle: (Math.atan2(-offsetY, offsetX) * 180 / Math.PI + 360) % 360,
+    angle: (Math.atan2(offsetY, -offsetX) * 180 / Math.PI + 360) % 360,
     distance: Math.sqrt(offsetX * offsetX + offsetY * offsetY),
-    spread: Math.max(0, numericOr(effect.spread, 0)),
+    spread: storedShadow?.spread ?? 0,
     blur: Math.max(0, numericOr(effect.radius, 0)),
     color: {
       ...clonePsdValue(storedColor),
@@ -11054,7 +11053,7 @@ function appendPsdIncrementalRuntimeConflicts(diff, target, currentNodes, job, m
   for (const pair of diff.changed) {
     const node = pair.target.node;
     const textWithoutLayoutChange = pair.source.mode === "text" && pair.changes.length > 0
-      && pair.changes.every((change) => isPsdTextPaintPath(change.path) || change.path === "display.visible");
+      && pair.changes.every((change) => isPsdTextAppearancePath(change.path) || change.path === "display.visible");
     if (!textWithoutLayoutChange && (isOrdinaryTextLayer(pair.source) || readSharedPluginData(node, "textRole") === "ordinary")) {
       diff.conflicts.push({
         kind: "ordinary-text-requires-native-replacement",
@@ -11416,18 +11415,71 @@ function applyPsdTextStroke(node, stroke) {
   if (stroke.join === "ROUND") node.strokeJoin = "ROUND";
 }
 
-function applyPsdTextShadow(node, shadow) {
-  const retained = Array.isArray(node.effects)
-    ? node.effects.filter((effect) => !effect || effect.type !== "DROP_SHADOW")
-    : [];
-  if (!shadow || shadow.enabled !== true) {
-    node.effects = retained;
-    return;
-  }
-  const color = shadow.color || {};
-  const angleRadians = numericOr(shadow.angle, 0) * Math.PI / 180;
+function psdTextShadowOffset(shadow) {
+  // Photoshop stores the direction of the light. The shadow falls away from it.
+  const angle = numericOr(shadow.angle, 0) * Math.PI / 180;
   const distance = numericOr(shadow.distance, 0);
-  retained.push({
+  return { x: -Math.cos(angle) * distance, y: Math.sin(angle) * distance };
+}
+
+function psdTextShadowEffects(shadowState) {
+  const shadows = Array.isArray(shadowState) ? shadowState : [shadowState];
+  const enabled = shadows.filter((shadow) => shadow && shadow.enabled === true);
+  const effects = enabled.map(psdTextShadowEffect);
+  return enabled.length && enabled.every((shadow) => shadow.hardSpread === true)
+    ? expandPsdHardTextShadows(effects)
+    : effects;
+}
+
+function expandPsdHardTextShadows(effects) {
+  const groups = [];
+  for (const effect of effects) {
+    const color = effect.color;
+    const previous = groups[groups.length - 1];
+    if (previous && ["r", "g", "b", "a"].every(channel => previous[0].color[channel] === color[channel])) {
+      previous.push(effect);
+    } else {
+      groups.push([effect]);
+    }
+  }
+  // Figma renders at most eight drop shadows on one layer. Reserve two
+  // offsets for each foreground color and use the rest for the rear contour.
+  const backToFront = groups.map((group, index) => {
+    const base = group[0];
+    const count = index === groups.length - 1 ? 8 - 2 * index : 2;
+    if (count === 2) {
+      const length = Math.hypot(base.offset.x, base.offset.y);
+      return [{ ...base, radius: 0 }, {
+        ...base, radius: 0,
+        offset: {
+          x: roundNumber(base.offset.x + (length ? base.offset.x / length : 0) * base.radius),
+          y: roundNumber(base.offset.y + (length ? base.offset.y / length : 1) * base.radius)
+        }
+      }];
+    }
+    return Array.from({ length: count }, (_, sample) => {
+      const angle = sample * 2 * Math.PI / count + (count === 8 ? 0 : -Math.PI / 2);
+      const x = Math.cos(angle);
+      const y = Math.sin(angle);
+      // For each direction, pick the source silhouette with the farthest spread.
+      const support = effect => effect.offset.x * x + effect.offset.y * y + effect.radius;
+      const outer = group.reduce((best, effect) => support(effect) > support(best) ? effect : best);
+      return {
+        ...outer, radius: 0,
+        offset: {
+          x: roundNumber(outer.offset.x + x * outer.radius),
+          y: roundNumber(outer.offset.y + y * outer.radius)
+        }
+      };
+    });
+  });
+  // Figma composites the last effect over earlier shadows.
+  return backToFront.reverse().flat();
+}
+
+function psdTextShadowEffect(shadow) {
+  const color = shadow.color || {};
+  return {
     type: "DROP_SHADOW",
     color: {
       r: numericOr(color.r, 0),
@@ -11435,16 +11487,20 @@ function applyPsdTextShadow(node, shadow) {
       b: numericOr(color.b, 0),
       a: numericOr(shadow.opacity, numericOr(color.a, 1))
     },
-    offset: {
-      x: Math.cos(angleRadians) * distance,
-      y: -Math.sin(angleRadians) * distance
-    },
-    radius: Math.max(0, numericOr(shadow.blur, 0)),
-    spread: Math.max(0, numericOr(shadow.spread, 0)),
+    offset: psdTextShadowOffset(shadow),
+    // Figma casts the shadow from the painted glyph, including its outside stroke.
+    radius: shadow.hardSpreadWithStroke === true ? 0 : Math.max(0, numericOr(shadow.blur, 0)),
+    spread: 0, // Figma text nodes have no spread property for shadows.
     visible: true,
     blendMode: "NORMAL"
-  });
-  node.effects = retained;
+  };
+}
+
+function applyPsdTextShadow(node, shadowState) {
+  const retained = Array.isArray(node.effects)
+    ? node.effects.filter((effect) => !effect || effect.type !== "DROP_SHADOW")
+    : [];
+  node.effects = [...retained, ...psdTextShadowEffects(shadowState)];
 }
 
 async function applyPsdTextPlan(plan, pair, prepared) {
@@ -11470,7 +11526,6 @@ async function applyPsdTextPlan(plan, pair, prepared) {
   if (plan.changedPaths.includes("text.textAlignHorizontal")) {
     node.textAlignHorizontal = text.textAlignHorizontal;
   }
-  if (plan.changedPaths.includes("text.dropShadow")) applyPsdTextShadow(node, text.dropShadow);
   node.textAutoResize = "NONE";
 }
 
@@ -11519,10 +11574,11 @@ async function applyPsdMutationPlans(prepared) {
     if (plan.categories.includes("content") && plan.incoming.mode === "image") {
       node.fills = replacePsdOwnedImageHash(node.fills, prepared.imagePaints.get(plan.layerId));
     }
-    if (plan.changedPaths.some((path) => path.startsWith("text.") && !isPsdTextPaintPath(path))) {
+    if (plan.changedPaths.some((path) => path.startsWith("text.") && !isPsdTextAppearancePath(path))) {
       await applyPsdTextPlan(plan, pair, prepared);
     }
     if (plan.changedPaths.includes("text.stroke")) applyPsdTextStroke(node, plan.incoming.text.stroke);
+    if (plan.changedPaths.includes("text.dropShadow")) applyPsdTextShadow(node, plan.incoming.text.dropShadow);
     if (plan.categories.some((category) => (
       category === "position" || category === "size" || category === "rotation"
     ))) {
@@ -11549,7 +11605,7 @@ async function preloadPsdMutationAssets(prepared) {
         await figma.loadFontAsync(font);
       }
     }
-    if (plan.changedPaths.some((path) => path.startsWith("text.") && !isPsdTextPaintPath(path))) {
+    if (plan.changedPaths.some((path) => path.startsWith("text.") && !isPsdTextAppearancePath(path))) {
       plan.expectedFontName = await loadBestFont(plan.source, prepared.context);
       prepared.resolvedFonts.set(plan.layerId, plan.expectedFontName);
     }
@@ -11622,24 +11678,21 @@ function verifyPsdTextStroke(node, stroke) {
     && (!stroke.join || node.strokeJoin === stroke.join);
 }
 
-function verifyPsdTextShadow(node, shadow) {
-  const effects = Array.isArray(node.effects)
+function verifyPsdTextShadow(node, shadowState) {
+  const effects = Array.isArray(node && node.effects)
     ? node.effects.filter((effect) => effect && effect.type === "DROP_SHADOW")
     : [];
-  if (!shadow || shadow.enabled !== true) return effects.length === 0;
-  if (effects.length !== 1) return false;
-  const effect = effects[0];
-  const color = shadow.color || {};
-  const angleRadians = numericOr(shadow.angle, 0) * Math.PI / 180;
-  const distance = numericOr(shadow.distance, 0);
-  return psdNumberMatches(effect.color && effect.color.r, numericOr(color.r, 0))
-    && psdNumberMatches(effect.color && effect.color.g, numericOr(color.g, 0))
-    && psdNumberMatches(effect.color && effect.color.b, numericOr(color.b, 0))
-    && psdNumberMatches(effect.color && effect.color.a, numericOr(shadow.opacity, numericOr(color.a, 1)))
-    && psdNumberMatches(effect.offset && effect.offset.x, Math.cos(angleRadians) * distance)
-    && psdNumberMatches(effect.offset && effect.offset.y, -Math.sin(angleRadians) * distance)
-    && psdNumberMatches(effect.radius, Math.max(0, numericOr(shadow.blur, 0)))
-    && psdNumberMatches(effect.spread, Math.max(0, numericOr(shadow.spread, 0)));
+  const expected = psdTextShadowEffects(shadowState);
+  return effects.length === expected.length && expected.every((shadow, index) => {
+    const effect = effects[index];
+    return effect.visible !== false
+      && (effect.blendMode || "NORMAL") === shadow.blendMode
+      && ["r", "g", "b", "a"].every((channel) => psdNumberMatches(effect.color?.[channel], shadow.color[channel]))
+      && psdNumberMatches(effect.offset?.x, shadow.offset.x)
+      && psdNumberMatches(effect.offset?.y, shadow.offset.y)
+      && psdNumberMatches(effect.radius, shadow.radius)
+      && psdNumberMatches(numericOr(effect.spread, 0), shadow.spread);
+  });
 }
 
 function verifyPsdAppliedFields(plans) {
@@ -13380,8 +13433,8 @@ function isPsdTextFillPath(path) {
   return path === "text.fillColor" || path === "text.fillGradient" || path === "text.fillRuns";
 }
 
-function isPsdTextPaintPath(path) {
-  return isPsdTextFillPath(path) || path === "text.stroke";
+function isPsdTextAppearancePath(path) {
+  return isPsdTextFillPath(path) || path === "text.stroke" || path === "text.dropShadow";
 }
 
 function psdTextFillAffected(plan) {
