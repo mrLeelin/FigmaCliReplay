@@ -8,7 +8,7 @@ description: 用通用模板将 Figma 分层界面或带布局清单的透明资
 ## 从模板开始
 
 1. 优先复用已有的分层清单、透明资源、文字和业务层级。需要读取在线 Figma 时，使用项目的 `figma-relay` 技能定位指定文件和节点。
-2. 将 [通用 HTML 模板](assets/interactive-ui-template.html) 复制到交付位置，默认命名为 `index.html`。通过 HTML 内的 `preview-config` 填入该界面的布局与交互。
+2. 已有插件导出的分层 HTML 时，沿用其中的 `preview-config`、节点 ID、父子层级和内嵌图片，从指定图层开始做动效。其他情况将 [通用 HTML 模板](assets/interactive-ui-template.html) 复制到交付位置，默认命名为 `index.html`，再通过 `preview-config` 填入布局与交互。
 3. 按源稿的尺寸、比例和叠放摆放资源。保留透明度和可编辑的 DOM 文本，使用可离线使用的字体。核对替代字体的字宽、描边和可读性。
 
 ## 配置界面

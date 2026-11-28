@@ -45,6 +45,36 @@ test("HTML motion tab is wired and the referenced skill and template are shipped
   assert.ok(fs.statSync(new URL("../" + template, import.meta.url)).isFile());
 });
 
+test("one-click HTML output embeds assets and safely preserves nested source layer records", () => {
+  assert.match(ui, /exportLayeredHtmlBtn\.addEventListener\("click", startLayeredHtmlExport\)/);
+  const templateBlock = ui.split("// BEGIN_HTML_MOTION_TEMPLATE")[1].split("// END_HTML_MOTION_TEMPLATE")[0];
+  assert.doesNotMatch(templateBlock, /<\/script[\s>]|<!--/i);
+  const build = Function(templateBlock + uiFunction("buildLayeredHtml") + "\nreturn buildLayeredHtml;")();
+  const title = "奖励 </script><script>bad()</script>";
+  const bbox = { x: 0, y: 0, width: 640, height: 804 };
+  const html = build({
+    baseName: title, size: { width: 640, height: 804 },
+    nodes: [
+      { id: "root", synthetic: true, bbox },
+      { id: "1:1", name: "容器", type: "FRAME", parentId: "root", bbox, pngBase64: "AA==" },
+      { id: "1:2", name: title, type: "TEXT", parentId: "1:1", visible: false, sourceText: title,
+        bbox: { x: 20, y: 30, width: 40, height: 50 }, pngBase64: "AQ==" }
+    ]
+  });
+  const json = html.split('<script id="preview-config" type="application/json">')[1].split("</script>")[0];
+  assert.doesNotMatch(json, /</);
+  const config = JSON.parse(json);
+  const [frame] = config.layers;
+  const [text] = frame.children;
+  assert.equal(config.scene.title, title);
+  assert.equal(frame.type, "group");
+  assert.equal(frame.asset, "1:1");
+  assert.equal(text.sourceText, title);
+  assert.equal(text.x, 20);
+  assert.equal(text.visible, false);
+  assert.equal(config.assets[text.asset], "data:image/png;base64,AQ==");
+});
+
 test("short prompt links local files and uses only a uniquely selected node", () => {
   const node = { id: "12:34", type: "FRAME", name: "反馈 {{skillPath}}", width: 640, height: 804 };
   const selection = { fileKey: "file-key", pageId: "0:1", pageName: "Page 1", nodes: [node] };

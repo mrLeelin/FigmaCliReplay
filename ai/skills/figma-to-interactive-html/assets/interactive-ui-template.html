@@ -35,8 +35,9 @@
     overflow:hidden; border-radius:18px; background:#132723;
     box-shadow:0 0 0 1px #edffea55,0 20px 55px #10231d90;
   }
+  .viewport.figma-viewport { border-radius:0; background:transparent; }
   .scene-scale { position:absolute; transform:scale(var(--scale)); transform-origin:0 0; }
-  .scene,.entry,.loop,.visual { position:absolute; inset:0; }
+  .scene,.entry,.loop,.visual,.layer-content { position:absolute; inset:0; }
   .scene { isolation:isolate; overflow:hidden; }
   .layer { position:absolute; }
   .entry,.loop,.visual,.surface { width:100%; height:100%; }
@@ -106,6 +107,9 @@
   图层的 enter 设置独立入场，loop 设置待机循环；按钮的 action 指向 actions 中的键。
   state 提供初值；文字可用 {{变量}}。动作执行完更新状态，也可打开原生面板。
   style 使用 DOM 样式名，例如 fontSize、borderRadius，尺寸需带 px。
+  Figma 导出的图层保留原始 id、name 和 figmaType。可按名称查找图层，在该对象内添加
+  "enter": {"duration":420,"y":24} 或 "loop": {"duration":1800,"scale":1.05}。
+  也可用 [data-figma-node-id="12:34"] 在 CSS 或 JS 里选择节点。
 -->
 <script id="preview-config" type="application/json">
 {
@@ -184,15 +188,34 @@ function updateText() {
   }
 }
 
+function createImage(layer) {
+  const source = config.assets[layer.asset];
+  if (typeof source !== "string" || !source.startsWith("data:image/")) {
+    throw new Error("需要内嵌的图片资源 " + layer.id);
+  }
+  const image = document.createElement("img");
+  image.src = source;
+  image.alt = layer.alt ?? "";
+  image.draggable = false;
+  images.push(image);
+  return image;
+}
+
 function renderLayer(layer, parent) {
   const {id, type, x, y, w, h} = layer;
-  if (!id || layersById.has(id) || ![x,y,w,h].every(Number.isFinite) || w <= 0 || h <= 0) {
+  if (!id || layersById.has(id) || ![x,y,w,h].every(Number.isFinite) || w < 0 || h < 0) {
     throw new Error("图层 ID 或尺寸无效 " + (id ?? ""));
   }
   const outer = document.createElement("div");
   outer.className = "layer";
   outer.dataset.layer = id;
-  Object.assign(outer.style,{left:x+"px",top:y+"px",width:w+"px",height:h+"px"});
+  if (layer.figmaType) {
+    outer.dataset.figmaNodeId = id;
+    outer.dataset.figmaName = layer.name;
+    outer.dataset.figmaType = layer.figmaType;
+  }
+  outer.hidden = layer.visible === false;
+  Object.assign(outer.style,{left:x+"px",top:y+"px",width:w+"px",height:h+"px",opacity:layer.opacity ?? ""});
   const entry = document.createElement("div");
   entry.className = "entry";
   const loop = document.createElement("div");
@@ -207,21 +230,32 @@ function renderLayer(layer, parent) {
 
   if (type === "group") {
     Object.assign(visual.style,layer.style);
-    for (const child of layer.children ?? []) renderLayer(child,visual);
+    if (layer.asset) {
+      const artwork = createImage(layer);
+      artwork.className = "surface";
+      visual.append(artwork);
+    }
+    let content = visual;
+    if (layer.clip || layer.compositedReason) {
+      content = document.createElement("div");
+      content.className = "layer-content";
+      if (layer.compositedReason) {
+        outer.dataset.figmaComposite = layer.compositedReason;
+        content.hidden = true;
+      } else {
+        const {x,y,w:clipWidth,h:clipHeight,radii} = layer.clip;
+        const edges = [y,w-x-clipWidth,h-y-clipHeight,x].map(value => value + "px").join(" ");
+        content.style.clipPath = "inset(" + edges + " round " + radii.map(value => value + "px").join(" ") + ")";
+      }
+      visual.append(content);
+    }
+    for (const child of layer.children ?? []) renderLayer(child,content);
     return;
   }
 
   let surface;
   if (type === "image") {
-    const source = config.assets[layer.asset];
-    if (typeof source !== "string" || !source.startsWith("data:image/")) {
-      throw new Error("需要内嵌的图片资源 " + id);
-    }
-    surface = document.createElement("img");
-    surface.src = source;
-    surface.alt = layer.alt ?? "";
-    surface.draggable = false;
-    images.push(surface);
+    surface = createImage(layer);
   } else if (type === "button") {
     if (!Object.hasOwn(config.actions,layer.action)) throw new Error("按钮未绑定动作 " + id);
     surface = document.createElement("button");
@@ -409,9 +443,11 @@ function bindEvents() {
 async function init() {
   config = JSON.parse(get("preview-config").textContent);
   state = {...config.state};
-  const {width,height,title,background,autoOpen} = config.scene;
+  const {width,height,title,background,autoOpen,figmaExport} = config.scene;
   if (![width,height].every(n => Number.isFinite(n) && n > 0)) throw new Error("画板尺寸无效");
   get("preview-title").textContent = title;
+  document.title = title;
+  if (figmaExport) scaleLayer.parentElement.classList.add("figma-viewport");
   scene.setAttribute("aria-label",title);
   scene.style.background = background;
   scaleLayer.style.width = width + "px";

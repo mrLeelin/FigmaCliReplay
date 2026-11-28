@@ -98,7 +98,7 @@ figma.ui.onmessage = async (message) => {
     return;
   }
 
-  if (message.type === "EXPORT_PSD_COLLECT") {
+  if (message.type === "EXPORT_PSD_COLLECT" || message.type === "EXPORT_HTML_COLLECT") {
     await handleExportPsdCollect(message);
     return;
   }

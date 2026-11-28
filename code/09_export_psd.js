@@ -35,13 +35,27 @@ function psdNeedsBackdrop(node) {
   return !!node.children && node.children.some(psdNeedsBackdrop);
 }
 
-function psdCompositeReason(node) {
+function htmlRasterClip(node) {
+  if (!node.clipsContent || !psdValidBox(node.absoluteBoundingBox)) return null;
+  var transform = node.absoluteTransform;
+  if (!transform || Math.abs(transform[0][1]) > 0.00001 || Math.abs(transform[1][0]) > 0.00001
+    || transform[0][0] <= 0 || transform[1][1] <= 0 || node.cornerSmoothing > 0) return null;
+  var corners = [node.topLeftRadius, node.topRightRadius, node.bottomRightRadius, node.bottomLeftRadius];
+  var radius = typeof node.cornerRadius === "number" ? node.cornerRadius : 0;
+  var box = node.absoluteBoundingBox;
+  return {
+    x: box.x, y: box.y, width: box.width, height: box.height,
+    radii: corners.map(function (corner) { return typeof corner === "number" ? corner : radius; })
+  };
+}
+
+function psdCompositeReason(node, html, clip) {
   if (!node.children || !node.children.length) return "";
   var reasons = [];
   if (node.type === "BOOLEAN_OPERATION") reasons.push("布尔运算");
-  if (node.clipsContent) reasons.push("容器裁切");
+  if (node.clipsContent && !clip) reasons.push("容器裁切");
   if (Array.isArray(node.effects) && node.effects.some(function (effect) { return effect.visible !== false; })) reasons.push("组效果");
-  if (typeof node.opacity === "number" && node.opacity < 1) reasons.push("组透明度");
+  if (!html && typeof node.opacity === "number" && node.opacity < 1) reasons.push("组透明度");
   if (node.children.some(function (child) { return child.isMask; })) reasons.push("蒙版");
   if (node.children.some(psdNeedsBackdrop)) reasons.push("背景模糊");
   if (node.children.some(function (child) { return child.blendMode && child.blendMode !== "NORMAL" && child.blendMode !== "PASS_THROUGH"; })) reasons.push("子层混合");
@@ -49,14 +63,15 @@ function psdCompositeReason(node) {
   return reasons.join("、");
 }
 
-function psdFlatten(root, rootOrigin, scale) {
+function psdFlatten(root, rootOrigin, scale, html) {
   var nodes = [];
   var exportQueue = [];
   function walk(node, parentId) {
     if (nodes.length >= PSD_EXPORT_LEAF_LIMIT) throw new Error("选区节点数超过上限 " + PSD_EXPORT_LEAF_LIMIT + "，请拆分导出。");
     var box = psdNodeBox(node);
     var hasChildren = "children" in node && Array.isArray(node.children) && node.children.length > 0;
-    var reason = psdCompositeReason(node);
+    var clip = html && hasChildren ? htmlRasterClip(node) : null;
+    var reason = psdCompositeReason(node, html, clip);
     var imageExpected = !!box && (box.width > 0 || box.height > 0) && (!hasChildren || psdNeedsOwnFill(node) || !!reason);
     if (node.type === "SLICE") imageExpected = false;
     var record = {
@@ -71,6 +86,14 @@ function psdFlatten(root, rootOrigin, scale) {
       } : { x: 0, y: 0, width: 0, height: 0 }
     };
     if (reason) { record.composited = true; record.compositedReason = reason; }
+    if (html) {
+      if (clip && !reason) {
+        clip.x -= rootOrigin.x;
+        clip.y -= rootOrigin.y;
+        record.clip = clip;
+      }
+      if (node.type === "TEXT") record.sourceText = node.characters;
+    }
     nodes.push(record);
     if (imageExpected) exportQueue.push({ node: node, record: record, hasChildren: hasChildren, origin: rootOrigin });
     if (hasChildren) for (var i = 0; i < node.children.length; i += 1) walk(node.children[i], node.id);
@@ -163,15 +186,17 @@ function psdSelectionRoots(selection) {
 
 async function handleExportPsdCollect(message) {
   var requestId = message.requestId || "";
+  var html = message.type === "EXPORT_HTML_COLLECT";
+  var prefix = html ? "EXPORT_HTML" : "EXPORT_PSD";
   if (psdExportCollectBusy) {
-    figma.ui.postMessage({ type: "EXPORT_PSD_COLLECT_ERROR", requestId: requestId, error: "已有 PSD 正在采集，请等待完成。" });
+    figma.ui.postMessage({ type: prefix + "_COLLECT_ERROR", requestId: requestId, error: "已有导出正在采集，请等待完成。" });
     return;
   }
   psdExportCollectBusy = true;
   var skipInvisible = figma.skipInvisibleInstanceChildren;
   try {
     figma.skipInvisibleInstanceChildren = false;
-    var scale = message.scale == null ? 1 : Number(message.scale);
+    var scale = html || message.scale == null ? 1 : Number(message.scale);
     if (!(scale >= 0.1 && scale <= 8)) throw new Error("导出倍率必须在 0.1 到 8 之间。");
     var selection = psdSelectionRoots(Array.prototype.slice.call(figma.currentPage.selection || []));
     if (!selection.length) throw new Error("请先在 Figma 画布中选择节点。");
@@ -185,14 +210,14 @@ async function handleExportPsdCollect(message) {
     var nodes = [{ id: "__psd_root__", parentId: "", name: "Selection", type: "FRAME", synthetic: true, visible: true, opacity: 1, imageExpected: false, bbox: { x: 0, y: 0, width: 1, height: 1 } }];
     var queue = [];
     selection.forEach(function (root) {
-      var flat = psdFlatten(root, origin, scale);
+      var flat = psdFlatten(root, origin, scale, html);
       flat.nodes.forEach(function (record) { if (!record.parentId) record.parentId = "__psd_root__"; nodes.push(record); });
       queue = queue.concat(flat.exportQueue);
     });
     if (nodes.length > PSD_EXPORT_LEAF_LIMIT) throw new Error("选区节点数 " + nodes.length + " 超过上限 " + PSD_EXPORT_LEAF_LIMIT + "，请拆分导出。");
-    figma.ui.postMessage({ type: "EXPORT_PSD_PROGRESS", requestId: requestId, phase: "collecting", done: 0, total: queue.length });
+    figma.ui.postMessage({ type: prefix + "_PROGRESS", requestId: requestId, phase: "collecting", done: 0, total: queue.length });
     var images = await psdExportAll(queue, scale, function (done, total) {
-      if (done % 5 === 0 || done === total) figma.ui.postMessage({ type: "EXPORT_PSD_PROGRESS", requestId: requestId, phase: "exporting", done: done, total: total });
+      if (done % 5 === 0 || done === total) figma.ui.postMessage({ type: prefix + "_PROGRESS", requestId: requestId, phase: "exporting", done: done, total: total });
     });
     for (var q = 0; q < queue.length; q += 1) queue[q].record.pngBase64 = images[q];
     var byId = {};
@@ -205,7 +230,7 @@ async function handleExportPsdCollect(message) {
       if (!record.visible) return false;
       var parent = byId[record.parentId];
       while (parent && !parent.synthetic) {
-        if (parent.composited || !parent.visible) return false;
+        if (parent.composited || parent.clip || !parent.visible) return false;
         parent = byId[parent.parentId];
       }
       return true;
@@ -218,16 +243,24 @@ async function handleExportPsdCollect(message) {
       right = Math.max(right, box.x + box.width); bottom = Math.max(bottom, box.y + box.height);
     });
     if (!isFinite(left) || !isFinite(top)) throw new Error("选区没有可导出的画布边界。");
-    nodes.forEach(function (record) { if (!record.synthetic) { record.bbox.x -= left; record.bbox.y -= top; } });
+    nodes.forEach(function (record) {
+      if (record.synthetic) return;
+      record.bbox.x -= left;
+      record.bbox.y -= top;
+      if (record.clip) {
+        record.clip.x -= left;
+        record.clip.y -= top;
+      }
+    });
     var size = { width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
     nodes[0].bbox = { x: 0, y: 0, width: size.width, height: size.height };
-    figma.ui.postMessage({ type: "EXPORT_PSD_COLLECT_RESULT", requestId: requestId, result: {
+    figma.ui.postMessage({ type: prefix + "_COLLECT_RESULT", requestId: requestId, result: {
       schemaVersion: 2, nodes: nodes, size: size, scale: scale, imagesPrestretched: true,
       baseName: selection.length === 1 ? (selection[0].name || "export") : "selection",
       imageCount: images.length, nodeCount: nodes.length - 1
     } });
   } catch (error) {
-    figma.ui.postMessage({ type: "EXPORT_PSD_COLLECT_ERROR", requestId: requestId, error: error && error.message ? error.message : String(error) });
+    figma.ui.postMessage({ type: prefix + "_COLLECT_ERROR", requestId: requestId, error: error && error.message ? error.message : String(error) });
   } finally {
     figma.skipInvisibleInstanceChildren = skipInvisible;
     psdExportCollectBusy = false;

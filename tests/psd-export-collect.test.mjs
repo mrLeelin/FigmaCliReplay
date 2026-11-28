@@ -123,6 +123,39 @@ test("masked and clipped containers carry a full composite and every source node
   assert.equal(result.nodes.filter((n) => n.imageExpected && n.pngBase64).length, 3);
 });
 
+test("HTML keeps a clipped translucent frame and its layers independently renderable", async () => {
+  const s = scene();
+  const box = { x: 10, y: 20, width: 20, height: 10 };
+  const frame = s.node("8:1", { type: "FRAME", children: [], fills: [], opacity: 0.75,
+    clipsContent: true, cornerRadius: 3, absoluteRenderBounds: box, absoluteBoundingBox: box });
+  const label = s.node("8:2", { type: "TEXT", characters: "奖励", visible: false });
+  const maskGroup = s.node("8:3", { type: "GROUP", children: [] });
+  const mask = s.node("8:4", { isMask: true });
+  const extra = s.node("8:5", { absoluteRenderBounds: { x: 10, y: 20, width: 1000, height: 10 } });
+  s.append(frame, label);
+  s.append(frame, maskGroup);
+  s.append(maskGroup, mask);
+  s.append(maskGroup, extra);
+  s.page.selection = [frame];
+
+  await s.context.handleExportPsdCollect({ type: "EXPORT_HTML_COLLECT", requestId: "html" });
+
+  const { result } = s.messages.find((message) => message.type === "EXPORT_HTML_COLLECT_RESULT");
+  const [, root, text, group, maskLayer, overflow] = result.nodes;
+  assert.equal(result.nodeCount, 5);
+  assert.equal(result.size.width, 20);
+  assert.deepEqual(JSON.parse(JSON.stringify(root.clip)), { x: 0, y: 0, width: 20, height: 10, radii: [3, 3, 3, 3] });
+  assert.equal(root.opacity, 0.75);
+  assert.equal(root.composited, undefined);
+  assert.equal(text.sourceText, "奖励");
+  assert.equal(text.visible, false);
+  assert.ok(text.pngBase64);
+  assert.equal(group.compositedReason, "蒙版");
+  assert.equal(maskLayer.parentId, group.id);
+  assert.equal(overflow.parentId, group.id);
+  assert.deepEqual(s.page.children.map((n) => n.id), [frame.id]);
+});
+
 test("hidden source pixels outside a clipped frame do not enlarge its visible canvas", async () => {
   const s = scene();
   const box = { x: 0, y: 0, width: 100, height: 100 };

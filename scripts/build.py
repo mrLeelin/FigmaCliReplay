@@ -18,6 +18,7 @@ BRIDGE_SERVER = BASE / "unity" / "Assets" / "Editor" / "FigmaBridge" / "FigmaBri
 RELAY_CONFIG = BASE / "src" / "config.ts"
 PROMPTS_DIR = BASE / "prompts"
 PACKAGE_JSON = BASE / "package.json"
+HTML_MOTION_TEMPLATE = BASE / "ai" / "skills" / "figma-to-interactive-html" / "assets" / "interactive-ui-template.html"
 
 RELEASE_VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 RELEASE_VERSION_MARKER = re.compile(
@@ -132,6 +133,20 @@ def sync_prompt_templates():
     new_html, count = pattern.subn(lambda _match: block, html, count=1)
     if count != 1:
         raise RuntimeError("AI prompt template marker block not found or duplicated in ui.html")
+    template = HTML_MOTION_TEMPLATE.read_text(encoding="utf-8")
+    config_tag = '<script id="preview-config" type="application/json">'
+    head, separator, tail = template.partition(config_tag)
+    if not separator or "</script>" not in tail:
+        raise RuntimeError("HTML motion template is missing preview-config")
+    template_parts = [head + separator, tail[tail.index("</script>"):]]
+    literal = json.dumps(template_parts, ensure_ascii=False).replace("<", "\\u003c")
+    new_html, count = re.subn(
+        r"    // BEGIN_HTML_MOTION_TEMPLATE\n.*?    // END_HTML_MOTION_TEMPLATE",
+        lambda _match: f"    // BEGIN_HTML_MOTION_TEMPLATE\n    const htmlMotionTemplate = {literal};\n    // END_HTML_MOTION_TEMPLATE",
+        new_html, flags=re.DOTALL,
+    )
+    if count != 1:
+        raise RuntimeError("HTML motion template marker block not found or duplicated in ui.html")
     UI_HTML.write_text(new_html, encoding="utf-8")
     print(f"ui.html: synced {len(PROMPT_FILES)} AI prompt templates from prompts/")
 
