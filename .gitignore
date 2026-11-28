@@ -10,3 +10,7 @@ __pycache__/
 client/__pycache__/
 server/__pycache__/
 .omc
+
+# 本机生成的日志与 AI 生图产物
+gude-*.log
+outputs/
