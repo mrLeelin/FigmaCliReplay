@@ -1,3 +1,4 @@
+import "./fixtures/isolated-data-root.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -84,7 +85,8 @@ async function plugin(t, h, sessionId = "figma-test-1", respond, capabilities = 
 async function runCli(h, args = [], env = {}) {
   const child = spawn(process.execPath, [cliPath, ...args, "--url", `${h.base}/relay`], {
     windowsHide: true,
-    env: { ...process.env, FIGMA_RELAY_TOKEN: "", FIGMA_RELAY_TOKEN_FILE: path.join(h.root, "no-token"), LOG_LEVEL: "info", ...env },
+    // 数据目录指向临时目录，避免 CLI 扫描本机真实的 .logs（体积大时会超时）。
+    env: { ...process.env, FIGMA_RELAY_DATA_ROOT: h.root, FIGMA_RELAY_TOKEN: "", FIGMA_RELAY_TOKEN_FILE: path.join(h.root, "no-token"), LOG_LEVEL: "info", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";
